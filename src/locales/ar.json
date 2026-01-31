@@ -1,0 +1,223 @@
+{
+  "common": {
+    "appName": "نظام إدارة الجودة",
+    "companyName": "شركة الكابلات السعودية",
+    "loading": "جاري التحميل...",
+    "save": "حفظ",
+    "cancel": "إلغاء",
+    "delete": "حذف",
+    "edit": "تعديل",
+    "add": "إضافة",
+    "search": "بحث",
+    "filter": "تصفية",
+    "export": "تصدير",
+    "import": "استيراد",
+    "actions": "الإجراءات",
+    "status": "الحالة",
+    "date": "التاريخ",
+    "name": "الاسم",
+    "description": "الوصف",
+    "department": "القسم",
+    "owner": "المالك",
+    "createdAt": "تاريخ الإنشاء",
+    "updatedAt": "تاريخ التحديث",
+    "yes": "نعم",
+    "no": "لا",
+    "confirm": "تأكيد",
+    "close": "إغلاق",
+    "view": "عرض",
+    "download": "تحميل",
+    "upload": "رفع",
+    "darkMode": "الوضع الداكن",
+    "lightMode": "الوضع الفاتح"
+  },
+  "navigation": {
+    "dashboard": "لوحة التحكم",
+    "documents": "المستندات",
+    "audits": "المراجعة",
+    "findings": "الملاحظات",
+    "reports": "التقارير",
+    "users": "المستخدمين",
+    "departments": "الإدارات",
+    "settings": "الإعدادات",
+    "profile": "الملف الشخصي"
+  },
+  "dashboard": {
+    "title": "لوحة التحكم",
+    "welcome": "مرحباً بك في نظام إدارة الجودة",
+    "totalDocuments": "إجمالي المستندات",
+    "pendingReview": "في انتظار المراجعة",
+    "approvedDocuments": "المستندات المعتمدة",
+    "activeAudits": "المراجعات النشطة",
+    "openFindings": "الملاحظات المفتوحة",
+    "upcomingAudits": "المراجعات القادمة",
+    "recentDocuments": "أحدث المستندات",
+    "recentFindings": "أحدث الملاحظات"
+  },
+  "documents": {
+    "title": "إدارة المستندات",
+    "newDocument": "مستند جديد",
+    "documentNumber": "رقم المستند",
+    "documentTitle": "عنوان المستند",
+    "category": "التصنيف",
+    "version": "الإصدار",
+    "effectiveDate": "تاريخ السريان",
+    "expiryDate": "تاريخ الانتهاء",
+    "reviewer": "المراجع",
+    "approver": "المعتمد",
+    "categories": {
+      "policy": "سياسة",
+      "procedure": "إجراء",
+      "work_instruction": "تعليمات عمل",
+      "form": "نموذج",
+      "record": "سجل",
+      "manual": "دليل"
+    },
+    "statuses": {
+      "draft": "مسودة",
+      "pending_review": "في انتظار المراجعة",
+      "approved": "معتمد",
+      "rejected": "مرفوض",
+      "archived": "مؤرشف"
+    }
+  },
+  "audits": {
+    "title": "المراجعة الداخلية والخارجية",
+    "newAudit": "مراجعة جديدة",
+    "auditNumber": "رقم المراجعة",
+    "auditTitle": "عنوان المراجعة",
+    "auditType": "نوع المراجعة",
+    "leadAuditor": "المراجع الرئيسي",
+    "startDate": "تاريخ البدء",
+    "endDate": "تاريخ الانتهاء",
+    "scope": "النطاق",
+    "objectives": "الأهداف",
+    "questions": "أسئلة المراجعة",
+    "answers": "الإجابات",
+    "managementReview": "مراجعة الإدارة",
+    "correctiveAction": "الإجراء التصحيحي",
+    "types": {
+      "internal": "داخلي",
+      "external": "خارجي",
+      "surveillance": "مراقبة",
+      "certification": "شهادة"
+    },
+    "statuses": {
+      "planning": "التخطيط",
+      "questions_preparation": "إعداد الأسئلة",
+      "in_progress": "قيد التنفيذ",
+      "awaiting_management": "في انتظار الإدارة",
+      "management_approved": "موافقة الإدارة",
+      "corrective_action": "الإجراء التصحيحي",
+      "completed": "مكتمل",
+      "cancelled": "ملغي"
+    },
+    "workflow": {
+      "step1": "التخطيط",
+      "step2": "إعداد الأسئلة",
+      "step3": "تنفيذ المراجعة",
+      "step4": "مراجعة الإدارة",
+      "step5": "الإجراء التصحيحي",
+      "step6": "الإغلاق"
+    }
+  },
+  "findings": {
+    "title": "الملاحظات",
+    "newFinding": "ملاحظة جديدة",
+    "findingNumber": "رقم الملاحظة",
+    "findingTitle": "عنوان الملاحظة",
+    "severity": "الخطورة",
+    "clause": "البند",
+    "responsible": "المسؤول",
+    "dueDate": "تاريخ الاستحقاق",
+    "closedAt": "تاريخ الإغلاق",
+    "severities": {
+      "observation": "ملاحظة",
+      "minor": "بسيطة",
+      "major": "رئيسية",
+      "critical": "حرجة"
+    },
+    "statuses": {
+      "open": "مفتوحة",
+      "in_progress": "قيد المعالجة",
+      "closed": "مغلقة",
+      "verified": "تم التحقق"
+    }
+  },
+  "auth": {
+    "logout": "تسجيل الخروج"
+  },
+  "notifications": {
+    "title": "الإشعارات",
+    "markAllRead": "تحديد الكل كمقروء"
+  },
+  "users": {
+    "title": "إدارة المستخدمين",
+    "newUser": "مستخدم جديد",
+    "editUser": "تعديل المستخدم",
+    "employeeNumber": "الرقم الوظيفي",
+    "fullName": "الاسم الكامل",
+    "email": "البريد الإلكتروني",
+    "phone": "رقم الهاتف",
+    "role": "الدور",
+    "jobTitle": "المسمى الوظيفي",
+    "department": "الإدارة",
+    "section": "القسم",
+    "canBeAuditor": "يمكنه إجراء المراجعات",
+    "auditableDepartments": "الإدارات المسموح مراجعتها",
+    "isActive": "نشط",
+    "lastLogin": "آخر تسجيل دخول",
+    "roles": {
+      "system_admin": "مدير النظام",
+      "quality_manager": "مدير إدارة الجودة",
+      "auditor": "مراجع داخلي",
+      "department_manager": "مدير إدارة",
+      "section_head": "رئيس قسم",
+      "employee": "موظف"
+    },
+    "filters": {
+      "allRoles": "جميع الأدوار",
+      "allDepartments": "جميع الإدارات",
+      "allSections": "جميع الأقسام",
+      "auditorsOnly": "المراجعين فقط",
+      "activeOnly": "النشطين فقط"
+    },
+    "permissions": {
+      "title": "الصلاحيات",
+      "canManageUsers": "إدارة المستخدمين",
+      "canManageDepartments": "إدارة الإدارات والأقسام",
+      "canManageAudits": "إدارة المراجعات",
+      "canConductAudits": "إجراء المراجعات",
+      "canManageDocuments": "إدارة المستندات",
+      "canViewAllData": "عرض جميع البيانات",
+      "canApproveAudits": "اعتماد نتائج المراجعات"
+    }
+  },
+  "departments": {
+    "title": "الإدارات والأقسام",
+    "newDepartment": "إدارة جديدة",
+    "editDepartment": "تعديل الإدارة",
+    "departmentCode": "رمز الإدارة",
+    "departmentName": "اسم الإدارة",
+    "manager": "مدير الإدارة",
+    "sectionsCount": "عدد الأقسام",
+    "employeesCount": "عدد الموظفين",
+    "sections": {
+      "title": "الأقسام",
+      "newSection": "قسم جديد",
+      "editSection": "تعديل القسم",
+      "sectionCode": "رمز القسم",
+      "sectionName": "اسم القسم",
+      "head": "رئيس القسم",
+      "parentDepartment": "الإدارة التابع لها"
+    }
+  },
+  "organization": {
+    "title": "الهيكل التنظيمي",
+    "structure": "البنية التنظيمية",
+    "selectDepartment": "اختر الإدارة",
+    "selectSection": "اختر القسم",
+    "noSections": "لا توجد أقسام",
+    "noEmployees": "لا يوجد موظفين"
+  }
+}

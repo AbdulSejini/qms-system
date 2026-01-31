@@ -1,0 +1,289 @@
+@import "tailwindcss";
+
+/* Configure dark mode to use class strategy */
+@variant dark (&:where(.dark, .dark *));
+
+/* Saudi Cable Brand Colors - Clean Light Theme */
+:root {
+  /* Primary Colors - Softer Orange */
+  --primary: #E8850A;
+  --primary-hover: #D47A09;
+  --primary-light: #FFF8F0;
+
+  /* Secondary Colors - Soft Gray */
+  --secondary: #475569;
+  --secondary-hover: #334155;
+  --secondary-light: #64748B;
+
+  /* Background Colors - Clean White/Light Gray */
+  --background: #FAFBFC;
+  --background-secondary: #FFFFFF;
+  --background-tertiary: #F1F5F9;
+
+  /* Foreground Colors - Softer Text */
+  --foreground: #1E293B;
+  --foreground-secondary: #64748B;
+  --foreground-muted: #94A3B8;
+  --foreground-tertiary: #CBD5E1;
+
+  /* Border Colors - Very Light */
+  --border: #E2E8F0;
+  --border-hover: #CBD5E1;
+
+  /* Card - Pure White */
+  --card: #FFFFFF;
+  --card-hover: #F8FAFC;
+
+  /* Risk Level Colors - For Findings */
+  --risk-critical: #EF4444;
+  --risk-critical-bg: #FEF2F2;
+  --risk-high: #F97316;
+  --risk-high-bg: #FFF7ED;
+  --risk-medium: #EAB308;
+  --risk-medium-bg: #FEFCE8;
+  --risk-low: #22C55E;
+  --risk-low-bg: #F0FDF4;
+  --risk-negligible: #3B82F6;
+  --risk-negligible-bg: #EFF6FF;
+
+  /* Status Colors */
+  --status-success: #10B981;
+  --status-success-bg: #ECFDF5;
+  --status-warning: #F59E0B;
+  --status-warning-bg: #FFFBEB;
+  --status-error: #EF4444;
+  --status-error-bg: #FEF2F2;
+  --status-info: #3B82F6;
+  --status-info-bg: #EFF6FF;
+
+  /* Sidebar */
+  --sidebar-bg: #FFFFFF;
+  --sidebar-text: #64748B;
+  --sidebar-text-active: #E8850A;
+  --sidebar-active: #FFF8F0;
+  --sidebar-hover: #F8FAFC;
+  --sidebar-border: #E2E8F0;
+
+  /* Header */
+  --header-bg: #FFFFFF;
+  --header-border: #E2E8F0;
+
+  /* Input */
+  --input-bg: #FFFFFF;
+  --input-border: #E2E8F0;
+  --input-focus: #E8850A;
+
+  /* Shadow */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+
+/* Dark Mode */
+.dark {
+  --background: #0F172A;
+  --background-secondary: #1E293B;
+  --background-tertiary: #334155;
+
+  --foreground: #F1F5F9;
+  --foreground-secondary: #94A3B8;
+  --foreground-muted: #64748B;
+  --foreground-tertiary: #475569;
+
+  --border: #334155;
+  --border-hover: #475569;
+
+  --card: #1E293B;
+  --card-hover: #334155;
+
+  --primary-light: #431407;
+
+  --risk-critical-bg: #450A0A;
+  --risk-high-bg: #431407;
+  --risk-medium-bg: #422006;
+  --risk-low-bg: #052E16;
+  --risk-negligible-bg: #1E3A5A;
+
+  --status-success-bg: #052E16;
+  --status-warning-bg: #422006;
+  --status-error-bg: #450A0A;
+  --status-info-bg: #1E3A5A;
+
+  /* Sidebar - Dark Mode */
+  --sidebar-bg: #1E293B;
+  --sidebar-text: #94A3B8;
+  --sidebar-text-active: #F97316;
+  --sidebar-active: #431407;
+  --sidebar-hover: #334155;
+  --sidebar-border: #334155;
+
+  /* Header */
+  --header-bg: #1E293B;
+  --header-border: #334155;
+
+  /* Input */
+  --input-bg: #1E293B;
+  --input-border: #334155;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-secondary: var(--secondary);
+  --font-sans: var(--font-geist-sans), "Noto Sans Arabic", system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono);
+}
+
+/* Base Styles */
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Noto Sans Arabic", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100vh;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* RTL Support */
+[dir="rtl"] {
+  text-align: right;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--foreground-muted);
+}
+
+/* Focus Styles */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background-color: var(--primary);
+  color: white;
+}
+
+/* Animation Classes */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slideIn {
+  animation: slideIn 0.2s ease-out;
+}
+
+.animate-slideUp {
+  animation: slideUp 0.2s ease-out;
+}
+
+/* Bell ring animation */
+@keyframes ring {
+  0% { transform: rotate(0); }
+  10% { transform: rotate(15deg); }
+  20% { transform: rotate(-15deg); }
+  30% { transform: rotate(10deg); }
+  40% { transform: rotate(-10deg); }
+  50% { transform: rotate(5deg); }
+  60% { transform: rotate(-5deg); }
+  70% { transform: rotate(2deg); }
+  80% { transform: rotate(-2deg); }
+  90% { transform: rotate(1deg); }
+  100% { transform: rotate(0); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-2px); }
+  20%, 40%, 60%, 80% { transform: translateX(2px); }
+}
+
+.animate-ring {
+  animation: ring 0.5s ease-in-out;
+}
+
+.animate-shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+/* Card Hover */
+.card-hover {
+  transition: all 0.15s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Smooth transitions */
+button, a, input, select, textarea {
+  transition: all 0.15s ease;
+}
+
+/* Table styles */
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+/* Badge */
+.badge {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}

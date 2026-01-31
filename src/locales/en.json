@@ -1,0 +1,223 @@
+{
+  "common": {
+    "appName": "Quality Management System",
+    "companyName": "Saudi Cable Company",
+    "loading": "Loading...",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "add": "Add",
+    "search": "Search",
+    "filter": "Filter",
+    "export": "Export",
+    "import": "Import",
+    "actions": "Actions",
+    "status": "Status",
+    "date": "Date",
+    "name": "Name",
+    "description": "Description",
+    "department": "Department",
+    "owner": "Owner",
+    "createdAt": "Created At",
+    "updatedAt": "Updated At",
+    "yes": "Yes",
+    "no": "No",
+    "confirm": "Confirm",
+    "close": "Close",
+    "view": "View",
+    "download": "Download",
+    "upload": "Upload",
+    "darkMode": "Dark Mode",
+    "lightMode": "Light Mode"
+  },
+  "navigation": {
+    "dashboard": "Dashboard",
+    "documents": "Documents",
+    "audits": "Audits & Reviews",
+    "findings": "Findings",
+    "reports": "Reports",
+    "users": "Users",
+    "departments": "Departments",
+    "settings": "Settings",
+    "profile": "Profile"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "welcome": "Welcome to Quality Management System",
+    "totalDocuments": "Total Documents",
+    "pendingReview": "Pending Review",
+    "approvedDocuments": "Approved Documents",
+    "activeAudits": "Active Audits",
+    "openFindings": "Open Findings",
+    "upcomingAudits": "Upcoming Audits",
+    "recentDocuments": "Recent Documents",
+    "recentFindings": "Recent Findings"
+  },
+  "documents": {
+    "title": "Document Management",
+    "newDocument": "New Document",
+    "documentNumber": "Document Number",
+    "documentTitle": "Document Title",
+    "category": "Category",
+    "version": "Version",
+    "effectiveDate": "Effective Date",
+    "expiryDate": "Expiry Date",
+    "reviewer": "Reviewer",
+    "approver": "Approver",
+    "categories": {
+      "policy": "Policy",
+      "procedure": "Procedure",
+      "work_instruction": "Work Instruction",
+      "form": "Form",
+      "record": "Record",
+      "manual": "Manual"
+    },
+    "statuses": {
+      "draft": "Draft",
+      "pending_review": "Pending Review",
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "archived": "Archived"
+    }
+  },
+  "audits": {
+    "title": "Internal & External Audits",
+    "newAudit": "New Audit",
+    "auditNumber": "Audit Number",
+    "auditTitle": "Audit Title",
+    "auditType": "Audit Type",
+    "leadAuditor": "Lead Auditor",
+    "startDate": "Start Date",
+    "endDate": "End Date",
+    "scope": "Scope",
+    "objectives": "Objectives",
+    "questions": "Audit Questions",
+    "answers": "Answers",
+    "managementReview": "Management Review",
+    "correctiveAction": "Corrective Action",
+    "types": {
+      "internal": "Internal",
+      "external": "External",
+      "surveillance": "Surveillance",
+      "certification": "Certification"
+    },
+    "statuses": {
+      "planning": "Planning",
+      "questions_preparation": "Questions Preparation",
+      "in_progress": "In Progress",
+      "awaiting_management": "Awaiting Management",
+      "management_approved": "Management Approved",
+      "corrective_action": "Corrective Action",
+      "completed": "Completed",
+      "cancelled": "Cancelled"
+    },
+    "workflow": {
+      "step1": "Planning",
+      "step2": "Questions Prep",
+      "step3": "Execution",
+      "step4": "Management Review",
+      "step5": "Corrective Action",
+      "step6": "Closure"
+    }
+  },
+  "findings": {
+    "title": "Findings",
+    "newFinding": "New Finding",
+    "findingNumber": "Finding Number",
+    "findingTitle": "Finding Title",
+    "severity": "Severity",
+    "clause": "Clause",
+    "responsible": "Responsible",
+    "dueDate": "Due Date",
+    "closedAt": "Closed At",
+    "severities": {
+      "observation": "Observation",
+      "minor": "Minor",
+      "major": "Major",
+      "critical": "Critical"
+    },
+    "statuses": {
+      "open": "Open",
+      "in_progress": "In Progress",
+      "closed": "Closed",
+      "verified": "Verified"
+    }
+  },
+  "auth": {
+    "logout": "Logout"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "markAllRead": "Mark all as read"
+  },
+  "users": {
+    "title": "User Management",
+    "newUser": "New User",
+    "editUser": "Edit User",
+    "employeeNumber": "Employee Number",
+    "fullName": "Full Name",
+    "email": "Email",
+    "phone": "Phone",
+    "role": "Role",
+    "jobTitle": "Job Title",
+    "department": "Department",
+    "section": "Section",
+    "canBeAuditor": "Can Conduct Audits",
+    "auditableDepartments": "Auditable Departments",
+    "isActive": "Active",
+    "lastLogin": "Last Login",
+    "roles": {
+      "system_admin": "System Admin",
+      "quality_manager": "Quality Manager",
+      "auditor": "Internal Auditor",
+      "department_manager": "Department Manager",
+      "section_head": "Section Head",
+      "employee": "Employee"
+    },
+    "filters": {
+      "allRoles": "All Roles",
+      "allDepartments": "All Departments",
+      "allSections": "All Sections",
+      "auditorsOnly": "Auditors Only",
+      "activeOnly": "Active Only"
+    },
+    "permissions": {
+      "title": "Permissions",
+      "canManageUsers": "Manage Users",
+      "canManageDepartments": "Manage Departments",
+      "canManageAudits": "Manage Audits",
+      "canConductAudits": "Conduct Audits",
+      "canManageDocuments": "Manage Documents",
+      "canViewAllData": "View All Data",
+      "canApproveAudits": "Approve Audit Results"
+    }
+  },
+  "departments": {
+    "title": "Departments & Sections",
+    "newDepartment": "New Department",
+    "editDepartment": "Edit Department",
+    "departmentCode": "Department Code",
+    "departmentName": "Department Name",
+    "manager": "Department Manager",
+    "sectionsCount": "Sections Count",
+    "employeesCount": "Employees Count",
+    "sections": {
+      "title": "Sections",
+      "newSection": "New Section",
+      "editSection": "Edit Section",
+      "sectionCode": "Section Code",
+      "sectionName": "Section Name",
+      "head": "Section Head",
+      "parentDepartment": "Parent Department"
+    }
+  },
+  "organization": {
+    "title": "Organization Structure",
+    "structure": "Organizational Structure",
+    "selectDepartment": "Select Department",
+    "selectSection": "Select Section",
+    "noSections": "No Sections",
+    "noEmployees": "No Employees"
+  }
+}
