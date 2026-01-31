@@ -444,6 +444,9 @@ export default function AuditsPage() {
     }
   }, []);
 
+  // Role view mode - auditor vs auditee
+  const [viewMode, setViewMode] = useState<'all' | 'as_auditor' | 'as_auditee'>('all');
+
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<string>('all');
@@ -555,11 +558,25 @@ export default function AuditsPage() {
 
   // Filter and sort audits
   const filteredAudits = useMemo(() => {
-    // First filter by user access
-    const accessibleAudits = auditsData.filter(audit => {
+    // First filter by user access and view mode
+    let accessibleAudits = auditsData.filter(audit => {
       // Quality manager can see all audits
-      if (isQualityManager) return true;
+      if (isQualityManager && viewMode === 'all') return true;
 
+      // Filter by view mode
+      if (viewMode === 'as_auditor') {
+        return isUserAuditor(audit);
+      }
+
+      if (viewMode === 'as_auditee') {
+        if (!isUserAuditee(audit)) return false;
+        // Auditee can see after QMS approval (stage 3+) or if department head (stage 2+)
+        if (audit.currentStage >= 3) return true;
+        if ((currentUser?.role === 'department_manager' || currentUser?.role === 'section_head') && audit.currentStage >= 2) return true;
+        return false;
+      }
+
+      // Default 'all' mode
       // User can see audits they created
       if (audit.createdBy === currentUser?.id) return true;
 
@@ -627,6 +644,34 @@ export default function AuditsPage() {
 
     return sorted;
   }, [auditsData, searchQuery, selectedType, selectedStatus, sortBy, sortOrder, language]);
+
+  // Check if user is an auditor in an audit
+  const isUserAuditor = (audit: Audit) => {
+    return audit.leadAuditorId === currentUser?.id ||
+           audit.auditorIds?.includes(currentUser?.id || '') ||
+           audit.createdBy === currentUser?.id;
+  };
+
+  // Check if user is an auditee (their department is being audited)
+  const isUserAuditee = (audit: Audit) => {
+    return audit.departmentId === currentUser?.departmentId;
+  };
+
+  // Audits where user is auditor
+  const auditsAsAuditor = useMemo(() => {
+    return auditsData.filter(audit => isUserAuditor(audit));
+  }, [auditsData, currentUser]);
+
+  // Audits where user is auditee
+  const auditsAsAuditee = useMemo(() => {
+    return auditsData.filter(audit => {
+      if (!isUserAuditee(audit)) return false;
+      // Auditee can see after QMS approval (stage 3+) or if department head (stage 2+)
+      if (audit.currentStage >= 3) return true;
+      if ((currentUser?.role === 'department_manager' || currentUser?.role === 'section_head') && audit.currentStage >= 2) return true;
+      return false;
+    });
+  }, [auditsData, currentUser]);
 
   // Get accessible audits for stats (same logic as filtering)
   const accessibleAuditsForStats = useMemo(() => {
@@ -965,6 +1010,114 @@ export default function AuditsPage() {
           </Button>
         </div>
 
+        {/* Role View Tabs - Only show if user has both roles */}
+        {(auditsAsAuditor.length > 0 || auditsAsAuditee.length > 0) && !isQualityManager && (
+          <Card className="overflow-hidden">
+            <div className="flex border-b border-[var(--border)]">
+              {/* All Tab */}
+              <button
+                onClick={() => setViewMode('all')}
+                className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 text-sm font-medium transition-all relative ${
+                  viewMode === 'all'
+                    ? 'text-[var(--primary)] bg-[var(--primary-light)]'
+                    : 'text-[var(--foreground-secondary)] hover:bg-[var(--background-secondary)]'
+                }`}
+              >
+                <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
+                  viewMode === 'all' ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background-tertiary)]'
+                }`}>
+                  <ClipboardCheck className="h-5 w-5" />
+                </div>
+                <div className="text-start">
+                  <p className="font-semibold">{language === 'ar' ? 'جميع المراجعات' : 'All Audits'}</p>
+                  <p className="text-xs opacity-70">{auditsAsAuditor.length + auditsAsAuditee.length} {language === 'ar' ? 'مراجعة' : 'audits'}</p>
+                </div>
+                {viewMode === 'all' && (
+                  <div className="absolute bottom-0 start-0 end-0 h-1 bg-[var(--primary)]" />
+                )}
+              </button>
+
+              {/* As Auditor Tab */}
+              {auditsAsAuditor.length > 0 && (
+                <button
+                  onClick={() => setViewMode('as_auditor')}
+                  className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 text-sm font-medium transition-all relative border-s border-[var(--border)] ${
+                    viewMode === 'as_auditor'
+                      ? 'text-blue-600 bg-blue-50 dark:bg-blue-900/20'
+                      : 'text-[var(--foreground-secondary)] hover:bg-[var(--background-secondary)]'
+                  }`}
+                >
+                  <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
+                    viewMode === 'as_auditor' ? 'bg-blue-600 text-white' : 'bg-[var(--background-tertiary)]'
+                  }`}>
+                    <UserCheck className="h-5 w-5" />
+                  </div>
+                  <div className="text-start">
+                    <p className="font-semibold">{language === 'ar' ? 'كمراجع' : 'As Auditor'}</p>
+                    <p className="text-xs opacity-70">{auditsAsAuditor.length} {language === 'ar' ? 'مراجعة' : 'audits'}</p>
+                  </div>
+                  {viewMode === 'as_auditor' && (
+                    <div className="absolute bottom-0 start-0 end-0 h-1 bg-blue-600" />
+                  )}
+                </button>
+              )}
+
+              {/* As Auditee Tab */}
+              {auditsAsAuditee.length > 0 && (
+                <button
+                  onClick={() => setViewMode('as_auditee')}
+                  className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 text-sm font-medium transition-all relative border-s border-[var(--border)] ${
+                    viewMode === 'as_auditee'
+                      ? 'text-orange-600 bg-orange-50 dark:bg-orange-900/20'
+                      : 'text-[var(--foreground-secondary)] hover:bg-[var(--background-secondary)]'
+                  }`}
+                >
+                  <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
+                    viewMode === 'as_auditee' ? 'bg-orange-600 text-white' : 'bg-[var(--background-tertiary)]'
+                  }`}>
+                    <Building2 className="h-5 w-5" />
+                  </div>
+                  <div className="text-start">
+                    <p className="font-semibold">{language === 'ar' ? 'كمراجع عليه' : 'As Auditee'}</p>
+                    <p className="text-xs opacity-70">{auditsAsAuditee.length} {language === 'ar' ? 'مراجعة' : 'audits'}</p>
+                  </div>
+                  {viewMode === 'as_auditee' && (
+                    <div className="absolute bottom-0 start-0 end-0 h-1 bg-orange-600" />
+                  )}
+                </button>
+              )}
+            </div>
+
+            {/* Role Description */}
+            <div className="p-4 bg-[var(--background-secondary)]">
+              {viewMode === 'all' && (
+                <p className="text-sm text-[var(--foreground-secondary)] flex items-center gap-2">
+                  <ClipboardCheck className="h-4 w-4" />
+                  {language === 'ar'
+                    ? 'عرض جميع المراجعات المتعلقة بك سواء كمراجع أو مراجع عليه'
+                    : 'View all audits related to you, whether as auditor or auditee'}
+                </p>
+              )}
+              {viewMode === 'as_auditor' && (
+                <p className="text-sm text-blue-600 dark:text-blue-400 flex items-center gap-2">
+                  <UserCheck className="h-4 w-4" />
+                  {language === 'ar'
+                    ? 'المراجعات التي تقوم فيها بدور المراجع - يمكنك إضافة الملاحظات وتسجيل النتائج'
+                    : 'Audits where you are the auditor - you can add findings and record results'}
+                </p>
+              )}
+              {viewMode === 'as_auditee' && (
+                <p className="text-sm text-orange-600 dark:text-orange-400 flex items-center gap-2">
+                  <Building2 className="h-4 w-4" />
+                  {language === 'ar'
+                    ? 'المراجعات على إدارتك - يمكنك متابعة الملاحظات والرد على الإجراءات التصحيحية'
+                    : 'Audits on your department - you can track findings and respond to corrective actions'}
+                </p>
+              )}
+            </div>
+          </Card>
+        )}
+
         {/* Workflow Overview */}
         <Card>
           <CardHeader>
@@ -1133,7 +1286,12 @@ export default function AuditsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{t('audits.auditNumber')}</TableHead>
+                <TableHead>
+                  <div className="flex flex-col">
+                    <span>{t('audits.auditNumber')}</span>
+                    {!isQualityManager && <span className="text-xs font-normal opacity-70">{language === 'ar' ? 'دورك' : 'Your Role'}</span>}
+                  </div>
+                </TableHead>
                 <TableHead>{t('audits.auditTitle')}</TableHead>
                 <TableHead>{t('audits.auditType')}</TableHead>
                 <TableHead>{language === 'ar' ? 'المرحلة' : 'Stage'}</TableHead>
@@ -1150,9 +1308,34 @@ export default function AuditsPage() {
                 const leadAuditor = getUser(audit.leadAuditorId);
                 const openFindings = audit.findings.filter(f => f.status !== 'closed').length;
 
+                // Determine user's role in this audit
+                const userIsAuditor = isUserAuditor(audit);
+                const userIsAuditee = isUserAuditee(audit);
+
                 return (
                   <TableRow key={audit.id}>
-                    <TableCell className="font-mono text-sm">{audit.number}</TableCell>
+                    <TableCell className="font-mono text-sm">
+                      <div className="flex flex-col gap-1">
+                        <span>{audit.number}</span>
+                        {/* Role Badge */}
+                        {!isQualityManager && (userIsAuditor || userIsAuditee) && (
+                          <div className="flex gap-1">
+                            {userIsAuditor && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                                <UserCheck className="h-3 w-3" />
+                                {language === 'ar' ? 'مراجع' : 'Auditor'}
+                              </span>
+                            )}
+                            {userIsAuditee && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
+                                <Building2 className="h-3 w-3" />
+                                {language === 'ar' ? 'مراجع عليه' : 'Auditee'}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <p className="font-medium">{language === 'ar' ? audit.titleAr : audit.titleEn}</p>
                       <p className="text-xs text-[var(--foreground-muted)]">

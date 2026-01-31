@@ -27,6 +27,8 @@ import {
   Send,
   Wrench,
   Cloud,
+  ClipboardCheck,
+  UserCheck,
 } from 'lucide-react';
 import { departments as allDepartments, sections as allSections, users as allUsers } from '@/data/mock-data';
 import { OneDrivePicker } from '@/components/ui/OneDrivePicker';
@@ -156,6 +158,7 @@ export default function FindingsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSeverity, setSelectedSeverity] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [viewMode, setViewMode] = useState<'all' | 'as_auditor' | 'as_auditee'>('all');
 
   // Modal states
   const [showViewModal, setShowViewModal] = useState(false);
@@ -245,6 +248,51 @@ export default function FindingsPage() {
   // Check if user is an auditee (from audited department)
   const isAuditee = combinedFindings.some(f => 'departmentId' in f && f.departmentId === currentUser?.departmentId);
 
+  // Helper functions to determine user's role in each finding
+  const isUserAuditor = (finding: Finding) => {
+    // Get the audit to check if user is the lead auditor or in auditor team
+    const storedAudits = localStorage.getItem('qms_audits');
+    if (storedAudits && finding.auditId) {
+      const audits = JSON.parse(storedAudits);
+      const audit = audits.find((a: any) => a.id === finding.auditId);
+      if (audit) {
+        return audit.leadAuditorId === currentUser?.id ||
+               audit.auditorIds?.includes(currentUser?.id || '') ||
+               audit.createdBy === currentUser?.id;
+      }
+    }
+    return false;
+  };
+
+  const isUserAuditee = (finding: Finding) => {
+    // User is auditee if finding is for their department
+    return finding.departmentId === currentUser?.departmentId;
+  };
+
+  const getUserRoleInFinding = (finding: Finding): 'auditor' | 'auditee' | 'both' | 'none' => {
+    const auditor = isUserAuditor(finding);
+    const auditee = isUserAuditee(finding);
+    if (auditor && auditee) return 'both';
+    if (auditor) return 'auditor';
+    if (auditee) return 'auditee';
+    return 'none';
+  };
+
+  // Role-based filtering
+  const getFilteredByRole = (findings: typeof combinedFindings) => {
+    if (viewMode === 'as_auditor') {
+      return findings.filter(f => isUserAuditor(f as Finding));
+    }
+    if (viewMode === 'as_auditee') {
+      return findings.filter(f => isUserAuditee(f as Finding));
+    }
+    return findings;
+  };
+
+  // Count findings by role
+  const auditorFindingsCount = combinedFindings.filter(f => isUserAuditor(f as Finding)).length;
+  const auditeeFindingsCount = combinedFindings.filter(f => isUserAuditee(f as Finding)).length;
+
   const severities = [
     { value: 'all', labelAr: 'الكل', labelEn: 'All' },
     { value: 'observation', labelAr: 'ملاحظة', labelEn: 'Observation' },
@@ -283,7 +331,7 @@ export default function FindingsPage() {
     return <Badge variant={c.variant}>{language === 'ar' ? c.labelAr : c.labelEn}</Badge>;
   };
 
-  const filteredFindings = combinedFindings.filter(finding => {
+  const filteredFindings = getFilteredByRole(combinedFindings).filter(finding => {
     const matchesSearch =
       finding.titleAr.toLowerCase().includes(searchQuery.toLowerCase()) ||
       finding.titleEn.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -481,6 +529,80 @@ export default function FindingsPage() {
           </Card>
         </div>
 
+        {/* Role Tabs */}
+        <div className="flex flex-wrap gap-2 p-1 bg-[var(--background-secondary)] rounded-lg w-fit">
+          <button
+            onClick={() => setViewMode('all')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              viewMode === 'all'
+                ? 'bg-[var(--background)] text-[var(--foreground)] shadow-sm'
+                : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
+            }`}
+          >
+            <FileText className="h-4 w-4" />
+            {language === 'ar' ? 'كل الملاحظات' : 'All Findings'}
+            <span className="px-1.5 py-0.5 text-xs rounded-full bg-[var(--foreground-muted)]/20">
+              {combinedFindings.length}
+            </span>
+          </button>
+          <button
+            onClick={() => setViewMode('as_auditor')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              viewMode === 'as_auditor'
+                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-sm'
+                : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
+            }`}
+          >
+            <ClipboardCheck className="h-4 w-4" />
+            {language === 'ar' ? 'كمراجع' : 'As Auditor'}
+            {auditorFindingsCount > 0 && (
+              <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-200 dark:bg-blue-800 text-blue-700 dark:text-blue-300">
+                {auditorFindingsCount}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setViewMode('as_auditee')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              viewMode === 'as_auditee'
+                ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 shadow-sm'
+                : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
+            }`}
+          >
+            <UserCheck className="h-4 w-4" />
+            {language === 'ar' ? 'كمراجع عليه' : 'As Auditee'}
+            {auditeeFindingsCount > 0 && (
+              <span className="px-1.5 py-0.5 text-xs rounded-full bg-orange-200 dark:bg-orange-800 text-orange-700 dark:text-orange-300">
+                {auditeeFindingsCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Role Description Banner */}
+        {viewMode !== 'all' && (
+          <div className={`p-3 rounded-lg ${
+            viewMode === 'as_auditor'
+              ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800'
+              : 'bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800'
+          }`}>
+            <p className={`text-sm ${
+              viewMode === 'as_auditor'
+                ? 'text-blue-700 dark:text-blue-300'
+                : 'text-orange-700 dark:text-orange-300'
+            }`}>
+              {viewMode === 'as_auditor'
+                ? (language === 'ar'
+                    ? 'عرض الملاحظات التي قمت بتسجيلها كمراجع - يمكنك متابعة حالة الإجراءات التصحيحية'
+                    : 'Showing findings you recorded as an auditor - you can track corrective action status')
+                : (language === 'ar'
+                    ? 'عرض الملاحظات المسجلة على إدارتك - يتطلب منك اتخاذ إجراءات تصحيحية'
+                    : 'Showing findings recorded against your department - corrective actions required from you')
+              }
+            </p>
+          </div>
+        )}
+
         {/* Filters */}
         <Card>
           <CardContent className="p-4">
@@ -533,6 +655,7 @@ export default function FindingsPage() {
               <TableRow>
                 <TableHead>{t('findings.findingNumber')}</TableHead>
                 <TableHead>{t('findings.findingTitle')}</TableHead>
+                <TableHead>{language === 'ar' ? 'دورك' : 'Your Role'}</TableHead>
                 <TableHead>{t('findings.severity')}</TableHead>
                 <TableHead>{t('common.status')}</TableHead>
                 <TableHead>{t('findings.clause')}</TableHead>
@@ -542,13 +665,34 @@ export default function FindingsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredFindings.map((finding) => (
+              {filteredFindings.map((finding) => {
+                const userRole = getUserRoleInFinding(finding as Finding);
+                return (
                 <TableRow key={finding.id}>
                   <TableCell className="font-mono text-sm">{finding.number}</TableCell>
                   <TableCell>
                     <div>
                       <p className="font-medium">{language === 'ar' ? finding.titleAr : finding.titleEn}</p>
                       <p className="text-xs text-[var(--foreground-muted)]">{finding.auditNumber}</p>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {(userRole === 'auditor' || userRole === 'both') && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                          <ClipboardCheck className="h-3 w-3" />
+                          {language === 'ar' ? 'مراجع' : 'Auditor'}
+                        </span>
+                      )}
+                      {(userRole === 'auditee' || userRole === 'both') && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300">
+                          <UserCheck className="h-3 w-3" />
+                          {language === 'ar' ? 'مراجع عليه' : 'Auditee'}
+                        </span>
+                      )}
+                      {userRole === 'none' && (
+                        <span className="text-xs text-[var(--foreground-muted)]">-</span>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell>{getSeverityBadge(finding.severity)}</TableCell>
@@ -595,7 +739,8 @@ export default function FindingsPage() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </Card>
