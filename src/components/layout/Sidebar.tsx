@@ -19,6 +19,8 @@ import {
   X,
   Users,
   Building2,
+  Calendar,
+  ListChecks,
 } from 'lucide-react';
 
 interface NavItem {
@@ -54,6 +56,16 @@ const navItems: NavItem[] = [
     href: '/reports',
     labelKey: 'navigation.reports',
     icon: FileBarChart,
+  },
+  {
+    href: '/calendar',
+    labelKey: 'navigation.calendar',
+    icon: Calendar,
+  },
+  {
+    href: '/followup',
+    labelKey: 'navigation.followup',
+    icon: ListChecks,
   },
   {
     href: '/users',
