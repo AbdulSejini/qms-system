@@ -526,9 +526,6 @@ export default function UsersPage() {
                 <thead>
                   <tr className="border-b border-[var(--border)] bg-[var(--background-secondary)]">
                     <th className="px-4 py-3 text-start text-xs font-semibold uppercase tracking-wider text-[var(--foreground-secondary)]">
-                      {t('users.employeeNumber')}
-                    </th>
-                    <th className="px-4 py-3 text-start text-xs font-semibold uppercase tracking-wider text-[var(--foreground-secondary)]">
                       {t('users.fullName')}
                     </th>
                     <th className="px-4 py-3 text-start text-xs font-semibold uppercase tracking-wider text-[var(--foreground-secondary)]">
@@ -558,11 +555,6 @@ export default function UsersPage() {
                         key={user.id}
                         className="transition-colors hover:bg-[var(--background-tertiary)]"
                       >
-                        <td className="px-4 py-3">
-                          <span className="font-mono text-sm text-[var(--foreground-secondary)]">
-                            {user.employeeNumber}
-                          </span>
-                        </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
                             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--primary-light)] text-[var(--primary)] font-semibold text-sm">

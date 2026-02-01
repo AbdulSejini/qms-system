@@ -209,15 +209,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // تسجيل الدخول
   const login = useCallback(async (username: string, password: string): Promise<boolean> => {
+    // التحقق من مدير النظام أولاً (بيانات ثابتة)
+    if (username.toLowerCase() === SYSTEM_ADMIN.email.toLowerCase()) {
+      if (password === SYSTEM_ADMIN_PASSWORD) {
+        setCurrentUserId(SYSTEM_ADMIN.id);
+        localStorage.setItem('qms_session', JSON.stringify({
+          userId: SYSTEM_ADMIN.id,
+          loginAt: new Date().toISOString(),
+        }));
+        return true;
+      }
+      return false;
+    }
+
+    // البحث في المستخدمين الآخرين
     const users = getAllUsers();
     const passwords = getPasswords();
 
-    // البحث عن المستخدم بالبريد الإلكتروني أو الرقم الوظيفي
+    // البحث عن المستخدم بالبريد الإلكتروني
     const user = users.find(
       (u) =>
         u.isActive &&
-        (u.email.toLowerCase() === username.toLowerCase() ||
-         u.employeeNumber.toLowerCase() === username.toLowerCase())
+        u.id !== SYSTEM_ADMIN.id &&
+        u.email.toLowerCase() === username.toLowerCase()
     );
 
     if (!user) {
