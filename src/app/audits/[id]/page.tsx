@@ -168,6 +168,7 @@ interface AuditQuestion {
   answer?: string;
   status: 'pending' | 'compliant' | 'non_compliant' | 'not_applicable';
   notes?: string;
+  attachments?: { id: string; name: string; size: number; webUrl: string }[]; // OneDrive attachments
 }
 
 interface ExtensionRequest {
@@ -576,7 +577,12 @@ export default function AuditDetailPage() {
   // Selected question for answering
   const [selectedQuestion, setSelectedQuestion] = useState<AuditQuestion | null>(null);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
-  const [questionAnswer, setQuestionAnswer] = useState({ answer: '', status: 'pending' as 'pending' | 'compliant' | 'non_compliant' | 'not_applicable', notes: '' });
+  const [questionAnswer, setQuestionAnswer] = useState({
+    answer: '',
+    status: 'pending' as 'pending' | 'compliant' | 'non_compliant' | 'not_applicable',
+    notes: '',
+    attachments: [] as OneDriveFile[], // OneDrive attachments for the answer
+  });
 
   // QMS Review states
   const [selectedDecision, setSelectedDecision] = useState<QMSDecision | null>(null);
@@ -959,6 +965,12 @@ export default function AuditDetailPage() {
           answer: questionAnswer.answer,
           status: questionAnswer.status,
           notes: questionAnswer.notes || undefined,
+          attachments: questionAnswer.attachments.map(f => ({
+            id: f.id,
+            name: f.name,
+            size: f.size,
+            webUrl: f.webUrl,
+          })), // Save OneDrive attachments
         };
       }
       return q;
@@ -978,7 +990,7 @@ export default function AuditDetailPage() {
 
     saveAudit(updatedAudit);
     setSelectedQuestion(null);
-    setQuestionAnswer({ answer: '', status: 'pending', notes: '' });
+    setQuestionAnswer({ answer: '', status: 'pending', notes: '', attachments: [] });
     setShowAnswerModal(false);
   };
 
@@ -989,6 +1001,12 @@ export default function AuditDetailPage() {
       answer: question.answer || '',
       status: question.status,
       notes: question.notes || '',
+      attachments: (question.attachments || []).map((a: any) => ({
+        id: a.id,
+        name: a.name,
+        size: a.size || 0,
+        webUrl: a.webUrl,
+      })) as OneDriveFile[],
     });
     setShowAnswerModal(true);
   };
@@ -2356,6 +2374,23 @@ export default function AuditDetailPage() {
                             {q.notes && (
                               <div className="mt-1 text-xs text-[var(--foreground-secondary)] italic">
                                 {language === 'ar' ? 'ملاحظات: ' : 'Notes: '}{q.notes}
+                              </div>
+                            )}
+                            {/* عرض المرفقات */}
+                            {q.attachments && q.attachments.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {q.attachments.map((attachment) => (
+                                  <a
+                                    key={attachment.id}
+                                    href={attachment.webUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 text-xs hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
+                                  >
+                                    <Cloud className="h-3 w-3" />
+                                    <span className="max-w-[150px] truncate">{attachment.name}</span>
+                                  </a>
+                                ))}
                               </div>
                             )}
                           </div>
@@ -4080,6 +4115,30 @@ export default function AuditDetailPage() {
                     onChange={(e) => setQuestionAnswer({ ...questionAnswer, notes: e.target.value })}
                     placeholder={language === 'ar' ? 'ملاحظات اختيارية...' : 'Optional notes...'}
                     className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                  />
+                </div>
+
+                {/* المرفقات من OneDrive */}
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    {language === 'ar' ? 'المرفقات (اختياري)' : 'Attachments (Optional)'}
+                  </label>
+                  <OneDrivePicker
+                    language={language}
+                    selectedFiles={questionAnswer.attachments}
+                    onFilesSelected={(files) => {
+                      setQuestionAnswer({
+                        ...questionAnswer,
+                        attachments: [...questionAnswer.attachments, ...files],
+                      });
+                    }}
+                    onRemoveFile={(fileId) => {
+                      setQuestionAnswer({
+                        ...questionAnswer,
+                        attachments: questionAnswer.attachments.filter(f => f.id !== fileId),
+                      });
+                    }}
+                    maxFiles={5}
                   />
                 </div>
               </div>
