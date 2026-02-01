@@ -1,11 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button } from '@/components/ui';
 import { useTranslation, useLanguage } from '@/contexts/LanguageContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from 'next-themes';
+import { getDepartmentById } from '@/data/mock-data';
 import {
   User,
   Bell,
@@ -15,17 +17,117 @@ import {
   Shield,
   Save,
   Check,
+  AlertCircle,
 } from 'lucide-react';
 
 export default function SettingsPage() {
   const { t, language, isRTL } = useTranslation();
   const { setLanguage } = useLanguage();
   const { theme, setTheme } = useTheme();
+  const { currentUser } = useAuth();
   const [saved, setSaved] = useState(false);
+
+  // بيانات الملف الشخصي
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [department, setDepartment] = useState('');
+  const [role, setRole] = useState('');
+
+  // بيانات الأمان
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState(false);
+
+  // تحميل بيانات المستخدم
+  useEffect(() => {
+    if (currentUser) {
+      setFullName(language === 'ar' ? currentUser.fullNameAr : currentUser.fullNameEn);
+      setEmail(currentUser.email);
+
+      // الحصول على اسم الإدارة
+      if (currentUser.departmentId) {
+        const dept = getDepartmentById(currentUser.departmentId);
+        if (dept) {
+          setDepartment(language === 'ar' ? dept.nameAr : dept.nameEn);
+        } else {
+          // البحث في localStorage
+          const storedDepts = localStorage.getItem('qms_departments');
+          if (storedDepts) {
+            const depts = JSON.parse(storedDepts);
+            const foundDept = depts.find((d: any) => d.id === currentUser.departmentId);
+            if (foundDept) {
+              setDepartment(language === 'ar' ? foundDept.nameAr : foundDept.nameEn);
+            }
+          }
+        }
+      } else {
+        setDepartment(language === 'ar' ? 'غير محدد' : 'Not specified');
+      }
+
+      // الحصول على اسم الدور
+      const roleNames: Record<string, { ar: string; en: string }> = {
+        system_admin: { ar: 'مدير النظام', en: 'System Administrator' },
+        quality_manager: { ar: 'مدير إدارة الجودة', en: 'Quality Manager' },
+        auditor: { ar: 'مراجع داخلي', en: 'Internal Auditor' },
+        department_manager: { ar: 'مدير إدارة', en: 'Department Manager' },
+        section_head: { ar: 'رئيس قسم', en: 'Section Head' },
+        employee: { ar: 'موظف', en: 'Employee' },
+      };
+      const roleName = roleNames[currentUser.role];
+      setRole(roleName ? (language === 'ar' ? roleName.ar : roleName.en) : currentUser.role);
+    }
+  }, [currentUser, language]);
 
   const handleSave = () => {
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleChangePassword = () => {
+    setPasswordError('');
+    setPasswordSuccess(false);
+
+    // التحقق من أن المستخدم ليس مدير النظام
+    if (currentUser?.role === 'system_admin') {
+      setPasswordError(language === 'ar' ? 'لا يمكن تغيير كلمة مرور مدير النظام' : 'Cannot change system admin password');
+      return;
+    }
+
+    // التحقق من الحقول
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPasswordError(language === 'ar' ? 'جميع الحقول مطلوبة' : 'All fields are required');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError(language === 'ar' ? 'كلمة المرور الجديدة غير متطابقة' : 'New passwords do not match');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setPasswordError(language === 'ar' ? 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' : 'Password must be at least 6 characters');
+      return;
+    }
+
+    // التحقق من كلمة المرور الحالية
+    const passwords = JSON.parse(localStorage.getItem('qms_passwords') || '{}');
+    if (currentUser && passwords[currentUser.id] !== currentPassword) {
+      setPasswordError(language === 'ar' ? 'كلمة المرور الحالية غير صحيحة' : 'Current password is incorrect');
+      return;
+    }
+
+    // حفظ كلمة المرور الجديدة
+    if (currentUser) {
+      passwords[currentUser.id] = newPassword;
+      localStorage.setItem('qms_passwords', JSON.stringify(passwords));
+      setPasswordSuccess(true);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTimeout(() => setPasswordSuccess(false), 3000);
+    }
   };
 
   return (
@@ -57,8 +159,9 @@ export default function SettingsPage() {
                 </label>
                 <input
                   type="text"
-                  defaultValue={language === 'ar' ? 'أحمد محمد' : 'Ahmed Mohammed'}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                  value={fullName}
+                  disabled
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background-tertiary)] px-4 py-2 text-sm text-[var(--foreground)] cursor-not-allowed"
                 />
               </div>
               <div>
@@ -67,17 +170,30 @@ export default function SettingsPage() {
                 </label>
                 <input
                   type="email"
-                  defaultValue="ahmed@saudicable.com"
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                  value={email}
+                  disabled
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background-tertiary)] px-4 py-2 text-sm text-[var(--foreground)] cursor-not-allowed"
+                  dir="ltr"
                 />
               </div>
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
-                  {language === 'ar' ? 'القسم' : 'Department'}
+                  {language === 'ar' ? 'الدور' : 'Role'}
                 </label>
                 <input
                   type="text"
-                  defaultValue={language === 'ar' ? 'إدارة الجودة' : 'Quality Department'}
+                  value={role}
+                  disabled
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background-tertiary)] px-4 py-2 text-sm text-[var(--foreground)] cursor-not-allowed"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+                  {language === 'ar' ? 'الإدارة' : 'Department'}
+                </label>
+                <input
+                  type="text"
+                  value={department}
                   disabled
                   className="w-full rounded-lg border border-[var(--border)] bg-[var(--background-tertiary)] px-4 py-2 text-sm text-[var(--foreground-secondary)] cursor-not-allowed"
                 />
@@ -193,36 +309,78 @@ export default function SettingsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
-                  {language === 'ar' ? 'كلمة المرور الحالية' : 'Current Password'}
-                </label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
-                />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
-                  {language === 'ar' ? 'كلمة المرور الجديدة' : 'New Password'}
-                </label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
-                />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
-                  {language === 'ar' ? 'تأكيد كلمة المرور' : 'Confirm Password'}
-                </label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
-                />
-              </div>
+              {currentUser?.role === 'system_admin' ? (
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4">
+                  <p className="text-sm text-amber-700 dark:text-amber-300">
+                    {language === 'ar'
+                      ? 'كلمة مرور مدير النظام ثابتة ولا يمكن تغييرها من هنا.'
+                      : 'System admin password is fixed and cannot be changed here.'}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+                      {language === 'ar' ? 'كلمة المرور الحالية' : 'Current Password'}
+                    </label>
+                    <input
+                      type="password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+                      {language === 'ar' ? 'كلمة المرور الجديدة' : 'New Password'}
+                    </label>
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+                      {language === 'ar' ? 'تأكيد كلمة المرور' : 'Confirm Password'}
+                    </label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                    />
+                  </div>
+
+                  {passwordError && (
+                    <div className="flex items-center gap-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
+                      <AlertCircle className="h-4 w-4 text-red-500" />
+                      <span className="text-sm text-red-600 dark:text-red-400">{passwordError}</span>
+                    </div>
+                  )}
+
+                  {passwordSuccess && (
+                    <div className="flex items-center gap-2 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-3">
+                      <Check className="h-4 w-4 text-green-500" />
+                      <span className="text-sm text-green-600 dark:text-green-400">
+                        {language === 'ar' ? 'تم تغيير كلمة المرور بنجاح' : 'Password changed successfully'}
+                      </span>
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={handleChangePassword}
+                    variant="secondary"
+                    className="w-full"
+                  >
+                    {language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}
+                  </Button>
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
