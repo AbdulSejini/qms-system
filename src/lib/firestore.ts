@@ -413,9 +413,10 @@ export const getActiveSessions = async (): Promise<any[]> => {
 export const updateSessionActivity = async (userId: string): Promise<boolean> => {
   try {
     const sessionRef = doc(db, COLLECTIONS.ACTIVE_SESSIONS, userId);
-    await updateDoc(sessionRef, {
+    // Use setDoc with merge to create or update the session
+    await setDoc(sessionRef, {
       lastActivity: new Date().toISOString(),
-    });
+    }, { merge: true });
     return true;
   } catch (error) {
     console.error('Error updating session activity:', error);

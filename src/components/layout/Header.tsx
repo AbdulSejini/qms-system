@@ -57,14 +57,21 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
 
   // Load notifications from Firestore in real-time
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!currentUser?.id) {
+      console.log('No current user, skipping notifications subscription');
+      return;
+    }
+
+    console.log('Subscribing to notifications for user:', currentUser.id, currentUser.fullNameEn);
 
     // Subscribe to real-time notifications from Firestore
     const unsubscribe = subscribeToNotifications(currentUser.id, (firestoreNotifications) => {
+      console.log('Received notifications:', firestoreNotifications.length, firestoreNotifications);
       setNotifications(firestoreNotifications);
     });
 
     return () => {
+      console.log('Unsubscribing from notifications');
       unsubscribe();
     };
   }, [currentUser?.id]);
