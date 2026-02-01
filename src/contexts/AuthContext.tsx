@@ -113,7 +113,7 @@ const getPasswords = (): Record<string, string> => {
     return JSON.parse(stored);
   }
   // كلمة مرور افتراضية لمدير النظام
-  return { 'user-1': 'Admin@123' };
+  return { 'user-1': 'Doha@1988' };
 };
 
 // حفظ كلمات المرور

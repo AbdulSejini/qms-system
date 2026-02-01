@@ -26,9 +26,9 @@ export const users: User[] = [
   {
     id: 'user-1',
     employeeNumber: 'EMP-0001',
-    email: 'admin@company.com',
-    fullNameAr: 'مدير النظام',
-    fullNameEn: 'System Admin',
+    email: 'abdul.sejini@gmail.com',
+    fullNameAr: 'عبدالإله سجيني',
+    fullNameEn: 'Abdul Sejini',
     role: 'system_admin',
     departmentId: '',
     sectionId: '',
