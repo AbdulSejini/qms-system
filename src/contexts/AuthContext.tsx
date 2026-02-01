@@ -226,6 +226,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const users = getAllUsers();
     const passwords = getPasswords();
 
+    // تسجيل للتشخيص (يمكن إزالته لاحقاً)
+    console.log('Login attempt:', { username, usersCount: users.length });
+    console.log('Available users:', users.map(u => ({ id: u.id, email: u.email, isActive: u.isActive })));
+    console.log('Passwords available for:', Object.keys(passwords));
+
     // البحث عن المستخدم بالبريد الإلكتروني
     const user = users.find(
       (u) =>
@@ -234,13 +239,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         u.email.toLowerCase() === username.toLowerCase()
     );
 
+    console.log('Found user:', user ? { id: user.id, email: user.email } : 'Not found');
+
     if (!user) {
+      console.log('User not found or inactive');
       return false;
     }
 
     // التحقق من كلمة المرور
     const userPassword = passwords[user.id];
+    console.log('Password check:', { userId: user.id, hasPassword: !!userPassword, passwordMatch: userPassword === password });
+
     if (!userPassword || userPassword !== password) {
+      console.log('Password mismatch');
       return false;
     }
 
