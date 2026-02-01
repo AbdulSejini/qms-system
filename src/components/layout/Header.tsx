@@ -31,31 +31,13 @@ import { Button } from '@/components/ui/Button';
 import { MobileMenuButton } from './Sidebar';
 import { getRoleNameAr, getRoleNameEn } from '@/data/mock-data';
 import { useRouter } from 'next/navigation';
-
-// Notification interface
-interface Notification {
-  id: string;
-  type:
-    | 'audit_approval_request'       // طلب موافقة على مراجعة
-    | 'audit_approved'               // تم الموافقة على المراجعة
-    | 'audit_rejected'               // تم رفض المراجعة
-    | 'audit_postponed'              // تم تأجيل المراجعة
-    | 'audit_modification_requested' // طلب تعديل على المراجعة
-    | 'audit_modification_submitted' // تم تقديم التعديلات
-    | 'audit_team_assignment'        // تم إضافتك لفريق مراجعة
-    | 'audit_scheduled'              // مراجعة مجدولة على إدارتكم
-    | 'corrective_action_response_required' // مطلوب استجابة للإجراءات التصحيحية
-    | 'new_finding'                  // ملاحظة جديدة على إدارتكم
-    | 'general';                     // إشعار عام
-  title: string;
-  message: string;
-  auditId?: string;
-  createdAt: string;
-  read: boolean;
-  forRole?: string;
-  forUserId?: string;    // إرسال لمستخدم محدد
-  forUserIds?: string[]; // إرسال لمستخدمين محددين
-}
+import {
+  subscribeToNotifications,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+  deleteNotification as deleteNotificationFromFirestore,
+  Notification,
+} from '@/lib/firestore';
 
 interface HeaderProps {
   onMobileMenuClick: () => void;
@@ -73,48 +55,19 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [bellAnimating, setBellAnimating] = useState(false);
 
-  // Load notifications from localStorage
+  // Load notifications from Firestore in real-time
   useEffect(() => {
-    const loadNotifications = () => {
-      const storedNotifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
-      // Filter notifications based on user role or specific user IDs
-      const userNotifications = storedNotifications.filter((n: Notification) => {
-        // إذا كان الإشعار موجه لمستخدم محدد (مفرد)
-        if (n.forUserId) {
-          return n.forUserId === currentUser?.id;
-        }
-        // إذا كان الإشعار موجه لمستخدمين محددين (جمع)
-        if (n.forUserIds && n.forUserIds.length > 0) {
-          return n.forUserIds.includes(currentUser?.id || '');
-        }
-        // إذا كان الإشعار موجه لدور معين
-        if (n.forRole) {
-          return n.forRole === currentUser?.role;
-        }
-        // إشعار عام للجميع
-        return true;
-      });
-      // Sort by createdAt descending (newest first)
-      userNotifications.sort((a: Notification, b: Notification) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
-      setNotifications(userNotifications);
-    };
+    if (!currentUser?.id) return;
 
-    loadNotifications();
-
-    // Listen for storage changes
-    const handleStorageChange = () => loadNotifications();
-    window.addEventListener('storage', handleStorageChange);
-
-    // Poll for updates every 5 seconds
-    const interval = setInterval(loadNotifications, 5000);
+    // Subscribe to real-time notifications from Firestore
+    const unsubscribe = subscribeToNotifications(currentUser.id, (firestoreNotifications) => {
+      setNotifications(firestoreNotifications);
+    });
 
     return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
+      unsubscribe();
     };
-  }, [currentUser?.role]);
+  }, [currentUser?.id]);
 
   // Count unread notifications
   const unreadCount = useMemo(() => {
@@ -130,40 +83,21 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
     }
   }, [unreadCount]);
 
-  // Helper function to filter notifications for current user
-  const filterNotificationsForUser = (notifs: Notification[]) => {
-    return notifs.filter((n: Notification) => {
-      if (n.forUserId) return n.forUserId === currentUser?.id;
-      if (n.forUserIds && n.forUserIds.length > 0) return n.forUserIds.includes(currentUser?.id || '');
-      if (n.forRole) return n.forRole === currentUser?.role;
-      return true;
-    });
+  // Mark notification as read (Firestore)
+  const markAsRead = async (notificationId: string) => {
+    await markNotificationAsRead(notificationId);
   };
 
-  // Mark notification as read
-  const markAsRead = (notificationId: string) => {
-    const storedNotifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
-    const updated = storedNotifications.map((n: Notification) =>
-      n.id === notificationId ? { ...n, read: true } : n
-    );
-    localStorage.setItem('qms_notifications', JSON.stringify(updated));
-    setNotifications(filterNotificationsForUser(updated));
+  // Mark all as read (Firestore)
+  const markAllAsRead = async () => {
+    if (currentUser?.id) {
+      await markAllNotificationsAsRead(currentUser.id);
+    }
   };
 
-  // Mark all as read
-  const markAllAsRead = () => {
-    const storedNotifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
-    const updated = storedNotifications.map((n: Notification) => ({ ...n, read: true }));
-    localStorage.setItem('qms_notifications', JSON.stringify(updated));
-    setNotifications(filterNotificationsForUser(updated));
-  };
-
-  // Delete notification
-  const deleteNotification = (notificationId: string) => {
-    const storedNotifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
-    const updated = storedNotifications.filter((n: Notification) => n.id !== notificationId);
-    localStorage.setItem('qms_notifications', JSON.stringify(updated));
-    setNotifications(filterNotificationsForUser(updated));
+  // Delete notification (Firestore)
+  const deleteNotification = async (notificationId: string) => {
+    await deleteNotificationFromFirestore(notificationId);
   };
 
   // Handle notification click

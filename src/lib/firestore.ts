@@ -27,6 +27,7 @@ const COLLECTIONS = {
   SECTIONS: 'sections',
   AUDITS: 'audits',
   ACTIVE_SESSIONS: 'activeSessions',
+  NOTIFICATIONS: 'notifications',
 };
 
 // ===========================================
@@ -457,6 +458,117 @@ export const cleanupStaleSessions = async (): Promise<void> => {
     await Promise.all(deletePromises);
   } catch (error) {
     console.error('Error cleaning up stale sessions:', error);
+  }
+};
+
+// ===========================================
+// Notifications Operations
+// ===========================================
+
+// Notification type
+export interface Notification {
+  id: string;
+  type: 'audit_approval_request' | 'audit_approved' | 'audit_rejected' | 'audit_postponed' |
+        'audit_modification_requested' | 'audit_modification_submitted' | 'audit_team_assignment' |
+        'audit_scheduled' | 'corrective_action_response_required' | 'new_finding' | 'general';
+  title: string;
+  message: string;
+  recipientId: string; // User ID who should receive this notification
+  senderId?: string; // User ID who triggered this notification
+  auditId?: string;
+  read: boolean;
+  createdAt: string;
+}
+
+// Add notification
+export const addNotification = async (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>): Promise<string | null> => {
+  try {
+    const notificationId = `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const notificationRef = doc(db, COLLECTIONS.NOTIFICATIONS, notificationId);
+    await setDoc(notificationRef, prepareForFirestore({
+      ...notification,
+      id: notificationId,
+      read: false,
+      createdAt: new Date().toISOString(),
+    }));
+    return notificationId;
+  } catch (error) {
+    console.error('Error adding notification:', error);
+    return null;
+  }
+};
+
+// Get notifications for a user
+export const getNotificationsForUser = async (userId: string): Promise<Notification[]> => {
+  try {
+    const notificationsRef = collection(db, COLLECTIONS.NOTIFICATIONS);
+    const q = query(notificationsRef, where('recipientId', '==', userId), orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => convertTimestamps({ ...doc.data() }) as Notification);
+  } catch (error) {
+    console.error('Error getting notifications:', error);
+    return [];
+  }
+};
+
+// Subscribe to notifications for a user (real-time)
+export const subscribeToNotifications = (
+  userId: string,
+  callback: (notifications: Notification[]) => void
+): Unsubscribe => {
+  const notificationsRef = collection(db, COLLECTIONS.NOTIFICATIONS);
+  const q = query(notificationsRef, where('recipientId', '==', userId), orderBy('createdAt', 'desc'));
+
+  return onSnapshot(q, (snapshot) => {
+    const notifications = snapshot.docs.map(doc =>
+      convertTimestamps({ ...doc.data() }) as Notification
+    );
+    callback(notifications);
+  }, (error) => {
+    console.error('Error listening to notifications:', error);
+    callback([]);
+  });
+};
+
+// Mark notification as read
+export const markNotificationAsRead = async (notificationId: string): Promise<boolean> => {
+  try {
+    const notificationRef = doc(db, COLLECTIONS.NOTIFICATIONS, notificationId);
+    await updateDoc(notificationRef, { read: true });
+    return true;
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    return false;
+  }
+};
+
+// Mark all notifications as read for a user
+export const markAllNotificationsAsRead = async (userId: string): Promise<boolean> => {
+  try {
+    const notificationsRef = collection(db, COLLECTIONS.NOTIFICATIONS);
+    const q = query(notificationsRef, where('recipientId', '==', userId), where('read', '==', false));
+    const snapshot = await getDocs(q);
+
+    const updatePromises = snapshot.docs.map(doc =>
+      updateDoc(doc.ref, { read: true })
+    );
+    await Promise.all(updatePromises);
+    return true;
+  } catch (error) {
+    console.error('Error marking all notifications as read:', error);
+    return false;
+  }
+};
+
+// Delete notification
+export const deleteNotification = async (notificationId: string): Promise<boolean> => {
+  try {
+    const notificationRef = doc(db, COLLECTIONS.NOTIFICATIONS, notificationId);
+    await deleteDoc(notificationRef);
+    return true;
+  } catch (error) {
+    console.error('Error deleting notification:', error);
+    return false;
   }
 };
 

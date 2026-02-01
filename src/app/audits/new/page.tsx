@@ -57,12 +57,15 @@ const durationOptions = [
 export default function NewAuditPage() {
   const router = useRouter();
   const { t, language } = useTranslation();
-  const { currentUser, departments: allDepartments, sections: allSections, users: allUsers } = useAuth();
+  const { currentUser, departments: allDepartments, sections: allSections, users: allUsers, dataLoaded } = useAuth();
 
   // Get auditors from users
   const auditors = useMemo(() => {
-    return allUsers.filter(u => u.canBeAuditor && u.isActive);
-  }, [allUsers]);
+    console.log('All users:', allUsers.length, 'Data loaded:', dataLoaded);
+    const filtered = allUsers.filter(u => u.canBeAuditor && u.isActive);
+    console.log('Auditors:', filtered.length, filtered.map(a => a.fullNameEn));
+    return filtered;
+  }, [allUsers, dataLoaded]);
 
   // Current step in the wizard
   const [currentStep, setCurrentStep] = useState(1);
@@ -726,24 +729,32 @@ export default function NewAuditPage() {
                           />
                         </div>
 
-                        {showAuditorDropdown && filteredAuditors.length > 0 && (
+                        {showAuditorDropdown && (
                           <div className="absolute z-10 w-full mt-1 bg-[var(--background)] border border-[var(--border)] rounded-lg shadow-lg max-h-48 overflow-auto">
                             {filteredAuditors
                               .filter(a => a.id !== formData.leadAuditorId && !formData.auditorIds.includes(a.id))
-                              .map(auditor => (
-                                <button
-                                  key={auditor.id}
-                                  type="button"
-                                  onClick={() => addAuditorToTeam(auditor.id)}
-                                  className="w-full px-4 py-2 text-right hover:bg-[var(--background-secondary)] text-sm"
-                                >
-                                  {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
-                                  <span className="text-xs text-[var(--foreground-secondary)] mx-2">-</span>
-                                  <span className="text-xs text-[var(--foreground-secondary)]">
-                                    {language === 'ar' ? auditor.jobTitleAr : auditor.jobTitleEn}
-                                  </span>
-                                </button>
-                              ))}
+                              .length === 0 ? (
+                              <div className="px-4 py-3 text-sm text-[var(--foreground-secondary)]">
+                                {language === 'ar' ? 'لا يوجد مراجعين متاحين' : 'No auditors available'}
+                              </div>
+                            ) : (
+                              filteredAuditors
+                                .filter(a => a.id !== formData.leadAuditorId && !formData.auditorIds.includes(a.id))
+                                .map(auditor => (
+                                  <button
+                                    key={auditor.id}
+                                    type="button"
+                                    onClick={() => addAuditorToTeam(auditor.id)}
+                                    className="w-full px-4 py-2 text-right hover:bg-[var(--background-secondary)] text-sm"
+                                  >
+                                    {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
+                                    <span className="text-xs text-[var(--foreground-secondary)] mx-2">-</span>
+                                    <span className="text-xs text-[var(--foreground-secondary)]">
+                                      {language === 'ar' ? auditor.jobTitleAr : auditor.jobTitleEn}
+                                    </span>
+                                  </button>
+                                ))
+                            )}
                           </div>
                         )}
                       </div>
