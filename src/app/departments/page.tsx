@@ -9,16 +9,12 @@ import {
   getRoleNameAr,
   getRoleNameEn,
 } from '@/data/mock-data';
-import { Department, Section, User } from '@/types';
+import { Department, Section } from '@/types';
 import {
-  getAllDepartments,
-  getAllSections,
-  getVisibleUsers,
   saveDepartment,
   saveSection,
   deleteDepartment as deleteDepartmentFromFirestore,
   deleteSection as deleteSectionFromFirestore,
-  getUserById,
 } from '@/lib/firestore';
 import {
   Building2,
@@ -63,39 +59,21 @@ const emptySection: Omit<Section, 'id' | 'createdAt' | 'updatedAt'> = {
 
 export default function DepartmentsPage() {
   const { t, language, isRTL } = useTranslation();
-  const { canManageDepartments, hasPermission } = useAuth();
+  const { canManageDepartments, hasPermission, departments, sections, users, refreshData } = useAuth();
 
-  // State للبيانات من Firestore
-  const [departmentsData, setDepartmentsData] = useState<Department[]>([]);
-  const [sectionsData, setSectionsData] = useState<Section[]>([]);
-  const [usersData, setUsersData] = useState<User[]>([]);
+  // استخدام البيانات من الـ cache
+  const departmentsData = departments;
+  const sectionsData = sections;
+  const usersData = users;
 
   // Loading state
-  const [isLoading, setIsLoading] = useState(true);
+  const isLoading = departments.length === 0 && sections.length === 0;
   const [isSaving, setIsSaving] = useState(false);
 
-  // تحميل البيانات من Firestore
+  // تحميل البيانات عند الحاجة
   const loadData = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      const [depts, sects, users] = await Promise.all([
-        getAllDepartments(),
-        getAllSections(),
-        getVisibleUsers(),
-      ]);
-      setDepartmentsData(depts);
-      setSectionsData(sects);
-      setUsersData(users);
-    } catch (error) {
-      console.error('Error loading data:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+    await refreshData();
+  }, [refreshData]);
 
   // State للعرض
   const [viewMode, setViewMode] = useState<'tree' | 'list'>('tree');

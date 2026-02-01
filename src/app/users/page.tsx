@@ -11,12 +11,8 @@ import {
   getRoleNameAr,
   getRoleNameEn,
 } from '@/data/mock-data';
-import { Department, Section } from '@/types';
 import { User, UserRole } from '@/types';
 import {
-  getVisibleUsers,
-  getAllDepartments,
-  getAllSections,
   saveUser,
   deleteUser as deleteUserFromFirestore,
   setPassword,
@@ -65,46 +61,24 @@ const emptyUser: Omit<User, 'id' | 'createdAt' | 'updatedAt'> = {
 
 export default function UsersPage() {
   const { t, language, isRTL } = useTranslation();
-  const { currentUser, canManageUsers, canManageDepartments, resetUserPassword } = useAuth();
+  const { currentUser, canManageUsers, canManageDepartments, resetUserPassword, departments, sections, users, refreshData } = useAuth();
   const router = useRouter();
 
   // التحقق من الصلاحيات - فقط مدير النظام ومدير إدارة الجودة
   const hasAccess = currentUser?.role === 'system_admin' || currentUser?.role === 'quality_manager';
   const isSystemAdmin = currentUser?.role === 'system_admin';
 
-  // State للأقسام والإدارات من Firestore
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [sections, setSections] = useState<Section[]>([]);
-
-  // State للمستخدمين
-  const [usersData, setUsersData] = useState<User[]>([]);
+  // استخدام البيانات من الـ cache
+  const usersData = users;
 
   // Loading state
-  const [isLoading, setIsLoading] = useState(true);
+  const isLoading = users.length === 0 && departments.length === 0;
   const [isSaving, setIsSaving] = useState(false);
 
-  // تحميل البيانات من Firestore
+  // تحميل البيانات عند الحاجة
   const loadData = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      const [users, depts, sects] = await Promise.all([
-        getVisibleUsers(),
-        getAllDepartments(),
-        getAllSections(),
-      ]);
-      setUsersData(users);
-      setDepartments(depts);
-      setSections(sects);
-    } catch (error) {
-      console.error('Error loading data:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+    await refreshData();
+  }, [refreshData]);
 
   // دوال مساعدة للحصول على الأقسام والإدارات
   const getDepartmentById = (id: string) => departments.find(d => d.id === id);

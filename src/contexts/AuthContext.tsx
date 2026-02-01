@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   User,
   UserRole,
@@ -50,21 +50,26 @@ interface AuthContextType {
   canAccessUsersPage: boolean;
   canAccessDepartmentsPage: boolean;
 
-  // الوصول للبيانات المفلترة
-  getAccessibleDepartments: () => Promise<Department[]>;
-  getAccessibleSections: () => Promise<Section[]>;
-  getAccessibleUsers: () => Promise<User[]>;
+  // الوصول للبيانات المفلترة (cached)
+  getAccessibleDepartments: () => Department[];
+  getAccessibleSections: () => Section[];
+  getAccessibleUsers: () => User[];
   canAccessDepartment: (departmentId: string) => boolean;
-  canAccessSection: (sectionId: string) => Promise<boolean>;
-  canAccessUser: (userId: string) => Promise<boolean>;
+  canAccessSection: (sectionId: string) => boolean;
+  canAccessUser: (userId: string) => boolean;
 
   // صلاحيات المراجعة
   canAuditDepartment: (departmentId: string) => boolean;
-  canAuditSection: (sectionId: string) => Promise<boolean>;
-  getAuditableDepartments: () => Promise<Department[]>;
+  canAuditSection: (sectionId: string) => boolean;
+  getAuditableDepartments: () => Department[];
 
   // قائمة المستخدمين للتبديل (لمدير النظام فقط)
   availableUsers: User[];
+
+  // البيانات المحملة (cached)
+  departments: Department[];
+  sections: Section[];
+  users: User[];
 
   // إعادة تعيين كلمة المرور
   resetUserPassword: (userId: string) => Promise<boolean>;
@@ -86,42 +91,44 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [availableUsers, setAvailableUsers] = useState<User[]>([]);
-  const [allDepartments, setAllDepartments] = useState<Department[]>([]);
-  const [allSections, setAllSections] = useState<Section[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [sections, setSections] = useState<Section[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const dataLoadedRef = useRef(false);
+  const systemInitializedRef = useRef(false);
 
-  // تحميل البيانات من Firestore
-  const loadData = useCallback(async () => {
+  // تحميل البيانات من Firestore مرة واحدة
+  const loadData = useCallback(async (force = false) => {
+    if (dataLoadedRef.current && !force) return;
+
     try {
-      const [departments, sections] = await Promise.all([
+      const [depts, sects, usrs] = await Promise.all([
         getAllDepartmentsFromFirestore(),
         getAllSectionsFromFirestore(),
+        getVisibleUsersFromFirestore(),
       ]);
-      setAllDepartments(departments);
-      setAllSections(sections);
+      setDepartments(depts);
+      setSections(sects);
+      setUsers(usrs);
+      dataLoadedRef.current = true;
     } catch (error) {
       console.error('Error loading data:', error);
     }
   }, []);
 
-  // تحميل قائمة المستخدمين المتاحين للتبديل
-  const loadAvailableUsers = useCallback(async () => {
-    if (currentUser?.role === 'system_admin') {
-      const users = await getVisibleUsersFromFirestore();
-      setAvailableUsers(users.filter(u => u.isActive));
-    } else {
-      setAvailableUsers([]);
-    }
-  }, [currentUser?.role]);
+  // تهيئة النظام مرة واحدة
+  const initSystem = useCallback(async () => {
+    if (systemInitializedRef.current) return;
+    systemInitializedRef.current = true;
+    await initializeSystemAdmin();
+  }, []);
 
   // تحميل الجلسة عند بدء التطبيق
   useEffect(() => {
     const loadSession = async () => {
       try {
-        // تهيئة مدير النظام
-        await initializeSystemAdmin();
+        await initSystem();
 
-        // تحميل الجلسة المحفوظة
         const savedSession = localStorage.getItem('qms_session');
         if (savedSession) {
           const session = JSON.parse(savedSession);
@@ -140,15 +147,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     loadSession();
-  }, []);
+  }, [initSystem]);
 
   // تحميل البيانات عند تسجيل الدخول
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser && !dataLoadedRef.current) {
       loadData();
-      loadAvailableUsers();
     }
-  }, [currentUser, loadData, loadAvailableUsers]);
+  }, [currentUser, loadData]);
 
   const isAuthenticated = currentUser !== null;
 
@@ -169,9 +175,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return DEFAULT_PERMISSIONS[currentUser.role];
   }, [currentUser]);
 
+  // المستخدمين المتاحين للتبديل
+  const availableUsers = useMemo(() => {
+    if (currentUser?.role !== 'system_admin') return [];
+    return users.filter(u => u.isActive);
+  }, [currentUser?.role, users]);
+
   // تحديث البيانات
   const refreshData = useCallback(async () => {
-    await loadData();
+    await loadData(true);
     if (currentUser) {
       const updatedUser = await getUserById(currentUser.id);
       if (updatedUser) {
@@ -183,34 +195,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // تسجيل الدخول
   const login = useCallback(async (username: string, password: string): Promise<boolean> => {
     try {
-      // تهيئة مدير النظام
-      await initializeSystemAdmin();
+      await initSystem();
 
-      // البحث عن المستخدم بالبريد الإلكتروني
       const user = await getUserByEmail(username);
 
       if (!user || !user.isActive) {
-        console.log('User not found or inactive:', username);
         return false;
       }
 
-      // التحقق من كلمة المرور
       const storedPassword = await getPassword(user.id);
-      console.log('Checking password for user:', user.id);
 
       if (!storedPassword || storedPassword !== password) {
-        console.log('Password mismatch');
         return false;
       }
 
-      // حفظ الجلسة محلياً
       const sessionData = {
         userId: user.id,
         loginAt: new Date().toISOString(),
       };
       localStorage.setItem('qms_session', JSON.stringify(sessionData));
 
-      // إضافة للجلسات النشطة في Firestore
       await addActiveSession(user.id, {
         loginAt: sessionData.loginAt,
         userEmail: user.email,
@@ -218,22 +222,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       setCurrentUser(user);
+      dataLoadedRef.current = false; // Reset to load fresh data
       return true;
     } catch (error) {
       console.error('Login error:', error);
       return false;
     }
-  }, []);
+  }, [initSystem]);
 
   // تسجيل الخروج
   const logout = useCallback(async () => {
     if (currentUser) {
-      // إزالة من الجلسات النشطة في Firestore
       await removeActiveSession(currentUser.id);
     }
 
     setCurrentUser(null);
     localStorage.removeItem('qms_session');
+    dataLoadedRef.current = false;
   }, [currentUser]);
 
   // تبديل المستخدم (لمدير النظام فقط)
@@ -254,11 +259,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const resetUserPassword = useCallback(async (userId: string): Promise<boolean> => {
     if (!currentUser) return false;
 
-    // لا يمكن إعادة تعيين كلمة مرور حساب نظام
-    const targetUser = await getUserById(userId);
+    const targetUser = users.find(u => u.id === userId);
     if (targetUser?.isSystemAccount) return false;
 
-    // التحقق من الصلاحية
     const canReset =
       currentUser.role === 'system_admin' ||
       (currentUser.role === 'quality_manager' && permissions.canManageUsers);
@@ -266,7 +269,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!canReset) return false;
 
     return await setPassword(userId, DEFAULT_PASSWORD);
-  }, [currentUser, permissions.canManageUsers]);
+  }, [currentUser, permissions.canManageUsers, users]);
 
   // التحقق من صلاحية معينة
   const hasPermission = useCallback(
@@ -288,33 +291,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [currentUser]);
 
   // ===========================================
-  // فلترة البيانات حسب الصلاحيات
+  // فلترة البيانات حسب الصلاحيات (من الـ cache)
   // ===========================================
 
-  // الإدارات المتاحة للمستخدم
-  const getAccessibleDepartments = useCallback(async (): Promise<Department[]> => {
+  const getAccessibleDepartments = useCallback((): Department[] => {
     if (!currentUser) return [];
 
-    const departments = await getAllDepartmentsFromFirestore();
-
-    if (currentUser.role === 'system_admin') {
-      return departments.filter((d) => d.isActive);
-    }
-
-    if (currentUser.role === 'quality_manager' || permissions.canViewAllData) {
+    if (currentUser.role === 'system_admin' || currentUser.role === 'quality_manager' || permissions.canViewAllData) {
       return departments.filter((d) => d.isActive);
     }
 
     return departments.filter(
       (d) => d.isActive && d.id === currentUser.departmentId
     );
-  }, [currentUser, permissions.canViewAllData]);
+  }, [currentUser, permissions.canViewAllData, departments]);
 
-  // الأقسام المتاحة للمستخدم
-  const getAccessibleSections = useCallback(async (): Promise<Section[]> => {
+  const getAccessibleSections = useCallback((): Section[] => {
     if (!currentUser) return [];
-
-    const sections = await getAllSectionsFromFirestore();
 
     if (permissions.canViewAllData) {
       return sections.filter((s) => s.isActive);
@@ -335,13 +328,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return sections.filter(
       (s) => s.isActive && s.departmentId === currentUser.departmentId
     );
-  }, [currentUser, permissions.canViewAllData]);
+  }, [currentUser, permissions.canViewAllData, sections]);
 
-  // المستخدمين المتاحين للمستخدم الحالي (بدون حسابات النظام المخفية)
-  const getAccessibleUsers = useCallback(async (): Promise<User[]> => {
+  const getAccessibleUsers = useCallback((): User[] => {
     if (!currentUser) return [];
-
-    const users = await getVisibleUsersFromFirestore();
 
     if (currentUser.role === 'system_admin') {
       return users.filter((u) => u.isActive);
@@ -364,9 +354,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     return users.filter((u) => u.isActive && u.id === currentUser.id);
-  }, [currentUser]);
+  }, [currentUser, users]);
 
-  // التحقق من الوصول لإدارة معينة
   const canAccessDepartment = useCallback(
     (departmentId: string): boolean => {
       if (!currentUser) return false;
@@ -376,13 +365,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [currentUser, permissions.canViewAllData]
   );
 
-  // التحقق من الوصول لقسم معين
   const canAccessSection = useCallback(
-    async (sectionId: string): Promise<boolean> => {
+    (sectionId: string): boolean => {
       if (!currentUser) return false;
       if (permissions.canViewAllData) return true;
 
-      const section = allSections.find(s => s.id === sectionId);
+      const section = sections.find(s => s.id === sectionId);
       if (!section) return false;
 
       if (currentUser.role === 'department_manager') {
@@ -391,16 +379,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return currentUser.sectionId === sectionId;
     },
-    [currentUser, permissions.canViewAllData, allSections]
+    [currentUser, permissions.canViewAllData, sections]
   );
 
-  // التحقق من الوصول لمستخدم معين
   const canAccessUser = useCallback(
-    async (userId: string): Promise<boolean> => {
+    (userId: string): boolean => {
       if (!currentUser) return false;
       if (currentUser.role === 'system_admin') return true;
 
-      const user = await getUserById(userId);
+      const user = users.find(u => u.id === userId);
       if (!user) return false;
 
       if (currentUser.role === 'quality_manager') {
@@ -419,14 +406,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return user.id === currentUser.id;
     },
-    [currentUser, permissions.canViewAllData]
+    [currentUser, permissions.canViewAllData, users]
   );
 
   // ===========================================
   // صلاحيات المراجعة
   // ===========================================
 
-  // التحقق من إمكانية مراجعة إدارة معينة
   const canAuditDepartment = useCallback(
     (departmentId: string): boolean => {
       if (!currentUser || !currentUser.canBeAuditor) return false;
@@ -436,7 +422,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (currentUser.auditableDepartmentIds.length === 0) {
-        return true; // يمكنه مراجعة الجميع
+        return true;
       }
 
       return currentUser.auditableDepartmentIds.includes(departmentId);
@@ -444,24 +430,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [currentUser]
   );
 
-  // التحقق من إمكانية مراجعة قسم معين
   const canAuditSection = useCallback(
-    async (sectionId: string): Promise<boolean> => {
+    (sectionId: string): boolean => {
       if (!currentUser || !currentUser.canBeAuditor) return false;
 
-      const section = allSections.find(s => s.id === sectionId);
+      const section = sections.find(s => s.id === sectionId);
       if (!section) return false;
 
       return canAuditDepartment(section.departmentId);
     },
-    [currentUser, canAuditDepartment, allSections]
+    [currentUser, canAuditDepartment, sections]
   );
 
-  // الإدارات التي يمكن للمستخدم مراجعتها
-  const getAuditableDepartments = useCallback(async (): Promise<Department[]> => {
+  const getAuditableDepartments = useCallback((): Department[] => {
     if (!currentUser || !currentUser.canBeAuditor) return [];
-
-    const departments = await getAllDepartmentsFromFirestore();
 
     if (currentUser.role === 'system_admin' || currentUser.role === 'quality_manager') {
       return departments.filter((d) => d.isActive);
@@ -474,7 +456,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return departments.filter(
       (d) => d.isActive && currentUser.auditableDepartmentIds.includes(d.id)
     );
-  }, [currentUser]);
+  }, [currentUser, departments]);
 
   // ===========================================
   // Context Value
@@ -504,6 +486,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     canAuditSection,
     getAuditableDepartments,
     availableUsers,
+    departments,
+    sections,
+    users,
     resetUserPassword,
     refreshData,
   };
