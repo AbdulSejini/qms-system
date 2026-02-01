@@ -79,6 +79,12 @@ const getAllUsers = (): User[] => {
   return mockUsers;
 };
 
+// الحصول على مستخدم بواسطة الـ ID من localStorage
+const getUserByIdFromStorage = (userId: string): User | undefined => {
+  const users = getAllUsers();
+  return users.find(u => u.id === userId);
+};
+
 // الحصول على جميع الإدارات من localStorage
 const getAllDepartments = (): Department[] => {
   if (typeof window === 'undefined') return mockDepartments;
@@ -136,8 +142,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const savedSession = localStorage.getItem('qms_session');
     if (savedSession) {
       const session = JSON.parse(savedSession);
-      // التحقق من صحة الجلسة
-      const user = getUserById(session.userId);
+      // التحقق من صحة الجلسة - البحث في localStorage
+      const user = getUserByIdFromStorage(session.userId);
       if (user && user.isActive) {
         setCurrentUserId(session.userId);
       } else {
@@ -147,7 +153,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(false);
   }, []);
 
-  const currentUser = currentUserId ? getUserById(currentUserId) || null : null;
+  const currentUser = currentUserId ? getUserByIdFromStorage(currentUserId) || null : null;
   const isAuthenticated = currentUser !== null;
 
   // الصلاحيات
@@ -210,7 +216,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const switchUser = useCallback((userId: string) => {
     if (!currentUser || currentUser.role !== 'system_admin') return;
 
-    const user = getUserById(userId);
+    const user = getUserByIdFromStorage(userId);
     if (user && user.isActive) {
       setCurrentUserId(userId);
       localStorage.setItem('qms_session', JSON.stringify({
