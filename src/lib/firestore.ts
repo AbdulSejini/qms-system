@@ -11,6 +11,8 @@ import {
   where,
   orderBy,
   Timestamp,
+  onSnapshot,
+  Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { User, Department, Section } from '@/types';
@@ -403,6 +405,58 @@ export const getActiveSessions = async (): Promise<any[]> => {
   } catch (error) {
     console.error('Error getting active sessions:', error);
     return [];
+  }
+};
+
+// Update last activity for a session
+export const updateSessionActivity = async (userId: string): Promise<boolean> => {
+  try {
+    const sessionRef = doc(db, COLLECTIONS.ACTIVE_SESSIONS, userId);
+    await updateDoc(sessionRef, {
+      lastActivity: new Date().toISOString(),
+    });
+    return true;
+  } catch (error) {
+    console.error('Error updating session activity:', error);
+    return false;
+  }
+};
+
+// Subscribe to active sessions changes (real-time listener)
+export const subscribeToActiveSessions = (
+  callback: (sessions: any[]) => void
+): Unsubscribe => {
+  const sessionsRef = collection(db, COLLECTIONS.ACTIVE_SESSIONS);
+
+  return onSnapshot(sessionsRef, (snapshot) => {
+    const sessions = snapshot.docs.map(doc =>
+      convertTimestamps({ id: doc.id, ...doc.data() })
+    );
+    callback(sessions);
+  }, (error) => {
+    console.error('Error listening to active sessions:', error);
+    callback([]);
+  });
+};
+
+// Clean up stale sessions (older than 30 minutes)
+export const cleanupStaleSessions = async (): Promise<void> => {
+  try {
+    const sessionsRef = collection(db, COLLECTIONS.ACTIVE_SESSIONS);
+    const snapshot = await getDocs(sessionsRef);
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+
+    const deletePromises = snapshot.docs
+      .filter(doc => {
+        const data = doc.data();
+        const lastActivity = data.lastActivity ? new Date(data.lastActivity) : new Date(0);
+        return lastActivity < thirtyMinutesAgo;
+      })
+      .map(doc => deleteDoc(doc.ref));
+
+    await Promise.all(deletePromises);
+  } catch (error) {
+    console.error('Error cleaning up stale sessions:', error);
   }
 };
 

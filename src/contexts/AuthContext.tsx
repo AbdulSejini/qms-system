@@ -20,6 +20,7 @@ import {
   setPassword,
   addActiveSession,
   removeActiveSession,
+  updateSessionActivity,
   SYSTEM_ADMIN_ID,
   DEFAULT_PASSWORD,
 } from '@/lib/firestore';
@@ -159,6 +160,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loadData();
     }
   }, [currentUser, loadData]);
+
+  // تحديث نشاط المستخدم كل دقيقة (heartbeat)
+  useEffect(() => {
+    if (!currentUser) return;
+
+    // تحديث النشاط فوراً
+    updateSessionActivity(currentUser.id);
+
+    // تحديث كل دقيقة
+    const interval = setInterval(() => {
+      updateSessionActivity(currentUser.id);
+    }, 60000); // 60 ثانية
+
+    return () => clearInterval(interval);
+  }, [currentUser]);
 
   const isAuthenticated = currentUser !== null;
 

@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { useTranslation, useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { subscribeToActiveSessions, cleanupStaleSessions } from '@/lib/firestore';
 import {
   LayoutDashboard,
   ClipboardCheck,
@@ -116,58 +117,44 @@ export function Sidebar({ isCollapsed, onToggle, isMobileOpen, onMobileClose }: 
   const [showActiveSessions, setShowActiveSessions] = useState(true);
   const isSystemAdmin = currentUser?.role === 'system_admin';
 
-  // تحميل الجلسات النشطة
+  // تحميل الجلسات النشطة من Firestore في الوقت الحقيقي
   useEffect(() => {
     if (!isSystemAdmin) return;
 
-    const loadActiveSessions = () => {
-      const sessions: ActiveSession[] = [];
-      const storedUsers = localStorage.getItem('qms_users');
-      // إخفاء حسابات النظام
-      const users = storedUsers ? JSON.parse(storedUsers).filter((u: any) => !u.isSystemAccount) : [];
+    // تنظيف الجلسات القديمة
+    cleanupStaleSessions();
 
-      // الجلسة الحالية
-      const currentSession = localStorage.getItem('qms_session');
-      if (currentSession) {
-        const sessionData = JSON.parse(currentSession);
-        sessions.push({
-          id: 'current',
-          userId: currentUser?.id || 'user-1',
-          userName: language === 'ar' ? (currentUser?.fullNameAr || 'مدير النظام') : (currentUser?.fullNameEn || 'System Admin'),
-          userRole: 'system_admin',
-          loginAt: sessionData.loginAt,
-          lastActivity: new Date().toISOString(),
-        });
-      }
+    // الاشتراك في تحديثات الجلسات النشطة
+    const unsubscribe = subscribeToActiveSessions((firestoreSessions) => {
+      const sessions: ActiveSession[] = firestoreSessions.map((session: any) => ({
+        id: session.id,
+        userId: session.userId,
+        userName: session.userName || session.userEmail || 'مستخدم',
+        userRole: session.userRole || 'employee',
+        loginAt: session.loginAt,
+        lastActivity: session.lastActivity,
+      }));
 
-      // جلسات المستخدمين الآخرين
-      const allSessions = localStorage.getItem('qms_active_sessions');
-      if (allSessions) {
-        const parsedSessions = JSON.parse(allSessions);
-        parsedSessions.forEach((session: any) => {
-          if (session.userId !== currentUser?.id) {
-            const user = users.find((u: any) => u.id === session.userId);
-            if (user) {
-              sessions.push({
-                id: session.id || session.userId,
-                userId: session.userId,
-                userName: language === 'ar' ? user.fullNameAr : user.fullNameEn,
-                userRole: user.role,
-                loginAt: session.loginAt,
-                lastActivity: session.lastActivity,
-              });
-            }
-          }
-        });
-      }
+      // ترتيب حسب آخر نشاط
+      sessions.sort((a, b) => {
+        const aTime = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
+        const bTime = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
+        return bTime - aTime;
+      });
 
       setActiveSessions(sessions);
-    };
+    });
 
-    loadActiveSessions();
-    const interval = setInterval(loadActiveSessions, 30000);
-    return () => clearInterval(interval);
-  }, [isSystemAdmin, currentUser, language]);
+    // تنظيف الجلسات القديمة كل 5 دقائق
+    const cleanupInterval = setInterval(() => {
+      cleanupStaleSessions();
+    }, 5 * 60 * 1000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(cleanupInterval);
+    };
+  }, [isSystemAdmin]);
 
   // تصفية عناصر القائمة بناءً على صلاحيات المستخدم
   const filteredNavItems = useMemo(() => {
