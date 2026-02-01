@@ -18,31 +18,10 @@ export const departments: Department[] = [];
 export const sections: Section[] = [];
 
 // ===========================================
-// المستخدمين - فقط مدير النظام
+// المستخدمين - فارغ (مدير النظام معرّف في AuthContext)
 // ===========================================
 
-export const users: User[] = [
-  // مدير النظام
-  {
-    id: 'user-1',
-    employeeNumber: 'EMP-0001',
-    email: 'abdul.sejini@gmail.com',
-    fullNameAr: 'عبدالإله سجيني',
-    fullNameEn: 'Abdul Sejini',
-    role: 'system_admin',
-    departmentId: '',
-    sectionId: '',
-    canBeAuditor: false,
-    auditableDepartmentIds: [],
-    auditableSectionIds: [],
-    phone: '+966500000000',
-    jobTitleAr: 'مدير النظام',
-    jobTitleEn: 'System Administrator',
-    isActive: true,
-    createdAt: new Date('2024-01-01'),
-    updatedAt: new Date('2024-01-01'),
-  },
-];
+export const users: User[] = [];
 
 // ===========================================
 // دوال مساعدة
@@ -50,49 +29,42 @@ export const users: User[] = [
 
 // الحصول على الإدارة بالمعرف
 export const getDepartmentById = (id: string): Department | undefined => {
-  // أولاً نحاول من localStorage
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem('qms_departments');
     if (stored) {
       const storedDepts = JSON.parse(stored);
-      const found = storedDepts.find((d: Department) => d.id === id);
-      if (found) return found;
+      return storedDepts.find((d: Department) => d.id === id);
     }
   }
-  return departments.find((d) => d.id === id);
+  return undefined;
 };
 
 // الحصول على القسم بالمعرف
 export const getSectionById = (id: string): Section | undefined => {
-  // أولاً نحاول من localStorage
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem('qms_sections');
     if (stored) {
       const storedSections = JSON.parse(stored);
-      const found = storedSections.find((s: Section) => s.id === id);
-      if (found) return found;
+      return storedSections.find((s: Section) => s.id === id);
     }
   }
-  return sections.find((s) => s.id === id);
+  return undefined;
 };
 
 // الحصول على المستخدم بالمعرف
 export const getUserById = (id: string): User | undefined => {
-  // أولاً نحاول من localStorage
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem('qms_users');
     if (stored) {
       const storedUsers = JSON.parse(stored);
-      const found = storedUsers.find((u: User) => u.id === id);
-      if (found) return found;
+      return storedUsers.find((u: User) => u.id === id);
     }
   }
-  return users.find((u) => u.id === id);
+  return undefined;
 };
 
 // الحصول على أقسام إدارة معينة
 export const getSectionsByDepartment = (departmentId: string): Section[] => {
-  // أولاً نحاول من localStorage
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem('qms_sections');
     if (stored) {
@@ -100,12 +72,11 @@ export const getSectionsByDepartment = (departmentId: string): Section[] => {
       return storedSections.filter((s: Section) => s.departmentId === departmentId && s.isActive);
     }
   }
-  return sections.filter((s) => s.departmentId === departmentId && s.isActive);
+  return [];
 };
 
 // الحصول على موظفي قسم معين
 export const getUsersBySection = (sectionId: string): User[] => {
-  // أولاً نحاول من localStorage
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem('qms_users');
     if (stored) {
@@ -113,12 +84,11 @@ export const getUsersBySection = (sectionId: string): User[] => {
       return storedUsers.filter((u: User) => u.sectionId === sectionId && u.isActive);
     }
   }
-  return users.filter((u) => u.sectionId === sectionId && u.isActive);
+  return [];
 };
 
 // الحصول على موظفي إدارة معينة
 export const getUsersByDepartment = (departmentId: string): User[] => {
-  // أولاً نحاول من localStorage
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem('qms_users');
     if (stored) {
@@ -126,12 +96,11 @@ export const getUsersByDepartment = (departmentId: string): User[] => {
       return storedUsers.filter((u: User) => u.departmentId === departmentId && u.isActive);
     }
   }
-  return users.filter((u) => u.departmentId === departmentId && u.isActive);
+  return [];
 };
 
 // الحصول على المراجعين المتاحين
 export const getAvailableAuditors = (): User[] => {
-  // أولاً نحاول من localStorage
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem('qms_users');
     if (stored) {
@@ -139,29 +108,27 @@ export const getAvailableAuditors = (): User[] => {
       return storedUsers.filter((u: User) => u.canBeAuditor && u.isActive);
     }
   }
-  return users.filter((u) => u.canBeAuditor && u.isActive);
+  return [];
 };
 
 // الحصول على المراجعين الذين يمكنهم مراجعة إدارة معينة
 export const getAuditorsForDepartment = (departmentId: string): User[] => {
-  let allUsers = users;
-
-  // أولاً نحاول من localStorage
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem('qms_users');
     if (stored) {
-      allUsers = JSON.parse(stored);
+      const allUsers = JSON.parse(stored);
+      return allUsers.filter(
+        (u: User) =>
+          u.canBeAuditor &&
+          u.isActive &&
+          (u.auditableDepartmentIds.includes(departmentId) ||
+            u.auditableDepartmentIds.length === 0 ||
+            u.role === 'quality_manager' ||
+            u.role === 'system_admin')
+      );
     }
   }
-
-  return allUsers.filter(
-    (u) =>
-      u.canBeAuditor &&
-      u.isActive &&
-      (u.auditableDepartmentIds.includes(departmentId) ||
-        u.role === 'quality_manager' ||
-        u.role === 'system_admin')
-  );
+  return [];
 };
 
 // التحقق من قدرة المستخدم على مراجعة إدارة/قسم معين
@@ -175,6 +142,11 @@ export const canUserAudit = (
 
   // مدير النظام ومدير الجودة يمكنهم مراجعة أي إدارة
   if (user.role === 'system_admin' || user.role === 'quality_manager') {
+    return true;
+  }
+
+  // إذا كانت القائمة فارغة، يمكنه مراجعة الجميع
+  if (user.auditableDepartmentIds.length === 0) {
     return true;
   }
 
@@ -207,7 +179,7 @@ export const getRoleNameAr = (role: UserRole): string => {
 // الحصول على اسم الدور بالإنجليزي
 export const getRoleNameEn = (role: UserRole): string => {
   const roleNames: Record<UserRole, string> = {
-    system_admin: 'System Admin',
+    system_admin: 'System Administrator',
     quality_manager: 'Quality Manager',
     auditor: 'Internal Auditor',
     department_manager: 'Department Manager',

@@ -9,15 +9,32 @@ import {
   Department,
   Section,
 } from '@/types';
-import {
-  users as mockUsers,
-  departments as mockDepartments,
-  sections as mockSections,
-  getDepartmentById,
-  getSectionById,
-  getUserById,
-  canUserAudit,
-} from '@/data/mock-data';
+
+// ===========================================
+// مدير النظام الرئيسي - بيانات ثابتة ومحمية
+// ===========================================
+
+const SYSTEM_ADMIN: User = {
+  id: 'user-1',
+  employeeNumber: 'EMP-0001',
+  email: 'abdul.sejini@gmail.com',
+  fullNameAr: 'عبدالإله سجيني',
+  fullNameEn: 'Abdul Sejini',
+  role: 'system_admin',
+  departmentId: '',
+  sectionId: '',
+  canBeAuditor: true,
+  auditableDepartmentIds: [],
+  auditableSectionIds: [],
+  phone: '+966500000000',
+  jobTitleAr: 'مدير النظام',
+  jobTitleEn: 'System Administrator',
+  isActive: true,
+  createdAt: new Date('2024-01-01'),
+  updatedAt: new Date('2024-01-01'),
+};
+
+const SYSTEM_ADMIN_PASSWORD = 'Doha@1988';
 
 // ===========================================
 // Context Types
@@ -69,56 +86,74 @@ interface AuthContextType {
 // Helper Functions
 // ===========================================
 
-// الحصول على جميع المستخدمين من localStorage
+// الحصول على جميع المستخدمين من localStorage + مدير النظام
 const getAllUsers = (): User[] => {
-  if (typeof window === 'undefined') return mockUsers;
+  if (typeof window === 'undefined') return [SYSTEM_ADMIN];
   const stored = localStorage.getItem('qms_users');
   if (stored) {
-    return JSON.parse(stored);
+    const storedUsers = JSON.parse(stored);
+    // تأكد من وجود مدير النظام دائماً
+    const hasAdmin = storedUsers.some((u: User) => u.id === SYSTEM_ADMIN.id);
+    if (!hasAdmin) {
+      return [SYSTEM_ADMIN, ...storedUsers];
+    }
+    // تحديث بيانات مدير النظام في حالة تغيرها
+    return storedUsers.map((u: User) => u.id === SYSTEM_ADMIN.id ? SYSTEM_ADMIN : u);
   }
-  return mockUsers;
+  return [SYSTEM_ADMIN];
 };
 
-// الحصول على مستخدم بواسطة الـ ID من localStorage
+// الحصول على مستخدم بواسطة الـ ID
 const getUserByIdFromStorage = (userId: string): User | undefined => {
+  if (userId === SYSTEM_ADMIN.id) return SYSTEM_ADMIN;
   const users = getAllUsers();
   return users.find(u => u.id === userId);
 };
 
 // الحصول على جميع الإدارات من localStorage
 const getAllDepartments = (): Department[] => {
-  if (typeof window === 'undefined') return mockDepartments;
+  if (typeof window === 'undefined') return [];
   const stored = localStorage.getItem('qms_departments');
   if (stored) {
     return JSON.parse(stored);
   }
-  return mockDepartments;
+  return [];
 };
 
 // الحصول على جميع الأقسام من localStorage
 const getAllSections = (): Section[] => {
-  if (typeof window === 'undefined') return mockSections;
+  if (typeof window === 'undefined') return [];
   const stored = localStorage.getItem('qms_sections');
   if (stored) {
     return JSON.parse(stored);
   }
-  return mockSections;
+  return [];
+};
+
+// الحصول على قسم بواسطة الـ ID
+const getSectionByIdFromStorage = (sectionId: string): Section | undefined => {
+  const sections = getAllSections();
+  return sections.find(s => s.id === sectionId);
 };
 
 // الحصول على كلمات المرور من localStorage
 const getPasswords = (): Record<string, string> => {
-  if (typeof window === 'undefined') return {};
+  if (typeof window === 'undefined') return { [SYSTEM_ADMIN.id]: SYSTEM_ADMIN_PASSWORD };
   const stored = localStorage.getItem('qms_passwords');
   if (stored) {
-    return JSON.parse(stored);
+    const passwords = JSON.parse(stored);
+    // تأكد من وجود كلمة مرور مدير النظام دائماً
+    passwords[SYSTEM_ADMIN.id] = SYSTEM_ADMIN_PASSWORD;
+    return passwords;
   }
-  // كلمة مرور افتراضية لمدير النظام
-  return { 'user-1': 'Doha@1988' };
+  return { [SYSTEM_ADMIN.id]: SYSTEM_ADMIN_PASSWORD };
 };
 
 // حفظ كلمات المرور
 const savePasswords = (passwords: Record<string, string>) => {
   if (typeof window !== 'undefined') {
+    // لا تسمح بتغيير كلمة مرور مدير النظام
+    passwords[SYSTEM_ADMIN.id] = SYSTEM_ADMIN_PASSWORD;
     localStorage.setItem('qms_passwords', JSON.stringify(passwords));
   }
 };
@@ -142,7 +177,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const savedSession = localStorage.getItem('qms_session');
     if (savedSession) {
       const session = JSON.parse(savedSession);
-      // التحقق من صحة الجلسة - البحث في localStorage
       const user = getUserByIdFromStorage(session.userId);
       if (user && user.isActive) {
         setCurrentUserId(session.userId);
@@ -230,6 +264,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const resetUserPassword = useCallback((userId: string): boolean => {
     if (!currentUser) return false;
 
+    // لا يمكن إعادة تعيين كلمة مرور مدير النظام
+    if (userId === SYSTEM_ADMIN.id) return false;
+
     // التحقق من الصلاحية
     const canReset =
       currentUser.role === 'system_admin' ||
@@ -255,13 +292,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // صلاحيات الوصول للصفحات
   const canAccessUsersPage = useMemo(() => {
     if (!currentUser) return false;
-    // مدير النظام ومدير الجودة فقط
     return currentUser.role === 'system_admin' || currentUser.role === 'quality_manager';
   }, [currentUser]);
 
   const canAccessDepartmentsPage = useMemo(() => {
     if (!currentUser) return false;
-    // مدير النظام ومدير الجودة فقط
     return currentUser.role === 'system_admin' || currentUser.role === 'quality_manager';
   }, [currentUser]);
 
@@ -274,17 +309,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!currentUser) return [];
     const departments = getAllDepartments();
 
-    // مدير النظام يرى كل الإدارات
     if (currentUser.role === 'system_admin') {
       return departments.filter((d) => d.isActive);
     }
 
-    // مدير الجودة يرى كل الإدارات ما عدا إدارة مدير النظام
     if (currentUser.role === 'quality_manager' || permissions.canViewAllData) {
       return departments.filter((d) => d.isActive);
     }
 
-    // باقي المستخدمين يرون إدارتهم فقط
     return departments.filter(
       (d) => d.isActive && d.id === currentUser.departmentId
     );
@@ -295,26 +327,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!currentUser) return [];
     const sections = getAllSections();
 
-    // مدير النظام ومدير الجودة يمكنهم الوصول لكل الأقسام
     if (permissions.canViewAllData) {
       return sections.filter((s) => s.isActive);
     }
 
-    // مدير الإدارة يرى كل أقسام إدارته
     if (currentUser.role === 'department_manager') {
       return sections.filter(
         (s) => s.isActive && s.departmentId === currentUser.departmentId
       );
     }
 
-    // رئيس القسم والموظف يرون قسمهم فقط
     if (currentUser.sectionId) {
       return sections.filter(
         (s) => s.isActive && s.id === currentUser.sectionId
       );
     }
 
-    // إذا لم يكن هناك قسم محدد، نعرض أقسام الإدارة
     return sections.filter(
       (s) => s.isActive && s.departmentId === currentUser.departmentId
     );
@@ -325,31 +353,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!currentUser) return [];
     const users = getAllUsers();
 
-    // مدير النظام يرى كل المستخدمين
     if (currentUser.role === 'system_admin') {
       return users.filter((u) => u.isActive);
     }
 
-    // مدير الجودة يرى كل المستخدمين ما عدا مدير النظام
     if (currentUser.role === 'quality_manager') {
       return users.filter((u) => u.isActive && u.role !== 'system_admin');
     }
 
-    // مدير الإدارة يرى موظفي إدارته
     if (currentUser.role === 'department_manager') {
       return users.filter(
         (u) => u.isActive && u.departmentId === currentUser.departmentId
       );
     }
 
-    // رئيس القسم يرى موظفي قسمه
     if (currentUser.role === 'section_head' && currentUser.sectionId) {
       return users.filter(
         (u) => u.isActive && u.sectionId === currentUser.sectionId
       );
     }
 
-    // الموظف العادي يرى نفسه فقط
     return users.filter((u) => u.isActive && u.id === currentUser.id);
   }, [currentUser]);
 
@@ -369,15 +392,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!currentUser) return false;
       if (permissions.canViewAllData) return true;
 
-      const section = getSectionById(sectionId);
+      const section = getSectionByIdFromStorage(sectionId);
       if (!section) return false;
 
-      // مدير الإدارة يمكنه الوصول لأي قسم في إدارته
       if (currentUser.role === 'department_manager') {
         return section.departmentId === currentUser.departmentId;
       }
 
-      // رئيس القسم والموظف يمكنهم الوصول لقسمهم فقط
       return currentUser.sectionId === sectionId;
     },
     [currentUser, permissions.canViewAllData]
@@ -389,27 +410,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!currentUser) return false;
       if (currentUser.role === 'system_admin') return true;
 
-      const user = getUserById(userId);
+      const user = getUserByIdFromStorage(userId);
       if (!user) return false;
 
-      // مدير الجودة لا يرى مدير النظام
       if (currentUser.role === 'quality_manager') {
         return user.role !== 'system_admin';
       }
 
       if (permissions.canViewAllData) return true;
 
-      // مدير الإدارة يمكنه الوصول لموظفي إدارته
       if (currentUser.role === 'department_manager') {
         return user.departmentId === currentUser.departmentId;
       }
 
-      // رئيس القسم يمكنه الوصول لموظفي قسمه
       if (currentUser.role === 'section_head' && currentUser.sectionId) {
         return user.sectionId === currentUser.sectionId;
       }
 
-      // الموظف يمكنه الوصول لنفسه فقط
       return user.id === currentUser.id;
     },
     [currentUser, permissions.canViewAllData]
@@ -422,8 +439,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // التحقق من إمكانية مراجعة إدارة معينة
   const canAuditDepartment = useCallback(
     (departmentId: string): boolean => {
-      if (!currentUser) return false;
-      return canUserAudit(currentUser.id, departmentId);
+      if (!currentUser || !currentUser.canBeAuditor) return false;
+
+      if (currentUser.role === 'system_admin' || currentUser.role === 'quality_manager') {
+        return true;
+      }
+
+      if (currentUser.auditableDepartmentIds.length === 0) {
+        return true; // يمكنه مراجعة الجميع
+      }
+
+      return currentUser.auditableDepartmentIds.includes(departmentId);
     },
     [currentUser]
   );
@@ -431,12 +457,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // التحقق من إمكانية مراجعة قسم معين
   const canAuditSection = useCallback(
     (sectionId: string): boolean => {
-      if (!currentUser) return false;
-      const section = getSectionById(sectionId);
+      if (!currentUser || !currentUser.canBeAuditor) return false;
+
+      const section = getSectionByIdFromStorage(sectionId);
       if (!section) return false;
-      return canUserAudit(currentUser.id, section.departmentId, sectionId);
+
+      return canAuditDepartment(section.departmentId);
     },
-    [currentUser]
+    [currentUser, canAuditDepartment]
   );
 
   // الإدارات التي يمكن للمستخدم مراجعتها
@@ -444,12 +472,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!currentUser || !currentUser.canBeAuditor) return [];
     const departments = getAllDepartments();
 
-    // مدير النظام ومدير الجودة يمكنهم مراجعة كل الإدارات
     if (currentUser.role === 'system_admin' || currentUser.role === 'quality_manager') {
       return departments.filter((d) => d.isActive);
     }
 
-    // المراجعين الآخرين حسب قائمتهم المحددة
+    if (currentUser.auditableDepartmentIds.length === 0) {
+      return departments.filter((d) => d.isActive);
+    }
+
     return departments.filter(
       (d) => d.isActive && currentUser.auditableDepartmentIds.includes(d.id)
     );
