@@ -88,12 +88,12 @@ export default function DashboardPage() {
       const visibleUsers = users.filter((u: any) => !u.isSystemAccount);
 
       // Extract all findings from audits
-      audits.forEach((audit: any) => {
+      firestoreAudits.forEach((audit: any) => {
         if (audit.findings && Array.isArray(audit.findings)) {
           audit.findings.forEach((finding: any) => {
             allFindings.push({
               ...finding,
-              auditNumber: audit.number,
+              auditNumber: audit.number || audit.id,
               auditId: audit.id,
             });
           });
@@ -101,10 +101,10 @@ export default function DashboardPage() {
       });
 
       // Calculate stats
-      const activeAudits = audits.filter(a =>
+      const activeAudits = firestoreAudits.filter(a =>
         a.status !== 'completed' && a.status !== 'cancelled'
       ).length;
-      const completedAudits = audits.filter(a => a.status === 'completed').length;
+      const completedAudits = firestoreAudits.filter(a => a.status === 'completed').length;
       const openFindings = allFindings.filter(f => f.status !== 'closed').length;
       const closedFindings = allFindings.filter(f => f.status === 'closed').length;
       const overdueFindings = allFindings.filter(f => {
@@ -114,7 +114,7 @@ export default function DashboardPage() {
       }).length;
 
       setStats({
-        totalAudits: audits.length,
+        totalAudits: firestoreAudits.length,
         activeAudits,
         completedAudits,
         totalFindings: allFindings.length,
@@ -126,16 +126,16 @@ export default function DashboardPage() {
       });
 
       // Recent audits (last 5)
-      const sortedAudits = [...audits]
+      const sortedAudits = [...firestoreAudits]
         .sort((a, b) => new Date(b.createdAt || b.startDate).getTime() - new Date(a.createdAt || a.startDate).getTime())
         .slice(0, 5)
         .map(audit => {
           const dept = departments.find((d: any) => d.id === audit.departmentId);
           return {
             id: audit.id,
-            number: audit.number,
-            titleAr: audit.titleAr || audit.title || 'مراجعة',
-            titleEn: audit.titleEn || audit.title || 'Audit',
+            number: audit.id.replace('audit-', 'AUD-'),
+            titleAr: audit.titleAr || 'مراجعة',
+            titleEn: audit.titleEn || 'Audit',
             status: audit.status,
             startDate: audit.startDate,
             departmentName: dept ? (language === 'ar' ? dept.nameAr : dept.nameEn) : '',
@@ -162,7 +162,7 @@ export default function DashboardPage() {
       const tasks: any[] = [];
 
       // Add upcoming audits
-      audits.filter(a => a.status !== 'completed' && a.status !== 'cancelled').forEach(audit => {
+      firestoreAudits.filter(a => a.status !== 'completed' && a.status !== 'cancelled').forEach(audit => {
         if (audit.startDate) {
           tasks.push({
             id: `audit-${audit.id}`,

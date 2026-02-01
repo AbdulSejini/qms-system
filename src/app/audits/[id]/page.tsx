@@ -293,9 +293,6 @@ interface Audit {
   activityLog?: ActivityLogEntry[];
 }
 
-// Get auditors from users
-const auditors = allUsers.filter(u => u.canBeAuditor && u.isActive);
-
 // Initial demo audits data (same as in main page)
 const initialAudits: Audit[] = [
   {
@@ -533,6 +530,9 @@ export default function AuditDetailPage() {
   const { t, language } = useTranslation();
   const { currentUser, users: allUsers, departments: allDepartments, sections: allSections } = useAuth();
   const auditId = params.id as string;
+
+  // Get auditors from users (canBeAuditor = true)
+  const auditors = useMemo(() => allUsers.filter(u => u.canBeAuditor && u.isActive), [allUsers]);
 
   // State
   const [audit, setAudit] = useState<Audit | null>(null);
@@ -872,7 +872,7 @@ export default function AuditDetailPage() {
 
 
   // إرسال للموافقة من إدارة الجودة
-  const handleSubmitForQMSApproval = () => {
+  const handleSubmitForQMSApproval = async () => {
     if (!audit || audit.currentStage !== 1) return; // مرحلة التنفيذ هي 1 الآن
 
     // التحقق من وجود أسئلة
@@ -1276,7 +1276,7 @@ export default function AuditDetailPage() {
   };
 
   // معالجة قرار مدير إدارة الجودة
-  const handleQMSDecision = (decision: QMSDecision | null) => {
+  const handleQMSDecision = async (decision: QMSDecision | null) => {
     if (!audit || !decision) return;
     // التعليق مطلوب فقط في حالات غير الموافقة
     if (decision !== 'approved' && !qmsComment.trim()) return;

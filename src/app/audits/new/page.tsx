@@ -296,7 +296,7 @@ export default function NewAuditPage() {
   };
 
   // Handle save
-  const handleSave = (continueToDetails: boolean = false) => {
+  const handleSave = async (continueToDetails: boolean = false) => {
     if (!validateStep(currentStep)) return;
 
     // Determine initial status - quality manager doesn't need approval for their own audits

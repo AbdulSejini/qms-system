@@ -122,7 +122,6 @@ export default function CalendarPage() {
             });
           }
         });
-      });
 
       setEvents(loadedEvents);
     });

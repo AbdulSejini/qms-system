@@ -109,10 +109,8 @@ export default function FollowUpPage() {
   useEffect(() => {
     const unsubscribe = subscribeToAudits((audits) => {
       const loadedItems: FollowUpItem[] = [];
-    if (storedAudits) {
-      try {
-        const audits = JSON.parse(storedAudits);
-        audits.forEach((audit: any) => {
+
+      audits.forEach((audit: any) => {
           // Add audit tasks for audits in progress
           if (audit.status && audit.status !== 'completed' && audit.status !== 'cancelled') {
             loadedItems.push({
