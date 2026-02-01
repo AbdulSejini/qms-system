@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
@@ -9,14 +9,12 @@ import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   users as initialUsers,
-  departments,
-  sections,
-  getDepartmentById,
-  getSectionById,
-  getSectionsByDepartment,
+  departments as initialDepartments,
+  sections as initialSections,
   getRoleNameAr,
   getRoleNameEn,
 } from '@/data/mock-data';
+import { Department, Section } from '@/types';
 import { User, UserRole } from '@/types';
 import {
   Users,
@@ -67,17 +65,42 @@ export default function UsersPage() {
   const hasAccess = currentUser?.role === 'system_admin' || currentUser?.role === 'quality_manager';
   const isSystemAdmin = currentUser?.role === 'system_admin';
 
-  // State للبيانات (في تطبيق حقيقي ستكون من قاعدة بيانات)
-  // إخفاء مدير النظام إذا كان المستخدم الحالي هو مدير الجودة
-  const filteredInitialUsers = useMemo(() => {
-    if (isSystemAdmin) {
-      return initialUsers; // مدير النظام يرى الجميع
+  // State للأقسام والإدارات من localStorage
+  const [departments, setDepartments] = useState<Department[]>(initialDepartments);
+  const [sections, setSections] = useState<Section[]>(initialSections);
+
+  // State للمستخدمين
+  const [usersData, setUsersData] = useState<User[]>([]);
+
+  // تحميل البيانات من localStorage
+  useEffect(() => {
+    // تحميل الأقسام
+    const storedDepts = localStorage.getItem('qms_departments');
+    const storedSections = localStorage.getItem('qms_sections');
+
+    if (storedDepts) {
+      setDepartments(JSON.parse(storedDepts));
     }
-    // مدير الجودة لا يرى مدير النظام
-    return initialUsers.filter(u => u.role !== 'system_admin');
+    if (storedSections) {
+      setSections(JSON.parse(storedSections));
+    }
+
+    // تحميل المستخدمين
+    const storedUsers = localStorage.getItem('qms_users');
+    let loadedUsers: User[] = storedUsers ? JSON.parse(storedUsers) : initialUsers;
+
+    // إخفاء مدير النظام إذا كان المستخدم الحالي ليس مدير النظام
+    if (!isSystemAdmin) {
+      loadedUsers = loadedUsers.filter(u => u.role !== 'system_admin');
+    }
+
+    setUsersData(loadedUsers);
   }, [isSystemAdmin]);
 
-  const [usersData, setUsersData] = useState<User[]>(filteredInitialUsers);
+  // دوال مساعدة للحصول على الأقسام والإدارات
+  const getDepartmentById = (id: string) => departments.find(d => d.id === id);
+  const getSectionById = (id: string) => sections.find(s => s.id === id);
+  const getSectionsByDepartment = (deptId: string) => sections.filter(s => s.departmentId === deptId);
 
   // State للفلترة
   const [searchQuery, setSearchQuery] = useState('');
