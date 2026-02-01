@@ -157,7 +157,11 @@ export default function UsersPage() {
     );
   };
 
-  const roles: UserRole[] = ['system_admin', 'quality_manager', 'auditor', 'department_manager', 'section_head', 'employee'];
+  // الأدوار المتاحة - فقط مدير النظام يمكنه إضافة مدير نظام آخر
+  const allRoles: UserRole[] = ['system_admin', 'quality_manager', 'auditor', 'department_manager', 'section_head', 'employee'];
+  const roles: UserRole[] = isSystemAdmin
+    ? allRoles
+    : allRoles.filter(role => role !== 'system_admin');
 
   // Stats
   const stats = {
@@ -244,6 +248,15 @@ export default function UsersPage() {
   // حفظ المستخدم
   const handleSave = () => {
     if (!validateForm()) return;
+
+    // منع غير مدير النظام من إنشاء مدير نظام
+    if (!isSystemAdmin && formData.role === 'system_admin') {
+      setFormErrors(prev => ({
+        ...prev,
+        role: language === 'ar' ? 'لا يمكنك إنشاء مدير نظام' : 'You cannot create a system admin'
+      }));
+      return;
+    }
 
     let newUsers: User[];
 

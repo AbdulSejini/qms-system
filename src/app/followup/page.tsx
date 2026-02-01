@@ -8,11 +8,7 @@ import { Button, Badge } from '@/components/ui';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
-import {
-  users as allUsers,
-  departments as allDepartments,
-  sections as allSections,
-} from '@/data/mock-data';
+import { Department, Section, User as UserType } from '@/types';
 import {
   ClipboardList,
   AlertCircle,
@@ -26,7 +22,7 @@ import {
   Eye,
   MessageSquare,
   Calendar,
-  User,
+  User as UserIcon,
   Building2,
   TrendingUp,
   TrendingDown,
@@ -92,6 +88,11 @@ export default function FollowUpPage() {
   const { t, language, isRTL } = useTranslation();
   const { currentUser, hasPermission } = useAuth();
 
+  // State for data from localStorage
+  const [allUsers, setAllUsers] = useState<UserType[]>([]);
+  const [allDepartments, setAllDepartments] = useState<Department[]>([]);
+  const [allSections, setAllSections] = useState<Section[]>([]);
+
   // State
   const [followUpItems, setFollowUpItems] = useState<FollowUpItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -102,6 +103,23 @@ export default function FollowUpPage() {
   const [selectedItem, setSelectedItem] = useState<FollowUpItem | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showSendReminderModal, setShowSendReminderModal] = useState(false);
+
+  // Load users, departments, sections from localStorage
+  useEffect(() => {
+    const storedUsers = localStorage.getItem('qms_users');
+    const storedDepts = localStorage.getItem('qms_departments');
+    const storedSections = localStorage.getItem('qms_sections');
+
+    if (storedUsers) {
+      setAllUsers(JSON.parse(storedUsers));
+    }
+    if (storedDepts) {
+      setAllDepartments(JSON.parse(storedDepts));
+    }
+    if (storedSections) {
+      setAllSections(JSON.parse(storedSections));
+    }
+  }, []);
 
   // Load data from localStorage (audits and findings)
   useEffect(() => {
@@ -643,7 +661,7 @@ export default function FollowUpPage() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
-                            <User className="h-4 w-4 text-[var(--foreground-secondary)]" />
+                            <UserIcon className="h-4 w-4 text-[var(--foreground-secondary)]" />
                             <span className="text-sm">{getUserName(item.assignedTo)}</span>
                           </div>
                         </TableCell>
@@ -774,7 +792,7 @@ export default function FollowUpPage() {
                       {language === 'ar' ? 'المسؤول' : 'Assigned To'}
                     </h4>
                     <div className="flex items-center gap-2">
-                      <User className="h-4 w-4 text-[var(--foreground-secondary)]" />
+                      <UserIcon className="h-4 w-4 text-[var(--foreground-secondary)]" />
                       <span>{getUserName(selectedItem.assignedTo)}</span>
                     </div>
                   </div>
