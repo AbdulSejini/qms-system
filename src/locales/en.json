@@ -33,12 +33,12 @@
   },
   "navigation": {
     "dashboard": "Dashboard",
-    "documents": "Documents",
     "audits": "Audits & Reviews",
     "findings": "Findings",
     "reports": "Reports",
     "calendar": "Calendar",
     "followup": "Follow-up",
+    "performance": "Performance",
     "users": "Users",
     "departments": "Departments",
     "settings": "Settings",

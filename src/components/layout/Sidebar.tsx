@@ -8,7 +8,6 @@ import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   LayoutDashboard,
-  FileText,
   ClipboardCheck,
   AlertCircle,
   FileBarChart,
@@ -21,6 +20,7 @@ import {
   Building2,
   Calendar,
   ListChecks,
+  TrendingUp,
 } from 'lucide-react';
 
 interface NavItem {
@@ -38,11 +38,6 @@ const navItems: NavItem[] = [
     icon: LayoutDashboard,
   },
   {
-    href: '/documents',
-    labelKey: 'navigation.documents',
-    icon: FileText,
-  },
-  {
     href: '/audits',
     labelKey: 'navigation.audits',
     icon: ClipboardCheck,
@@ -51,11 +46,6 @@ const navItems: NavItem[] = [
     href: '/findings',
     labelKey: 'navigation.findings',
     icon: AlertCircle,
-  },
-  {
-    href: '/reports',
-    labelKey: 'navigation.reports',
-    icon: FileBarChart,
   },
   {
     href: '/calendar',
@@ -68,10 +58,20 @@ const navItems: NavItem[] = [
     icon: ListChecks,
   },
   {
+    href: '/performance',
+    labelKey: 'navigation.performance',
+    icon: TrendingUp,
+  },
+  {
+    href: '/reports',
+    labelKey: 'navigation.reports',
+    icon: FileBarChart,
+  },
+  {
     href: '/users',
     labelKey: 'navigation.users',
     icon: Users,
-    requiresRole: ['system_admin', 'quality_manager'], // فقط مدير النظام ومدير الجودة
+    requiresRole: ['system_admin', 'quality_manager'],
   },
   {
     href: '/departments',

@@ -33,12 +33,12 @@
   },
   "navigation": {
     "dashboard": "لوحة التحكم",
-    "documents": "المستندات",
     "audits": "المراجعة",
     "findings": "الملاحظات",
     "reports": "التقارير",
     "calendar": "التقويم",
     "followup": "المتابعة",
+    "performance": "الأداء",
     "users": "المستخدمين",
     "departments": "الإدارات",
     "settings": "الإعدادات",
