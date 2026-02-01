@@ -6,11 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
-import {
-  users as allUsers,
-  departments as allDepartments,
-  sections as allSections,
-} from '@/data/mock-data';
+import { subscribeToAudits } from '@/lib/firestore';
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -72,7 +68,7 @@ const getPriorityFromSeverity = (severity: string): 'low' | 'medium' | 'high' | 
 
 export default function CalendarPage() {
   const { t, language, isRTL } = useTranslation();
-  const { currentUser, hasPermission } = useAuth();
+  const { currentUser, hasPermission, users: allUsers, departments: allDepartments, sections: allSections } = useAuth();
 
   // State
   const [currentDate, setCurrentDate] = useState(new Date(2026, 1, 1)); // February 2026
@@ -83,16 +79,12 @@ export default function CalendarPage() {
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
 
-  // Load events from actual audits and findings data
+  // Load events from Firestore audits
   useEffect(() => {
-    const loadedEvents: CalendarEvent[] = [];
+    const unsubscribe = subscribeToAudits((audits) => {
+      const loadedEvents: CalendarEvent[] = [];
 
-    // Load audits from localStorage
-    const storedAudits = localStorage.getItem('qms_audits');
-    if (storedAudits) {
-      try {
-        const audits = JSON.parse(storedAudits);
-        audits.forEach((audit: any) => {
+      audits.forEach((audit: any) => {
           // Add audit as event
           if (audit.startDate) {
             loadedEvents.push({
@@ -130,30 +122,12 @@ export default function CalendarPage() {
             });
           }
         });
-      } catch (e) {
-        console.error('Error loading audits for calendar:', e);
-      }
-    }
+      });
 
-    // No demo data - only show actual data from localStorage
+      setEvents(loadedEvents);
+    });
 
-    setEvents(loadedEvents);
-
-    // Listen for storage changes to refresh data
-    const handleStorageChange = () => {
-      // Re-run the effect to reload data
-      const newAudits = localStorage.getItem('qms_audits');
-      if (newAudits) {
-        // Trigger re-render
-        setEvents([]);
-        setTimeout(() => {
-          window.location.reload();
-        }, 100);
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    return () => unsubscribe();
   }, []);
 
   // Filter events based on user role and permissions

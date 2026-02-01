@@ -7,10 +7,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import {
-  users as allUsers,
-  departments as allDepartments,
-  sections as allSections,
-} from '@/data/mock-data';
+  getAuditById,
+  updateAudit as updateAuditInFirestore,
+  addNotification,
+  getAllUsers,
+} from '@/lib/firestore';
 import {
   ArrowRight,
   ArrowLeft,
@@ -530,7 +531,7 @@ export default function AuditDetailPage() {
   const router = useRouter();
   const params = useParams();
   const { t, language } = useTranslation();
-  const { currentUser } = useAuth();
+  const { currentUser, users: allUsers, departments: allDepartments, sections: allSections } = useAuth();
   const auditId = params.id as string;
 
   // State
@@ -607,46 +608,83 @@ export default function AuditDetailPage() {
   const getSection = (id: string) => allSections.find(s => s.id === id);
   const getUser = (id: string) => allUsers.find(u => u.id === id);
 
-  // Load audit data
+  // Load audit data from Firestore
   useEffect(() => {
-    // First check localStorage for user-created audits
-    const storedAudits = JSON.parse(localStorage.getItem('qms_audits') || '[]');
-    let found = storedAudits.find((a: Audit) => a.id === auditId);
-
-    // If not found in localStorage, check initial demo data
-    if (!found) {
-      found = initialAudits.find((a: Audit) => a.id === auditId);
-    }
-
-    if (found) {
-      setAudit(found);
-    }
-    setLoading(false);
+    const loadAudit = async () => {
+      try {
+        const firestoreAudit = await getAuditById(auditId);
+        if (firestoreAudit) {
+          // Convert Firestore audit to local Audit interface
+          const convertedAudit: Audit = {
+            id: firestoreAudit.id,
+            number: firestoreAudit.id.replace('audit-', 'AUD-'),
+            titleAr: firestoreAudit.titleAr,
+            titleEn: firestoreAudit.titleEn,
+            type: firestoreAudit.type,
+            departmentId: firestoreAudit.departmentId,
+            sectionId: firestoreAudit.sectionId,
+            status: firestoreAudit.status,
+            currentStage: getStageFromStatus(firestoreAudit.status),
+            leadAuditorId: firestoreAudit.leadAuditorId,
+            auditorIds: firestoreAudit.teamMemberIds || [],
+            startDate: firestoreAudit.startDate,
+            endDate: firestoreAudit.endDate,
+            scope: firestoreAudit.scope || '',
+            objective: firestoreAudit.objectives || '',
+            questions: [],
+            findings: firestoreAudit.findings || [],
+            createdAt: firestoreAudit.createdAt,
+            createdBy: firestoreAudit.createdBy,
+            activityLog: [],
+          };
+          setAudit(convertedAudit);
+        }
+      } catch (error) {
+        console.error('Error loading audit:', error);
+      }
+      setLoading(false);
+    };
+    loadAudit();
   }, [auditId]);
 
-  // Save audit changes
-  const saveAudit = (updatedAudit: Audit) => {
-    // Check if this is an initial audit or a stored one
-    const storedAudits = JSON.parse(localStorage.getItem('qms_audits') || '[]');
-    const isInitialAudit = initialAudits.some((a: Audit) => a.id === auditId);
+  // Helper to get stage from status
+  const getStageFromStatus = (status: string): number => {
+    const stageMap: Record<string, number> = {
+      'draft': 0,
+      'pending_approval': 0,
+      'approved': 0,
+      'planning': 0,
+      'questions_preparation': 0,
+      'execution': 1,
+      'in_progress': 1,
+      'qms_review': 2,
+      'corrective_actions': 3,
+      'verification': 4,
+      'completed': 5,
+      'cancelled': 5,
+      'postponed': 0,
+    };
+    return stageMap[status] || 0;
+  };
 
-    if (isInitialAudit) {
-      // For initial audits, add to localStorage as a modified version
-      const existingIndex = storedAudits.findIndex((a: Audit) => a.id === auditId);
-      if (existingIndex !== -1) {
-        storedAudits[existingIndex] = updatedAudit;
-      } else {
-        storedAudits.push(updatedAudit);
-      }
-      localStorage.setItem('qms_audits', JSON.stringify(storedAudits));
-    } else {
-      // For user-created audits, update in localStorage
-      const index = storedAudits.findIndex((a: Audit) => a.id === auditId);
-      if (index !== -1) {
-        storedAudits[index] = updatedAudit;
-        localStorage.setItem('qms_audits', JSON.stringify(storedAudits));
-      }
-    }
+  // Save audit changes to Firestore
+  const saveAudit = async (updatedAudit: Audit) => {
+    // Update in Firestore
+    await updateAuditInFirestore(auditId, {
+      titleAr: updatedAudit.titleAr,
+      titleEn: updatedAudit.titleEn,
+      type: updatedAudit.type,
+      status: updatedAudit.status as any,
+      departmentId: updatedAudit.departmentId,
+      sectionId: updatedAudit.sectionId,
+      leadAuditorId: updatedAudit.leadAuditorId,
+      teamMemberIds: updatedAudit.auditorIds,
+      startDate: updatedAudit.startDate,
+      endDate: updatedAudit.endDate,
+      objectives: updatedAudit.objective,
+      scope: updatedAudit.scope,
+      findings: updatedAudit.findings,
+    });
     setAudit(updatedAudit);
   };
 
@@ -754,25 +792,20 @@ export default function AuditDetailPage() {
     };
     saveAudit(updatedAudit);
 
-    // إرسال إشعار للإدارة المُراجَعة
-    const storedNotifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
-    // Get users from the audited department
+    // إرسال إشعار للإدارة المُراجَعة via Firestore
     const deptUsers = allUsers.filter(u => u.departmentId === audit.departmentId && u.isActive);
-    deptUsers.forEach((user, index) => {
-      storedNotifications.push({
-        id: `notif-${Date.now()}-dept-${index}`,
+    deptUsers.forEach(async (user) => {
+      await addNotification({
         type: 'corrective_action_response_required',
         title: language === 'ar' ? 'مطلوب استجابة للإجراءات التصحيحية' : 'Corrective Action Response Required',
         message: language === 'ar'
           ? `المراجعة ${audit.number} تحتاج استجابتكم للإجراءات التصحيحية`
           : `Audit ${audit.number} requires your response to corrective actions`,
+        recipientId: user.id,
+        senderId: currentUser?.id,
         auditId: audit.id,
-        createdAt: new Date().toISOString(),
-        read: false,
-        forUserId: user.id,
       });
     });
-    localStorage.setItem('qms_notifications', JSON.stringify(storedNotifications));
   };
 
   // استجابة الإدارة للملاحظة
@@ -858,21 +891,21 @@ export default function AuditDetailPage() {
     };
     saveAudit(updatedAudit);
 
-    // إرسال إشعار لمدير الجودة
-    const storedNotifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
-    const newNotification = {
-      id: `notif-${Date.now()}`,
-      type: 'audit_approval_request',
-      title: language === 'ar' ? 'طلب موافقة على مراجعة' : 'Audit Approval Request',
-      message: language === 'ar'
-        ? `المراجعة ${audit.number} جاهزة للمراجعة والموافقة`
-        : `Audit ${audit.number} is ready for review and approval`,
-      auditId: audit.id,
-      createdAt: new Date().toISOString(),
-      read: false,
-      forRole: 'quality_manager',
-    };
-    localStorage.setItem('qms_notifications', JSON.stringify([newNotification, ...storedNotifications]));
+    // إرسال إشعار لمدير الجودة via Firestore
+    const allUsersData = await getAllUsers();
+    const qualityManagers = allUsersData.filter(u => u.role === 'quality_manager' && u.isActive);
+    for (const qm of qualityManagers) {
+      await addNotification({
+        type: 'audit_approval_request',
+        title: language === 'ar' ? 'طلب موافقة على مراجعة' : 'Audit Approval Request',
+        message: language === 'ar'
+          ? `المراجعة ${audit.number} جاهزة للمراجعة والموافقة`
+          : `Audit ${audit.number} is ready for review and approval`,
+        recipientId: qm.id,
+        senderId: currentUser?.id,
+        auditId: audit.id,
+      });
+    }
   };
 
   // Add question
@@ -1203,8 +1236,8 @@ export default function AuditDetailPage() {
   // QMS Review Functions - دوال مراجعة إدارة الجودة
   // ===========================================
 
-  // إرسال إشعار
-  const sendNotification = (notification: {
+  // إرسال إشعار via Firestore
+  const sendNotification = async (notification: {
     type: string;
     title: string;
     message: string;
@@ -1212,14 +1245,34 @@ export default function AuditDetailPage() {
     forRole?: string;
     forUserIds?: string[];
   }) => {
-    const storedNotifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
-    const newNotification = {
-      id: `notif-${Date.now()}`,
-      ...notification,
-      createdAt: new Date().toISOString(),
-      read: false,
-    };
-    localStorage.setItem('qms_notifications', JSON.stringify([newNotification, ...storedNotifications]));
+    // If notification is for specific users
+    if (notification.forUserIds && notification.forUserIds.length > 0) {
+      for (const userId of notification.forUserIds) {
+        await addNotification({
+          type: notification.type as any,
+          title: notification.title,
+          message: notification.message,
+          recipientId: userId,
+          senderId: currentUser?.id,
+          auditId: notification.auditId,
+        });
+      }
+    }
+    // If notification is for a role
+    else if (notification.forRole) {
+      const allUsersData = await getAllUsers();
+      const roleUsers = allUsersData.filter(u => u.role === notification.forRole && u.isActive);
+      for (const user of roleUsers) {
+        await addNotification({
+          type: notification.type as any,
+          title: notification.title,
+          message: notification.message,
+          recipientId: user.id,
+          senderId: currentUser?.id,
+          auditId: notification.auditId,
+        });
+      }
+    }
   };
 
   // معالجة قرار مدير إدارة الجودة
@@ -1288,27 +1341,23 @@ export default function AuditDetailPage() {
         forUserIds: audit.auditorIds,
       });
 
-      // إرسال إشعار لموظفي الإدارة المُراجَعة (المدقق عليهم)
+      // إرسال إشعار لموظفي الإدارة المُراجَعة (المدقق عليهم) via Firestore
       const deptUsers = allUsers.filter(u => u.departmentId === audit.departmentId && u.isActive);
-      const storedNotifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
-      deptUsers.forEach((user, index) => {
+      for (const user of deptUsers) {
         // لا ترسل إشعار للمراجعين (فهم يعرفون بالفعل)
         if (!audit.auditorIds.includes(user.id)) {
-          storedNotifications.push({
-            id: `notif-${Date.now()}-audit-dept-${index}`,
+          await addNotification({
             type: 'audit_scheduled',
             title: language === 'ar' ? 'مراجعة مجدولة على إدارتكم' : 'Audit Scheduled for Your Department',
             message: language === 'ar'
               ? `سيتم إجراء مراجعة "${audit.titleAr}" على إدارتكم بتاريخ ${audit.startDate}`
               : `Audit "${audit.titleEn}" is scheduled for your department on ${audit.startDate}`,
+            recipientId: user.id,
+            senderId: currentUser?.id,
             auditId: audit.id,
-            createdAt: new Date().toISOString(),
-            read: false,
-            forUserId: user.id,
           });
         }
-      });
-      localStorage.setItem('qms_notifications', JSON.stringify(storedNotifications));
+      }
     } else if (decision === 'rejected') {
       updatedAudit = {
         ...updatedAudit,

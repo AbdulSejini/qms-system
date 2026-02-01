@@ -9,10 +9,12 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-  users as allUsers,
-  departments as allDepartments,
-  sections as allSections,
-} from '@/data/mock-data';
+  subscribeToAudits,
+  updateAudit,
+  deleteAudit as deleteAuditFromFirestore,
+  addNotification,
+  Audit as FirestoreAudit,
+} from '@/lib/firestore';
 import {
   Plus,
   Search,
@@ -186,28 +188,72 @@ interface Audit {
   createdBy?: string;
 }
 
-// Get auditors from users (canBeAuditor = true)
-const auditors = allUsers.filter(u => u.canBeAuditor && u.isActive);
-
 // No demo data - start with empty audits
 const initialAudits: Audit[] = [];
 
 export default function AuditsPage() {
   const router = useRouter();
   const { t, language, isRTL } = useTranslation();
-  const { currentUser, hasPermission } = useAuth();
+  const { currentUser, hasPermission, users: allUsers, departments: allDepartments, sections: allSections } = useAuth();
+
+  // Get auditors from users (canBeAuditor = true)
+  const auditors = useMemo(() => allUsers.filter(u => u.canBeAuditor && u.isActive), [allUsers]);
 
   // Check if current user is quality manager
   const isQualityManager = currentUser?.role === 'quality_manager';
 
-  // Audits data - load from localStorage only
+  // Audits data - load from Firestore with real-time updates
   const [auditsData, setAuditsData] = useState<Audit[]>([]);
 
-  // Load audits from localStorage on mount
+  // Subscribe to Firestore audits on mount
   useEffect(() => {
-    const storedAudits = JSON.parse(localStorage.getItem('qms_audits') || '[]');
-    setAuditsData(storedAudits);
+    const unsubscribe = subscribeToAudits((firestoreAudits) => {
+      // Convert Firestore audits to local Audit interface
+      const convertedAudits: Audit[] = firestoreAudits.map(fa => ({
+        id: fa.id,
+        number: fa.id.replace('audit-', 'AUD-'),
+        titleAr: fa.titleAr,
+        titleEn: fa.titleEn,
+        type: fa.type,
+        departmentId: fa.departmentId,
+        sectionId: fa.sectionId,
+        status: fa.status,
+        currentStage: getStageFromStatus(fa.status),
+        leadAuditorId: fa.leadAuditorId,
+        auditorIds: fa.teamMemberIds || [],
+        startDate: fa.startDate,
+        endDate: fa.endDate,
+        scope: fa.scope || '',
+        objective: fa.objectives || '',
+        questions: [],
+        findings: fa.findings || [],
+        createdAt: fa.createdAt,
+        createdBy: fa.createdBy,
+      }));
+      setAuditsData(convertedAudits);
+    });
+    return () => unsubscribe();
   }, []);
+
+  // Helper to get stage from status
+  const getStageFromStatus = (status: string): number => {
+    const stageMap: Record<string, number> = {
+      'draft': 0,
+      'pending_approval': 0,
+      'approved': 0,
+      'planning': 0,
+      'questions_preparation': 1,
+      'execution': 2,
+      'in_progress': 2,
+      'qms_review': 3,
+      'corrective_actions': 4,
+      'verification': 5,
+      'completed': 6,
+      'cancelled': 6,
+      'postponed': 0,
+    };
+    return stageMap[status] || 0;
+  };
 
   // Role view mode - auditor vs auditee
   const [viewMode, setViewMode] = useState<'all' | 'as_auditor' | 'as_auditee'>('all');
@@ -295,7 +341,7 @@ export default function AuditsPage() {
       a.fullNameAr.toLowerCase().includes(search) ||
       a.fullNameEn.toLowerCase().includes(search)
     );
-  }, [auditorSearch]);
+  }, [auditorSearch, auditors]);
 
   // Types
   const types = [
@@ -529,73 +575,64 @@ export default function AuditsPage() {
     setShowDeleteModal(true);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (auditToDelete) {
-      setAuditsData(prev => prev.filter(a => a.id !== auditToDelete.id));
+      // Delete from Firestore
+      await deleteAuditFromFirestore(auditToDelete.id);
       setShowDeleteModal(false);
       setAuditToDelete(null);
     }
   };
 
   // Handle approve audit (Quality Manager only)
-  const handleApproveAudit = (auditId: string) => {
-    // Update in state
-    setAuditsData(prev => prev.map(a =>
-      a.id === auditId ? { ...a, status: 'planning', needsApproval: false } : a
-    ));
-
-    // Update in localStorage
-    const storedAudits = JSON.parse(localStorage.getItem('qms_audits') || '[]');
-    const updatedAudits = storedAudits.map((a: Audit) =>
-      a.id === auditId ? { ...a, status: 'planning', needsApproval: false } : a
-    );
-    localStorage.setItem('qms_audits', JSON.stringify(updatedAudits));
+  const handleApproveAudit = async (auditId: string) => {
+    // Update in Firestore
+    await updateAudit(auditId, {
+      status: 'approved',
+      approvedBy: currentUser?.id,
+      approvedAt: new Date().toISOString(),
+    });
 
     // Add notification for the creator
     const audit = auditsData.find(a => a.id === auditId);
-    if (audit) {
-      const notifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
-      notifications.push({
-        id: `notif-${Date.now()}`,
+    if (audit && audit.createdBy) {
+      await addNotification({
         type: 'audit_approved',
         title: language === 'ar' ? 'تمت الموافقة على المراجعة' : 'Audit Approved',
         message: language === 'ar'
           ? `تمت الموافقة على مراجعة: ${audit.titleAr}`
           : `Audit approved: ${audit.titleEn}`,
+        recipientId: audit.createdBy,
+        senderId: currentUser?.id,
         auditId: audit.id,
-        createdAt: new Date().toISOString(),
-        read: false,
       });
-      localStorage.setItem('qms_notifications', JSON.stringify(notifications));
     }
   };
 
   // Handle reject audit (Quality Manager only)
-  const handleRejectAudit = (auditId: string, reason: string) => {
-    // Update in state - set to rejected or allow re-edit
-    setAuditsData(prev => prev.filter(a => a.id !== auditId));
+  const handleRejectAudit = async (auditId: string, reason: string) => {
+    const audit = auditsData.find(a => a.id === auditId);
 
-    // Remove from localStorage
-    const storedAudits = JSON.parse(localStorage.getItem('qms_audits') || '[]');
-    const updatedAudits = storedAudits.filter((a: Audit) => a.id !== auditId);
-    localStorage.setItem('qms_audits', JSON.stringify(updatedAudits));
+    // Update in Firestore - mark as rejected
+    await updateAudit(auditId, {
+      status: 'cancelled',
+      rejectedBy: currentUser?.id,
+      rejectedAt: new Date().toISOString(),
+      rejectionReason: reason,
+    });
 
     // Add notification for the creator
-    const audit = auditsData.find(a => a.id === auditId);
-    if (audit) {
-      const notifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
-      notifications.push({
-        id: `notif-${Date.now()}`,
+    if (audit && audit.createdBy) {
+      await addNotification({
         type: 'audit_rejected',
         title: language === 'ar' ? 'تم رفض المراجعة' : 'Audit Rejected',
         message: language === 'ar'
           ? `تم رفض مراجعة: ${audit.titleAr}. السبب: ${reason || 'لم يحدد'}`
           : `Audit rejected: ${audit.titleEn}. Reason: ${reason || 'Not specified'}`,
+        recipientId: audit.createdBy,
+        senderId: currentUser?.id,
         auditId: audit.id,
-        createdAt: new Date().toISOString(),
-        read: false,
       });
-      localStorage.setItem('qms_notifications', JSON.stringify(notifications));
     }
   };
 

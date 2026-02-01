@@ -6,7 +6,6 @@ import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
-// البيانات تأتي من AuthContext بدلاً من mock-data
 import {
   ArrowRight,
   ArrowLeft,
@@ -30,6 +29,7 @@ import {
   Edit3,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { createAudit, addNotification, getAllUsers } from '@/lib/firestore';
 
 // ===========================================
 // صفحة إنشاء مراجعة جديدة
@@ -344,28 +344,51 @@ export default function NewAuditPage() {
       }],
     };
 
-    // Store in localStorage for now (in real app, this would be an API call)
-    const existingAudits = JSON.parse(localStorage.getItem('qms_audits') || '[]');
-    existingAudits.push(audit);
-    localStorage.setItem('qms_audits', JSON.stringify(existingAudits));
+    // Save to Firestore
+    const auditId = await createAudit({
+      titleAr: audit.titleAr,
+      titleEn: audit.titleEn,
+      type: audit.type,
+      status: initialStatus as any,
+      departmentId: audit.departmentId,
+      sectionId: audit.sectionId,
+      leadAuditorId: audit.leadAuditorId,
+      teamMemberIds: audit.auditorIds,
+      startDate: audit.startDate,
+      endDate: audit.endDate,
+      objectives: audit.objective,
+      scope: audit.scope,
+      criteria: '',
+      findings: [],
+      createdBy: currentUser?.id || '',
+    });
 
-    // Add notifications
-    const notifications = JSON.parse(localStorage.getItem('qms_notifications') || '[]');
+    if (!auditId) {
+      console.error('Failed to create audit');
+      return;
+    }
+
+    // Update the local audit id
+    audit.id = auditId;
 
     // Add notification for quality manager if not self-created
     if (!isQualityManager) {
-      notifications.push({
-        id: `notif-${Date.now()}`,
-        type: 'audit_approval_request',
-        title: language === 'ar' ? 'طلب موافقة على مراجعة جديدة' : 'New Audit Approval Request',
-        message: language === 'ar'
-          ? `طلب موافقة على مراجعة: ${formData.titleAr}`
-          : `Approval request for audit: ${formData.titleEn}`,
-        auditId: audit.id,
-        createdAt: new Date().toISOString(),
-        read: false,
-        forRole: 'quality_manager',
-      });
+      // Find all quality managers to notify
+      const allUsersData = await getAllUsers();
+      const qualityManagers = allUsersData.filter(u => u.role === 'quality_manager' && u.isActive);
+
+      for (const qm of qualityManagers) {
+        await addNotification({
+          type: 'audit_approval_request',
+          title: language === 'ar' ? 'طلب موافقة على مراجعة جديدة' : 'New Audit Approval Request',
+          message: language === 'ar'
+            ? `طلب موافقة على مراجعة: ${formData.titleAr}`
+            : `Approval request for audit: ${formData.titleEn}`,
+          recipientId: qm.id,
+          senderId: currentUser?.id,
+          auditId: auditId,
+        });
+      }
     }
 
     // Add notifications for team members (excluding the creator)
@@ -376,25 +399,21 @@ export default function NewAuditPage() {
       teamMemberIds.push(formData.leadAuditorId);
     }
 
-    teamMemberIds.forEach((memberId, index) => {
+    for (const memberId of teamMemberIds) {
       const member = getUser(memberId);
       if (member) {
-        notifications.push({
-          id: `notif-${Date.now()}-team-${index}`,
+        await addNotification({
           type: 'audit_team_assignment',
           title: language === 'ar' ? 'تم إضافتك لفريق مراجعة' : 'Added to Audit Team',
           message: language === 'ar'
             ? `تم إضافتك كعضو في فريق المراجعة: ${formData.titleAr}`
             : `You have been added as a team member in audit: ${formData.titleEn}`,
-          auditId: audit.id,
-          createdAt: new Date().toISOString(),
-          read: false,
-          forUserId: memberId,
+          recipientId: memberId,
+          senderId: currentUser?.id,
+          auditId: auditId,
         });
       }
-    });
-
-    localStorage.setItem('qms_notifications', JSON.stringify(notifications));
+    }
 
     setShowConfirmModal(false);
 

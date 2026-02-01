@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { subscribeToAudits } from '@/lib/firestore';
 import {
   TrendingUp,
   TrendingDown,
@@ -53,31 +54,24 @@ interface AuditeePerformance {
 
 export default function PerformancePage() {
   const { t, language, isRTL } = useTranslation();
-  const { currentUser, hasPermission } = useAuth();
+  const { currentUser, hasPermission, users, departments } = useAuth();
 
   const [auditorStats, setAuditorStats] = useState<AuditorPerformance[]>([]);
   const [auditeeStats, setAuditeeStats] = useState<AuditeePerformance[]>([]);
   const [viewMode, setViewMode] = useState<'auditors' | 'auditees'>('auditors');
   const [timeRange, setTimeRange] = useState<'month' | 'quarter' | 'year'>('quarter');
 
-  // Load performance data from audits
+  // Load performance data from Firestore audits
   useEffect(() => {
-    const loadPerformanceData = () => {
-      const storedAudits = localStorage.getItem('qms_audits');
-      const storedUsers = localStorage.getItem('qms_users');
-      const storedDepartments = localStorage.getItem('qms_departments');
-
-      if (!storedAudits) {
+    const unsubscribe = subscribeToAudits((audits) => {
+      if (audits.length === 0) {
         setAuditorStats([]);
         setAuditeeStats([]);
         return;
       }
 
-      try {
-        const audits = JSON.parse(storedAudits);
-        // إخفاء حسابات النظام
-        const users = storedUsers ? JSON.parse(storedUsers).filter((u: any) => !u.isSystemAccount) : [];
-        const departments = storedDepartments ? JSON.parse(storedDepartments) : [];
+      // إخفاء حسابات النظام
+      const visibleUsers = users.filter((u: any) => !u.isSystemAccount);
 
         // Calculate auditor performance
         const auditorMap = new Map<string, AuditorPerformance>();
@@ -86,7 +80,7 @@ export default function PerformancePage() {
           // Lead Auditor
           if (audit.leadAuditorId) {
             const existing = auditorMap.get(audit.leadAuditorId);
-            const user = users.find((u: any) => u.id === audit.leadAuditorId);
+            const user = visibleUsers.find((u: any) => u.id === audit.leadAuditorId);
             const findingsCount = audit.findings?.length || 0;
             const isCompleted = audit.status === 'completed';
 
@@ -116,7 +110,7 @@ export default function PerformancePage() {
               if (auditorId === audit.leadAuditorId) return;
 
               const existing = auditorMap.get(auditorId);
-              const user = users.find((u: any) => u.id === auditorId);
+              const user = visibleUsers.find((u: any) => u.id === auditorId);
               const isCompleted = audit.status === 'completed';
 
               if (existing) {
@@ -190,17 +184,10 @@ export default function PerformancePage() {
 
         setAuditorStats(Array.from(auditorMap.values()).sort((a, b) => b.qualityScore - a.qualityScore));
         setAuditeeStats(Array.from(departmentMap.values()).sort((a, b) => b.complianceScore - a.complianceScore));
+    });
 
-      } catch (e) {
-        console.error('Error loading performance data:', e);
-      }
-    };
-
-    loadPerformanceData();
-
-    window.addEventListener('storage', loadPerformanceData);
-    return () => window.removeEventListener('storage', loadPerformanceData);
-  }, []);
+    return () => unsubscribe();
+  }, [users, departments]);
 
   // Summary statistics
   const summaryStats = useMemo(() => {

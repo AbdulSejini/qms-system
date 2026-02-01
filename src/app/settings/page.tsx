@@ -7,7 +7,7 @@ import { Button } from '@/components/ui';
 import { useTranslation, useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from 'next-themes';
-import { getDepartmentById } from '@/data/mock-data';
+import { getPassword, setPassword } from '@/lib/firestore';
 import {
   User,
   Bell,
@@ -27,7 +27,7 @@ export default function SettingsPage() {
   const { t, language, isRTL } = useTranslation();
   const { setLanguage } = useLanguage();
   const { theme, setTheme } = useTheme();
-  const { currentUser } = useAuth();
+  const { currentUser, departments } = useAuth();
   const [saved, setSaved] = useState(false);
 
   // بيانات الملف الشخصي
@@ -57,21 +57,13 @@ export default function SettingsPage() {
       setFullName(language === 'ar' ? currentUser.fullNameAr : currentUser.fullNameEn);
       setEmail(currentUser.email);
 
-      // الحصول على اسم الإدارة
+      // الحصول على اسم الإدارة من context
       if (currentUser.departmentId) {
-        const dept = getDepartmentById(currentUser.departmentId);
-        if (dept) {
-          setDepartment(language === 'ar' ? dept.nameAr : dept.nameEn);
+        const foundDept = departments.find((d: any) => d.id === currentUser.departmentId);
+        if (foundDept) {
+          setDepartment(language === 'ar' ? foundDept.nameAr : foundDept.nameEn);
         } else {
-          // البحث في localStorage
-          const storedDepts = localStorage.getItem('qms_departments');
-          if (storedDepts) {
-            const depts = JSON.parse(storedDepts);
-            const foundDept = depts.find((d: any) => d.id === currentUser.departmentId);
-            if (foundDept) {
-              setDepartment(language === 'ar' ? foundDept.nameAr : foundDept.nameEn);
-            }
-          }
+          setDepartment(language === 'ar' ? 'غير محدد' : 'Not specified');
         }
       } else {
         setDepartment(language === 'ar' ? 'غير محدد' : 'Not specified');
@@ -122,23 +114,30 @@ export default function SettingsPage() {
       return;
     }
 
-    // التحقق من كلمة المرور الحالية
-    const passwords = JSON.parse(localStorage.getItem('qms_passwords') || '{}');
-    if (currentUser && passwords[currentUser.id] !== currentPassword) {
-      setPasswordError(language === 'ar' ? 'كلمة المرور الحالية غير صحيحة' : 'Current password is incorrect');
-      return;
-    }
+    // التحقق من كلمة المرور الحالية وحفظ الجديدة عبر Firestore
+    const verifyAndChangePassword = async () => {
+      if (!currentUser) return;
 
-    // حفظ كلمة المرور الجديدة
-    if (currentUser) {
-      passwords[currentUser.id] = newPassword;
-      localStorage.setItem('qms_passwords', JSON.stringify(passwords));
-      setPasswordSuccess(true);
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      setTimeout(() => setPasswordSuccess(false), 3000);
-    }
+      const storedPassword = await getPassword(currentUser.id);
+      if (storedPassword !== currentPassword) {
+        setPasswordError(language === 'ar' ? 'كلمة المرور الحالية غير صحيحة' : 'Current password is incorrect');
+        return;
+      }
+
+      // حفظ كلمة المرور الجديدة
+      const success = await setPassword(currentUser.id, newPassword);
+      if (success) {
+        setPasswordSuccess(true);
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        setTimeout(() => setPasswordSuccess(false), 3000);
+      } else {
+        setPasswordError(language === 'ar' ? 'فشل في حفظ كلمة المرور' : 'Failed to save password');
+      }
+    };
+
+    verifyAndChangePassword();
   };
 
   // مسح بيانات المراجعات

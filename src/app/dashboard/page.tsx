@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Badge, Button } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { subscribeToAudits, Audit as FirestoreAudit } from '@/lib/firestore';
 import {
   ClipboardCheck,
   AlertCircle,
@@ -60,7 +61,7 @@ interface RecentFinding {
 export default function DashboardPage() {
   const router = useRouter();
   const { t, language, isRTL } = useTranslation();
-  const { currentUser, hasPermission } = useAuth();
+  const { currentUser, hasPermission, users, departments } = useAuth();
 
   const [stats, setStats] = useState<DashboardStats>({
     totalAudits: 0,
@@ -77,29 +78,14 @@ export default function DashboardPage() {
   const [recentFindings, setRecentFindings] = useState<RecentFinding[]>([]);
   const [upcomingTasks, setUpcomingTasks] = useState<any[]>([]);
 
-  // Load dashboard data
+  // Load dashboard data from Firestore
   useEffect(() => {
-    const loadDashboardData = () => {
-      // Load audits
-      const storedAudits = localStorage.getItem('qms_audits');
-      const storedUsers = localStorage.getItem('qms_users');
-      const storedDepartments = localStorage.getItem('qms_departments');
-
-      let audits: any[] = [];
-      let users: any[] = [];
-      let departments: any[] = [];
+    // Subscribe to audits from Firestore
+    const unsubscribe = subscribeToAudits((firestoreAudits) => {
       let allFindings: any[] = [];
 
-      if (storedAudits) {
-        audits = JSON.parse(storedAudits);
-      }
-      if (storedUsers) {
-        // إخفاء حسابات النظام من الإحصائيات
-        users = JSON.parse(storedUsers).filter((u: any) => !u.isSystemAccount);
-      }
-      if (storedDepartments) {
-        departments = JSON.parse(storedDepartments);
-      }
+      // إخفاء حسابات النظام من الإحصائيات
+      const visibleUsers = users.filter((u: any) => !u.isSystemAccount);
 
       // Extract all findings from audits
       audits.forEach((audit: any) => {
@@ -135,7 +121,7 @@ export default function DashboardPage() {
         openFindings,
         overdueFindings,
         closedFindings,
-        totalUsers: users.length,
+        totalUsers: visibleUsers.length,
         totalDepartments: departments.length,
       });
 
@@ -205,12 +191,9 @@ export default function DashboardPage() {
       // Sort by date and take first 5
       tasks.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
       setUpcomingTasks(tasks.slice(0, 5));
-    };
+    });
 
-    loadDashboardData();
-
-    window.addEventListener('storage', loadDashboardData);
-    return () => window.removeEventListener('storage', loadDashboardData);
+    return () => unsubscribe();
   }, [language]);
 
   const getStatusBadge = (status: string) => {

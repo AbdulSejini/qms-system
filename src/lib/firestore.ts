@@ -573,6 +573,167 @@ export const deleteNotification = async (notificationId: string): Promise<boolea
 };
 
 // ===========================================
+// Audit Operations
+// ===========================================
+
+// Audit interface
+export interface Audit {
+  id: string;
+  titleAr: string;
+  titleEn: string;
+  type: 'internal' | 'external' | 'surveillance' | 'certification';
+  status: 'draft' | 'pending_approval' | 'approved' | 'in_progress' | 'completed' | 'cancelled' | 'postponed';
+  departmentId: string;
+  sectionId?: string;
+  leadAuditorId: string;
+  teamMemberIds: string[];
+  startDate: string;
+  endDate: string;
+  objectives?: string;
+  scope?: string;
+  criteria?: string;
+  findings?: any[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
+  rejectionReason?: string;
+  postponedTo?: string;
+  postponeReason?: string;
+}
+
+// Get all audits
+export const getAllAudits = async (): Promise<Audit[]> => {
+  try {
+    const auditsRef = collection(db, COLLECTIONS.AUDITS);
+    const snapshot = await getDocs(auditsRef);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Audit);
+  } catch (error) {
+    console.error('Error getting audits:', error);
+    return [];
+  }
+};
+
+// Get audit by ID
+export const getAuditById = async (auditId: string): Promise<Audit | null> => {
+  try {
+    const auditRef = doc(db, COLLECTIONS.AUDITS, auditId);
+    const auditDoc = await getDoc(auditRef);
+    if (auditDoc.exists()) {
+      return { id: auditDoc.id, ...auditDoc.data() } as Audit;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting audit:', error);
+    return null;
+  }
+};
+
+// Save audit (create or update)
+export const saveAudit = async (audit: Audit): Promise<boolean> => {
+  try {
+    const auditRef = doc(db, COLLECTIONS.AUDITS, audit.id);
+    await setDoc(auditRef, prepareForFirestore({
+      ...audit,
+      updatedAt: new Date().toISOString(),
+    }));
+    return true;
+  } catch (error) {
+    console.error('Error saving audit:', error);
+    return false;
+  }
+};
+
+// Create new audit
+export const createAudit = async (auditData: Omit<Audit, 'id' | 'createdAt' | 'updatedAt'>): Promise<string | null> => {
+  try {
+    const auditId = `audit-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const auditRef = doc(db, COLLECTIONS.AUDITS, auditId);
+    await setDoc(auditRef, prepareForFirestore({
+      ...auditData,
+      id: auditId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }));
+    return auditId;
+  } catch (error) {
+    console.error('Error creating audit:', error);
+    return null;
+  }
+};
+
+// Update audit
+export const updateAudit = async (auditId: string, updates: Partial<Audit>): Promise<boolean> => {
+  try {
+    const auditRef = doc(db, COLLECTIONS.AUDITS, auditId);
+    await updateDoc(auditRef, prepareForFirestore({
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    }));
+    return true;
+  } catch (error) {
+    console.error('Error updating audit:', error);
+    return false;
+  }
+};
+
+// Delete audit
+export const deleteAudit = async (auditId: string): Promise<boolean> => {
+  try {
+    const auditRef = doc(db, COLLECTIONS.AUDITS, auditId);
+    await deleteDoc(auditRef);
+    return true;
+  } catch (error) {
+    console.error('Error deleting audit:', error);
+    return false;
+  }
+};
+
+// Subscribe to audits (real-time)
+export const subscribeToAudits = (
+  callback: (audits: Audit[]) => void
+): Unsubscribe => {
+  const auditsRef = collection(db, COLLECTIONS.AUDITS);
+
+  return onSnapshot(auditsRef, (snapshot) => {
+    const audits = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Audit);
+    callback(audits);
+  }, (error) => {
+    console.error('Error listening to audits:', error);
+    callback([]);
+  });
+};
+
+// Get audits by department
+export const getAuditsByDepartment = async (departmentId: string): Promise<Audit[]> => {
+  try {
+    const auditsRef = collection(db, COLLECTIONS.AUDITS);
+    const q = query(auditsRef, where('departmentId', '==', departmentId));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Audit);
+  } catch (error) {
+    console.error('Error getting audits by department:', error);
+    return [];
+  }
+};
+
+// Get audits by lead auditor
+export const getAuditsByLeadAuditor = async (auditorId: string): Promise<Audit[]> => {
+  try {
+    const auditsRef = collection(db, COLLECTIONS.AUDITS);
+    const q = query(auditsRef, where('leadAuditorId', '==', auditorId));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Audit);
+  } catch (error) {
+    console.error('Error getting audits by lead auditor:', error);
+    return [];
+  }
+};
+
+// ===========================================
 // Authentication
 // ===========================================
 

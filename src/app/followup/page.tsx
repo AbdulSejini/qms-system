@@ -8,6 +8,7 @@ import { Button, Badge } from '@/components/ui';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { subscribeToAudits } from '@/lib/firestore';
 import { Department, Section, User as UserType } from '@/types';
 import {
   ClipboardList,
@@ -86,12 +87,12 @@ const calculateStatus = (dueDate: string, currentStatus: string): 'pending' | 'i
 export default function FollowUpPage() {
   const router = useRouter();
   const { t, language, isRTL } = useTranslation();
-  const { currentUser, hasPermission } = useAuth();
+  const { currentUser, hasPermission, users, departments, sections } = useAuth();
 
-  // State for data from localStorage
-  const [allUsers, setAllUsers] = useState<UserType[]>([]);
-  const [allDepartments, setAllDepartments] = useState<Department[]>([]);
-  const [allSections, setAllSections] = useState<Section[]>([]);
+  // Use data from AuthContext
+  const allUsers = useMemo(() => users.filter(u => !u.isSystemAccount), [users]);
+  const allDepartments = departments;
+  const allSections = sections;
 
   // State
   const [followUpItems, setFollowUpItems] = useState<FollowUpItem[]>([]);
@@ -104,30 +105,10 @@ export default function FollowUpPage() {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showSendReminderModal, setShowSendReminderModal] = useState(false);
 
-  // Load users, departments, sections from localStorage
+  // Load data from Firestore (audits and findings)
   useEffect(() => {
-    const storedUsers = localStorage.getItem('qms_users');
-    const storedDepts = localStorage.getItem('qms_departments');
-    const storedSections = localStorage.getItem('qms_sections');
-
-    if (storedUsers) {
-      // إخفاء حسابات النظام
-      setAllUsers(JSON.parse(storedUsers).filter((u: any) => !u.isSystemAccount));
-    }
-    if (storedDepts) {
-      setAllDepartments(JSON.parse(storedDepts));
-    }
-    if (storedSections) {
-      setAllSections(JSON.parse(storedSections));
-    }
-  }, []);
-
-  // Load data from localStorage (audits and findings)
-  useEffect(() => {
-    const loadedItems: FollowUpItem[] = [];
-
-    // Load from audits
-    const storedAudits = localStorage.getItem('qms_audits');
+    const unsubscribe = subscribeToAudits((audits) => {
+      const loadedItems: FollowUpItem[] = [];
     if (storedAudits) {
       try {
         const audits = JSON.parse(storedAudits);
@@ -203,23 +184,11 @@ export default function FollowUpPage() {
             });
           }
         });
-      } catch (e) {
-        console.error('Error loading follow-up items:', e);
-      }
-    }
 
-    // No demo data - only show actual data from localStorage
+      setFollowUpItems(loadedItems);
+    });
 
-    setFollowUpItems(loadedItems);
-
-    // Listen for storage changes
-    const handleStorageChange = () => {
-      // Trigger reload
-      window.location.reload();
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    return () => unsubscribe();
   }, []);
 
   // Filter items based on user role

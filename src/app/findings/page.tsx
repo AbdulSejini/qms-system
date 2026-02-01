@@ -8,6 +8,7 @@ import { Button, Badge } from '@/components/ui';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { subscribeToAudits, updateAudit } from '@/lib/firestore';
 import {
   Plus,
   Search,
@@ -30,7 +31,6 @@ import {
   ClipboardCheck,
   UserCheck,
 } from 'lucide-react';
-import { departments as allDepartments, sections as allSections, users as allUsers } from '@/data/mock-data';
 import { OneDrivePicker } from '@/components/ui/OneDrivePicker';
 import type { OneDriveFile } from '@/lib/onedrive';
 
@@ -70,7 +70,7 @@ interface Finding {
 export default function FindingsPage() {
   const router = useRouter();
   const { t, language, isRTL } = useTranslation();
-  const { currentUser } = useAuth();
+  const { currentUser, departments: allDepartments, sections: allSections, users: allUsers } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSeverity, setSelectedSeverity] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
@@ -90,15 +90,12 @@ export default function FindingsPage() {
     attachments: [] as OneDriveFile[],
   });
 
-  // All findings from audits (loaded from localStorage)
+  // All findings from audits (loaded from Firestore)
   const [allFindings, setAllFindings] = useState<Finding[]>([]);
 
-  // Load findings from localStorage (from audits)
+  // Load findings from Firestore (from audits)
   useEffect(() => {
-    const loadFindings = () => {
-      const storedAudits = localStorage.getItem('qms_audits');
-      if (storedAudits) {
-        const audits = JSON.parse(storedAudits);
+    const unsubscribe = subscribeToAudits((audits) => {
         const findingsFromAudits: Finding[] = [];
 
         audits.forEach((audit: any) => {
@@ -134,14 +131,9 @@ export default function FindingsPage() {
         });
 
         setAllFindings(findingsFromAudits);
-      }
-    };
+    });
 
-    loadFindings();
-
-    // Listen for storage changes
-    window.addEventListener('storage', loadFindings);
-    return () => window.removeEventListener('storage', loadFindings);
+    return () => unsubscribe();
   }, []);
 
   // Helper function to get department name
