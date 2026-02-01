@@ -1,23 +1,25 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-  departments as initialDepartments,
-  sections as initialSections,
-  users,
-  getDepartmentById,
-  getUserById,
-  getSectionsByDepartment,
-  getUsersByDepartment,
-  getUsersBySection,
   getRoleNameAr,
   getRoleNameEn,
 } from '@/data/mock-data';
-import { Department, Section } from '@/types';
+import { Department, Section, User } from '@/types';
+import {
+  getAllDepartments,
+  getAllSections,
+  getVisibleUsers,
+  saveDepartment,
+  saveSection,
+  deleteDepartment as deleteDepartmentFromFirestore,
+  deleteSection as deleteSectionFromFirestore,
+  getUserById,
+} from '@/lib/firestore';
 import {
   Building2,
   Users,
@@ -34,6 +36,7 @@ import {
   Save,
   Trash2,
   AlertCircle,
+  Loader2,
 } from 'lucide-react';
 
 // نماذج فارغة
@@ -62,34 +65,49 @@ export default function DepartmentsPage() {
   const { t, language, isRTL } = useTranslation();
   const { canManageDepartments, hasPermission } = useAuth();
 
-  // State للبيانات - تحميل من localStorage
+  // State للبيانات من Firestore
   const [departmentsData, setDepartmentsData] = useState<Department[]>([]);
   const [sectionsData, setSectionsData] = useState<Section[]>([]);
+  const [usersData, setUsersData] = useState<User[]>([]);
 
-  // تحميل البيانات من localStorage عند بدء التشغيل
-  useEffect(() => {
-    const storedDepts = localStorage.getItem('qms_departments');
-    const storedSections = localStorage.getItem('qms_sections');
+  // Loading state
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
 
-    if (storedDepts) {
-      setDepartmentsData(JSON.parse(storedDepts));
-    } else {
-      setDepartmentsData(initialDepartments);
-    }
-
-    if (storedSections) {
-      setSectionsData(JSON.parse(storedSections));
-    } else {
-      setSectionsData(initialSections);
+  // تحميل البيانات من Firestore
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const [depts, sects, users] = await Promise.all([
+        getAllDepartments(),
+        getAllSections(),
+        getVisibleUsers(),
+      ]);
+      setDepartmentsData(depts);
+      setSectionsData(sects);
+      setUsersData(users);
+    } catch (error) {
+      console.error('Error loading data:', error);
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
   // State للعرض
   const [viewMode, setViewMode] = useState<'tree' | 'list'>('tree');
-  const [expandedDepartments, setExpandedDepartments] = useState<string[]>(
-    initialDepartments.map((d) => d.id)
-  );
+  const [expandedDepartments, setExpandedDepartments] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // توسيع جميع الإدارات عند تحميل البيانات
+  useEffect(() => {
+    if (departmentsData.length > 0 && expandedDepartments.length === 0) {
+      setExpandedDepartments(departmentsData.map(d => d.id));
+    }
+  }, [departmentsData, expandedDepartments.length]);
 
   // State للنماذج
   const [selectedDepartment, setSelectedDepartment] = useState<Department | null>(null);
@@ -122,36 +140,21 @@ export default function DepartmentsPage() {
     );
   }, [departmentsData, searchQuery]);
 
-  // تحميل المستخدمين من localStorage (باستثناء مدير النظام)
-  const [usersCount, setUsersCount] = useState(0);
-
-  useEffect(() => {
-    const storedUsers = localStorage.getItem('qms_users');
-    if (storedUsers) {
-      const allUsers = JSON.parse(storedUsers);
-      // استبعاد حسابات النظام المخفية من الإحصائيات
-      const regularUsers = allUsers.filter((u: any) => !u.isSystemAccount && u.isActive);
-      setUsersCount(regularUsers.length);
-    } else {
-      // من البيانات الافتراضية - استبعاد حسابات النظام
-      const regularUsers = users.filter(u => !(u as any).isSystemAccount && u.isActive);
-      setUsersCount(regularUsers.length);
-    }
-  }, []);
+  // دوال مساعدة
+  const getDepartmentById = (id: string) => departmentsData.find(d => d.id === id);
+  const getSectionsForDepartment = (deptId: string) => sectionsData.filter(s => s.departmentId === deptId && s.isActive);
+  const getUsersByDepartment = (deptId: string) => usersData.filter(u => u.departmentId === deptId && u.isActive);
+  const getUsersBySection = (sectionId: string) => usersData.filter(u => u.sectionId === sectionId && u.isActive);
+  const getUserFromList = (userId: string) => usersData.find(u => u.id === userId);
 
   // Stats
   const stats = {
     departments: departmentsData.length,
     sections: sectionsData.length,
-    employees: usersCount,
+    employees: usersData.filter(u => u.isActive).length,
   };
 
   const Arrow = isRTL ? ChevronLeft : ChevronRight;
-
-  // دوال مساعدة للأقسام
-  const getSectionsForDepartment = (deptId: string) => {
-    return sectionsData.filter(s => s.departmentId === deptId && s.isActive);
-  };
 
   // فتح نموذج إضافة إدارة
   const openAddDeptForm = () => {
@@ -266,97 +269,122 @@ export default function DepartmentsPage() {
   };
 
   // حفظ الإدارة
-  const handleSaveDept = () => {
+  const handleSaveDept = async () => {
     if (!validateDeptForm()) return;
 
-    let newDepts: Department[];
+    setIsSaving(true);
+    try {
+      if (isEditing && selectedDepartment) {
+        const updatedDept: Department = {
+          ...selectedDepartment,
+          ...deptFormData,
+          updatedAt: new Date(),
+        };
+        await saveDepartment(updatedDept);
+      } else {
+        const newDept: Department = {
+          id: `dept-${Date.now()}`,
+          ...deptFormData,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        await saveDepartment(newDept);
+      }
 
-    if (isEditing && selectedDepartment) {
-      newDepts = departmentsData.map(d =>
-        d.id === selectedDepartment.id
-          ? { ...d, ...deptFormData, updatedAt: new Date() }
-          : d
-      );
-    } else {
-      const newDept: Department = {
-        id: `dept-${Date.now()}`,
-        ...deptFormData,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      newDepts = [...departmentsData, newDept];
+      await loadData();
+      setShowDeptFormModal(false);
+      setSelectedDepartment(null);
+    } catch (error) {
+      console.error('Error saving department:', error);
+    } finally {
+      setIsSaving(false);
     }
-
-    setDepartmentsData(newDepts);
-    // حفظ في localStorage
-    localStorage.setItem('qms_departments', JSON.stringify(newDepts));
-
-    setShowDeptFormModal(false);
-    setSelectedDepartment(null);
   };
 
   // حفظ القسم
-  const handleSaveSection = () => {
+  const handleSaveSection = async () => {
     if (!validateSectionForm()) return;
 
-    let newSections: Section[];
+    setIsSaving(true);
+    try {
+      if (isEditing && selectedSection) {
+        const updatedSection: Section = {
+          ...selectedSection,
+          ...sectionFormData,
+          updatedAt: new Date(),
+        };
+        await saveSection(updatedSection);
+      } else {
+        const newSection: Section = {
+          id: `sec-${Date.now()}`,
+          ...sectionFormData,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        await saveSection(newSection);
+      }
 
-    if (isEditing && selectedSection) {
-      newSections = sectionsData.map(s =>
-        s.id === selectedSection.id
-          ? { ...s, ...sectionFormData, updatedAt: new Date() }
-          : s
-      );
-    } else {
-      const newSection: Section = {
-        id: `sec-${Date.now()}`,
-        ...sectionFormData,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      newSections = [...sectionsData, newSection];
+      await loadData();
+      setShowSectionFormModal(false);
+      setSelectedSection(null);
+    } catch (error) {
+      console.error('Error saving section:', error);
+    } finally {
+      setIsSaving(false);
     }
-
-    setSectionsData(newSections);
-    // حفظ في localStorage
-    localStorage.setItem('qms_sections', JSON.stringify(newSections));
-
-    setShowSectionFormModal(false);
-    setSelectedSection(null);
   };
 
   // حذف
-  const handleDelete = () => {
-    if (deleteType === 'department' && selectedDepartment) {
-      const newDepts = departmentsData.filter(d => d.id !== selectedDepartment.id);
-      const newSections = sectionsData.filter(s => s.departmentId !== selectedDepartment.id);
-      setDepartmentsData(newDepts);
-      setSectionsData(newSections);
-      // حفظ في localStorage
-      localStorage.setItem('qms_departments', JSON.stringify(newDepts));
-      localStorage.setItem('qms_sections', JSON.stringify(newSections));
-    } else if (deleteType === 'section' && selectedSection) {
-      const newSections = sectionsData.filter(s => s.id !== selectedSection.id);
-      setSectionsData(newSections);
-      // حفظ في localStorage
-      localStorage.setItem('qms_sections', JSON.stringify(newSections));
+  const handleDelete = async () => {
+    setIsSaving(true);
+    try {
+      if (deleteType === 'department' && selectedDepartment) {
+        // حذف جميع الأقسام التابعة للإدارة أولاً
+        const deptSections = sectionsData.filter(s => s.departmentId === selectedDepartment.id);
+        for (const section of deptSections) {
+          await deleteSectionFromFirestore(section.id);
+        }
+        await deleteDepartmentFromFirestore(selectedDepartment.id);
+      } else if (deleteType === 'section' && selectedSection) {
+        await deleteSectionFromFirestore(selectedSection.id);
+      }
+
+      await loadData();
+      setShowDeleteConfirm(false);
+      setShowDeptFormModal(false);
+      setShowSectionFormModal(false);
+      setSelectedDepartment(null);
+      setSelectedSection(null);
+    } catch (error) {
+      console.error('Error deleting:', error);
+    } finally {
+      setIsSaving(false);
     }
-    setShowDeleteConfirm(false);
-    setShowDeptFormModal(false);
-    setShowSectionFormModal(false);
-    setSelectedDepartment(null);
-    setSelectedSection(null);
   };
 
   // المدراء المتاحون
-  const availableManagers = users.filter(u =>
+  const availableManagers = usersData.filter(u =>
     u.isActive && (u.role === 'department_manager' || u.role === 'quality_manager' || u.role === 'system_admin')
   );
 
   // رؤساء الأقسام المتاحون
-  const availableHeads = users.filter(u =>
+  const availableHeads = usersData.filter(u =>
     u.isActive && (u.role === 'section_head' || u.role === 'department_manager')
   );
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <DashboardLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh]">
+          <Loader2 className="h-12 w-12 text-[var(--primary)] animate-spin" />
+          <p className="mt-4 text-[var(--foreground-secondary)]">
+            {language === 'ar' ? 'جاري التحميل...' : 'Loading...'}
+          </p>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -491,7 +519,7 @@ export default function DepartmentsPage() {
                   const deptSections = getSectionsForDepartment(dept.id);
                   const deptUsers = getUsersByDepartment(dept.id);
                   const isExpanded = expandedDepartments.includes(dept.id);
-                  const manager = dept.managerId ? getUserById(dept.managerId) : null;
+                  const manager = dept.managerId ? getUserFromList(dept.managerId) : null;
 
                   return (
                     <div key={dept.id} className="rounded-xl border border-[var(--border)]">
@@ -564,7 +592,7 @@ export default function DepartmentsPage() {
                           <div className="ms-10 space-y-2">
                             {deptSections.map((section) => {
                               const sectionUsers = getUsersBySection(section.id);
-                              const head = section.headId ? getUserById(section.headId) : null;
+                              const head = section.headId ? getUserFromList(section.headId) : null;
 
                               return (
                                 <div
@@ -840,18 +868,19 @@ export default function DepartmentsPage() {
                 {isEditing && hasPermission('canDeleteAudits') ? (
                   <button
                     onClick={() => { setDeleteType('department'); setShowDeleteConfirm(true); }}
-                    className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                    disabled={isSaving}
+                    className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
                   >
                     <Trash2 className="h-4 w-4" />
                     {t('common.delete')}
                   </button>
                 ) : <div />}
                 <div className="flex gap-3">
-                  <button onClick={() => setShowDeptFormModal(false)} className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)]">
+                  <button onClick={() => setShowDeptFormModal(false)} disabled={isSaving} className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] disabled:opacity-50">
                     {t('common.cancel')}
                   </button>
-                  <button onClick={handleSaveDept} className="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white">
-                    <Save className="h-4 w-4" />
+                  <button onClick={handleSaveDept} disabled={isSaving} className="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                    {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                     {t('common.save')}
                   </button>
                 </div>
@@ -982,18 +1011,19 @@ export default function DepartmentsPage() {
                 {isEditing && hasPermission('canDeleteAudits') ? (
                   <button
                     onClick={() => { setDeleteType('section'); setShowDeleteConfirm(true); }}
-                    className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                    disabled={isSaving}
+                    className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
                   >
                     <Trash2 className="h-4 w-4" />
                     {t('common.delete')}
                   </button>
                 ) : <div />}
                 <div className="flex gap-3">
-                  <button onClick={() => setShowSectionFormModal(false)} className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)]">
+                  <button onClick={() => setShowSectionFormModal(false)} disabled={isSaving} className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] disabled:opacity-50">
                     {t('common.cancel')}
                   </button>
-                  <button onClick={handleSaveSection} className="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white">
-                    <Save className="h-4 w-4" />
+                  <button onClick={handleSaveSection} disabled={isSaving} className="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                    {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                     {t('common.save')}
                   </button>
                 </div>
@@ -1034,7 +1064,7 @@ export default function DepartmentsPage() {
                     <div className="mb-6">
                       <h3 className="text-sm font-semibold text-[var(--foreground)] mb-3">{t('departments.manager')}</h3>
                       {(() => {
-                        const manager = getUserById(selectedDepartment.managerId!);
+                        const manager = getUserFromList(selectedDepartment.managerId!);
                         return manager ? (
                           <div className="flex items-center gap-3 rounded-xl bg-[var(--background-secondary)] p-3">
                             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--primary-light)] text-[var(--primary)] font-semibold">
@@ -1056,7 +1086,7 @@ export default function DepartmentsPage() {
                     </h3>
                     <div className="space-y-2">
                       {getSectionsForDepartment(selectedDepartment.id).map((section) => {
-                        const head = section.headId ? getUserById(section.headId) : null;
+                        const head = section.headId ? getUserFromList(section.headId) : null;
                         return (
                           <div key={section.id} className="flex items-center gap-3 rounded-xl border border-[var(--border)] p-3">
                             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
@@ -1108,7 +1138,7 @@ export default function DepartmentsPage() {
                     <div className="mb-6">
                       <h3 className="text-sm font-semibold text-[var(--foreground)] mb-3">{t('departments.sections.head')}</h3>
                       {(() => {
-                        const head = getUserById(selectedSection.headId!);
+                        const head = getUserFromList(selectedSection.headId!);
                         return head ? (
                           <div className="flex items-center gap-3 rounded-xl bg-[var(--background-secondary)] p-3">
                             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--primary-light)] text-[var(--primary)] font-semibold">
@@ -1190,10 +1220,11 @@ export default function DepartmentsPage() {
                 </p>
               )}
               <div className="flex justify-end gap-3">
-                <button onClick={() => setShowDeleteConfirm(false)} className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)]">
+                <button onClick={() => setShowDeleteConfirm(false)} disabled={isSaving} className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] disabled:opacity-50">
                   {t('common.cancel')}
                 </button>
-                <button onClick={handleDelete} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">
+                <button onClick={handleDelete} disabled={isSaving} className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+                  {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                   {t('common.delete')}
                 </button>
               </div>

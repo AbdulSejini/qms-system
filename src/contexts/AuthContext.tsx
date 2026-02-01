@@ -9,61 +9,20 @@ import {
   Department,
   Section,
 } from '@/types';
-
-// ===========================================
-// مدير النظام الرئيسي - بيانات ثابتة ومحمية
-// ===========================================
-
-const SYSTEM_ADMIN_ID = 'system-admin-root';
-
-const SYSTEM_ADMIN: User = {
-  id: SYSTEM_ADMIN_ID,
-  employeeNumber: 'SYS-0001',
-  email: 'abdul.sejini@gmail.com',
-  fullNameAr: 'مدير النظام',
-  fullNameEn: 'System Administrator',
-  role: 'system_admin',
-  departmentId: '',
-  sectionId: '',
-  canBeAuditor: true,
-  auditableDepartmentIds: [],
-  auditableSectionIds: [],
-  phone: '+966500000000',
-  jobTitleAr: 'مدير النظام',
-  jobTitleEn: 'System Administrator',
-  isActive: true,
-  isSystemAccount: true, // حساب نظام مخفي
-  createdAt: new Date('2024-01-01'),
-  updatedAt: new Date('2024-01-01'),
-};
-
-const SYSTEM_ADMIN_PASSWORD = 'Doha@1988';
-
-// ===========================================
-// تهيئة مدير النظام في localStorage
-// ===========================================
-const initializeSystemAdmin = () => {
-  if (typeof window === 'undefined') return;
-
-  // التأكد من وجود مدير النظام في قائمة المستخدمين
-  const storedUsers = localStorage.getItem('qms_users');
-  let users: User[] = storedUsers ? JSON.parse(storedUsers) : [];
-
-  const hasSystemAdmin = users.some((u: User) => u.id === SYSTEM_ADMIN_ID);
-  if (!hasSystemAdmin) {
-    users = [SYSTEM_ADMIN, ...users];
-    localStorage.setItem('qms_users', JSON.stringify(users));
-  }
-
-  // التأكد من وجود كلمة مرور مدير النظام
-  const storedPasswords = localStorage.getItem('qms_passwords');
-  const passwords: Record<string, string> = storedPasswords ? JSON.parse(storedPasswords) : {};
-
-  if (!passwords[SYSTEM_ADMIN_ID]) {
-    passwords[SYSTEM_ADMIN_ID] = SYSTEM_ADMIN_PASSWORD;
-    localStorage.setItem('qms_passwords', JSON.stringify(passwords));
-  }
-};
+import {
+  initializeSystemAdmin,
+  getUserById,
+  getUserByEmail,
+  getVisibleUsers as getVisibleUsersFromFirestore,
+  getAllDepartments as getAllDepartmentsFromFirestore,
+  getAllSections as getAllSectionsFromFirestore,
+  getPassword,
+  setPassword,
+  addActiveSession,
+  removeActiveSession,
+  SYSTEM_ADMIN_ID,
+  DEFAULT_PASSWORD,
+} from '@/lib/firestore';
 
 // ===========================================
 // Context Types
@@ -92,100 +51,27 @@ interface AuthContextType {
   canAccessDepartmentsPage: boolean;
 
   // الوصول للبيانات المفلترة
-  getAccessibleDepartments: () => Department[];
-  getAccessibleSections: () => Section[];
-  getAccessibleUsers: () => User[];
+  getAccessibleDepartments: () => Promise<Department[]>;
+  getAccessibleSections: () => Promise<Section[]>;
+  getAccessibleUsers: () => Promise<User[]>;
   canAccessDepartment: (departmentId: string) => boolean;
-  canAccessSection: (sectionId: string) => boolean;
-  canAccessUser: (userId: string) => boolean;
+  canAccessSection: (sectionId: string) => Promise<boolean>;
+  canAccessUser: (userId: string) => Promise<boolean>;
 
   // صلاحيات المراجعة
   canAuditDepartment: (departmentId: string) => boolean;
-  canAuditSection: (sectionId: string) => boolean;
-  getAuditableDepartments: () => Department[];
+  canAuditSection: (sectionId: string) => Promise<boolean>;
+  getAuditableDepartments: () => Promise<Department[]>;
 
   // قائمة المستخدمين للتبديل (لمدير النظام فقط)
   availableUsers: User[];
 
   // إعادة تعيين كلمة المرور
-  resetUserPassword: (userId: string) => boolean;
+  resetUserPassword: (userId: string) => Promise<boolean>;
+
+  // تحديث البيانات
+  refreshData: () => Promise<void>;
 }
-
-// ===========================================
-// Helper Functions
-// ===========================================
-
-// الحصول على جميع المستخدمين من localStorage
-const getAllUsers = (): User[] => {
-  if (typeof window === 'undefined') return [];
-
-  // تهيئة مدير النظام أولاً
-  initializeSystemAdmin();
-  const stored = localStorage.getItem('qms_users');
-  if (stored) {
-    return JSON.parse(stored);
-  }
-  return [];
-};
-
-// الحصول على المستخدمين المرئيين (بدون حسابات النظام المخفية)
-const getVisibleUsers = (): User[] => {
-  const allUsers = getAllUsers();
-  return allUsers.filter(u => !u.isSystemAccount);
-};
-
-// الحصول على مستخدم بواسطة الـ ID
-const getUserByIdFromStorage = (userId: string): User | undefined => {
-  const users = getAllUsers();
-  return users.find(u => u.id === userId);
-};
-
-// الحصول على جميع الإدارات من localStorage
-const getAllDepartments = (): Department[] => {
-  if (typeof window === 'undefined') return [];
-  const stored = localStorage.getItem('qms_departments');
-  if (stored) {
-    return JSON.parse(stored);
-  }
-  return [];
-};
-
-// الحصول على جميع الأقسام من localStorage
-const getAllSections = (): Section[] => {
-  if (typeof window === 'undefined') return [];
-  const stored = localStorage.getItem('qms_sections');
-  if (stored) {
-    return JSON.parse(stored);
-  }
-  return [];
-};
-
-// الحصول على قسم بواسطة الـ ID
-const getSectionByIdFromStorage = (sectionId: string): Section | undefined => {
-  const sections = getAllSections();
-  return sections.find(s => s.id === sectionId);
-};
-
-// الحصول على كلمات المرور من localStorage
-const getPasswords = (): Record<string, string> => {
-  if (typeof window === 'undefined') return {};
-
-  // تهيئة مدير النظام أولاً
-  initializeSystemAdmin();
-
-  const stored = localStorage.getItem('qms_passwords');
-  if (stored) {
-    return JSON.parse(stored);
-  }
-  return {};
-};
-
-// حفظ كلمات المرور
-const savePasswords = (passwords: Record<string, string>) => {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('qms_passwords', JSON.stringify(passwords));
-  }
-};
 
 // ===========================================
 // Context Creation
@@ -198,25 +84,72 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 // ===========================================
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [availableUsers, setAvailableUsers] = useState<User[]>([]);
+  const [allDepartments, setAllDepartments] = useState<Department[]>([]);
+  const [allSections, setAllSections] = useState<Section[]>([]);
+
+  // تحميل البيانات من Firestore
+  const loadData = useCallback(async () => {
+    try {
+      const [departments, sections] = await Promise.all([
+        getAllDepartmentsFromFirestore(),
+        getAllSectionsFromFirestore(),
+      ]);
+      setAllDepartments(departments);
+      setAllSections(sections);
+    } catch (error) {
+      console.error('Error loading data:', error);
+    }
+  }, []);
+
+  // تحميل قائمة المستخدمين المتاحين للتبديل
+  const loadAvailableUsers = useCallback(async () => {
+    if (currentUser?.role === 'system_admin') {
+      const users = await getVisibleUsersFromFirestore();
+      setAvailableUsers(users.filter(u => u.isActive));
+    } else {
+      setAvailableUsers([]);
+    }
+  }, [currentUser?.role]);
 
   // تحميل الجلسة عند بدء التطبيق
   useEffect(() => {
-    const savedSession = localStorage.getItem('qms_session');
-    if (savedSession) {
-      const session = JSON.parse(savedSession);
-      const user = getUserByIdFromStorage(session.userId);
-      if (user && user.isActive) {
-        setCurrentUserId(session.userId);
-      } else {
-        localStorage.removeItem('qms_session');
+    const loadSession = async () => {
+      try {
+        // تهيئة مدير النظام
+        await initializeSystemAdmin();
+
+        // تحميل الجلسة المحفوظة
+        const savedSession = localStorage.getItem('qms_session');
+        if (savedSession) {
+          const session = JSON.parse(savedSession);
+          const user = await getUserById(session.userId);
+          if (user && user.isActive) {
+            setCurrentUser(user);
+          } else {
+            localStorage.removeItem('qms_session');
+          }
+        }
+      } catch (error) {
+        console.error('Error loading session:', error);
+      } finally {
+        setIsLoading(false);
       }
-    }
-    setIsLoading(false);
+    };
+
+    loadSession();
   }, []);
 
-  const currentUser = currentUserId ? getUserByIdFromStorage(currentUserId) || null : null;
+  // تحميل البيانات عند تسجيل الدخول
+  useEffect(() => {
+    if (currentUser) {
+      loadData();
+      loadAvailableUsers();
+    }
+  }, [currentUser, loadData, loadAvailableUsers]);
+
   const isAuthenticated = currentUser !== null;
 
   // الصلاحيات
@@ -236,77 +169,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return DEFAULT_PERMISSIONS[currentUser.role];
   }, [currentUser]);
 
+  // تحديث البيانات
+  const refreshData = useCallback(async () => {
+    await loadData();
+    if (currentUser) {
+      const updatedUser = await getUserById(currentUser.id);
+      if (updatedUser) {
+        setCurrentUser(updatedUser);
+      }
+    }
+  }, [loadData, currentUser]);
+
   // تسجيل الدخول
   const login = useCallback(async (username: string, password: string): Promise<boolean> => {
-    // البحث في جميع المستخدمين (بما فيهم مدير النظام)
-    const users = getAllUsers();
-    const passwords = getPasswords();
+    try {
+      // تهيئة مدير النظام
+      await initializeSystemAdmin();
 
-    // البحث عن المستخدم بالبريد الإلكتروني
-    const user = users.find(
-      (u) =>
-        u.isActive &&
-        u.email.toLowerCase() === username.toLowerCase()
-    );
+      // البحث عن المستخدم بالبريد الإلكتروني
+      const user = await getUserByEmail(username);
 
-    if (!user) {
+      if (!user || !user.isActive) {
+        console.log('User not found or inactive:', username);
+        return false;
+      }
+
+      // التحقق من كلمة المرور
+      const storedPassword = await getPassword(user.id);
+      console.log('Checking password for user:', user.id);
+
+      if (!storedPassword || storedPassword !== password) {
+        console.log('Password mismatch');
+        return false;
+      }
+
+      // حفظ الجلسة محلياً
+      const sessionData = {
+        userId: user.id,
+        loginAt: new Date().toISOString(),
+      };
+      localStorage.setItem('qms_session', JSON.stringify(sessionData));
+
+      // إضافة للجلسات النشطة في Firestore
+      await addActiveSession(user.id, {
+        loginAt: sessionData.loginAt,
+        userEmail: user.email,
+        userName: user.fullNameAr,
+      });
+
+      setCurrentUser(user);
+      return true;
+    } catch (error) {
+      console.error('Login error:', error);
       return false;
     }
-
-    // التحقق من كلمة المرور
-    const userPassword = passwords[user.id];
-
-    if (!userPassword || userPassword !== password) {
-      return false;
-    }
-
-    // حفظ الجلسة
-    const sessionData = {
-      userId: user.id,
-      loginAt: new Date().toISOString(),
-    };
-    setCurrentUserId(user.id);
-    localStorage.setItem('qms_session', JSON.stringify(sessionData));
-
-    // إضافة للجلسات النشطة
-    const activeSessions = JSON.parse(localStorage.getItem('qms_active_sessions') || '[]');
-    const existingIndex = activeSessions.findIndex((s: any) => s.userId === user.id);
-    const newSession = {
-      id: `session-${Date.now()}`,
-      userId: user.id,
-      loginAt: sessionData.loginAt,
-      lastActivity: new Date().toISOString(),
-    };
-    if (existingIndex >= 0) {
-      activeSessions[existingIndex] = newSession;
-    } else {
-      activeSessions.push(newSession);
-    }
-    localStorage.setItem('qms_active_sessions', JSON.stringify(activeSessions));
-
-    return true;
   }, []);
 
   // تسجيل الخروج
-  const logout = useCallback(() => {
-    // إزالة من الجلسات النشطة
-    if (currentUserId) {
-      const activeSessions = JSON.parse(localStorage.getItem('qms_active_sessions') || '[]');
-      const filteredSessions = activeSessions.filter((s: any) => s.userId !== currentUserId);
-      localStorage.setItem('qms_active_sessions', JSON.stringify(filteredSessions));
+  const logout = useCallback(async () => {
+    if (currentUser) {
+      // إزالة من الجلسات النشطة في Firestore
+      await removeActiveSession(currentUser.id);
     }
 
-    setCurrentUserId(null);
+    setCurrentUser(null);
     localStorage.removeItem('qms_session');
-  }, [currentUserId]);
+  }, [currentUser]);
 
   // تبديل المستخدم (لمدير النظام فقط)
-  const switchUser = useCallback((userId: string) => {
+  const switchUser = useCallback(async (userId: string) => {
     if (!currentUser || currentUser.role !== 'system_admin') return;
 
-    const user = getUserByIdFromStorage(userId);
+    const user = await getUserById(userId);
     if (user && user.isActive) {
-      setCurrentUserId(userId);
+      setCurrentUser(user);
       localStorage.setItem('qms_session', JSON.stringify({
         userId: userId,
         loginAt: new Date().toISOString(),
@@ -315,11 +251,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [currentUser]);
 
   // إعادة تعيين كلمة المرور
-  const resetUserPassword = useCallback((userId: string): boolean => {
+  const resetUserPassword = useCallback(async (userId: string): Promise<boolean> => {
     if (!currentUser) return false;
 
     // لا يمكن إعادة تعيين كلمة مرور حساب نظام
-    const targetUser = getUserByIdFromStorage(userId);
+    const targetUser = await getUserById(userId);
     if (targetUser?.isSystemAccount) return false;
 
     // التحقق من الصلاحية
@@ -329,11 +265,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (!canReset) return false;
 
-    const passwords = getPasswords();
-    passwords[userId] = 'Welcome@123';
-    savePasswords(passwords);
-
-    return true;
+    return await setPassword(userId, DEFAULT_PASSWORD);
   }, [currentUser, permissions.canManageUsers]);
 
   // التحقق من صلاحية معينة
@@ -360,9 +292,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // ===========================================
 
   // الإدارات المتاحة للمستخدم
-  const getAccessibleDepartments = useCallback((): Department[] => {
+  const getAccessibleDepartments = useCallback(async (): Promise<Department[]> => {
     if (!currentUser) return [];
-    const departments = getAllDepartments();
+
+    const departments = await getAllDepartmentsFromFirestore();
 
     if (currentUser.role === 'system_admin') {
       return departments.filter((d) => d.isActive);
@@ -378,9 +311,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [currentUser, permissions.canViewAllData]);
 
   // الأقسام المتاحة للمستخدم
-  const getAccessibleSections = useCallback((): Section[] => {
+  const getAccessibleSections = useCallback(async (): Promise<Section[]> => {
     if (!currentUser) return [];
-    const sections = getAllSections();
+
+    const sections = await getAllSectionsFromFirestore();
 
     if (permissions.canViewAllData) {
       return sections.filter((s) => s.isActive);
@@ -404,10 +338,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [currentUser, permissions.canViewAllData]);
 
   // المستخدمين المتاحين للمستخدم الحالي (بدون حسابات النظام المخفية)
-  const getAccessibleUsers = useCallback((): User[] => {
+  const getAccessibleUsers = useCallback(async (): Promise<User[]> => {
     if (!currentUser) return [];
-    // استخدام المستخدمين المرئيين فقط (بدون حسابات النظام)
-    const users = getVisibleUsers();
+
+    const users = await getVisibleUsersFromFirestore();
 
     if (currentUser.role === 'system_admin') {
       return users.filter((u) => u.isActive);
@@ -444,11 +378,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // التحقق من الوصول لقسم معين
   const canAccessSection = useCallback(
-    (sectionId: string): boolean => {
+    async (sectionId: string): Promise<boolean> => {
       if (!currentUser) return false;
       if (permissions.canViewAllData) return true;
 
-      const section = getSectionByIdFromStorage(sectionId);
+      const section = allSections.find(s => s.id === sectionId);
       if (!section) return false;
 
       if (currentUser.role === 'department_manager') {
@@ -457,16 +391,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return currentUser.sectionId === sectionId;
     },
-    [currentUser, permissions.canViewAllData]
+    [currentUser, permissions.canViewAllData, allSections]
   );
 
   // التحقق من الوصول لمستخدم معين
   const canAccessUser = useCallback(
-    (userId: string): boolean => {
+    async (userId: string): Promise<boolean> => {
       if (!currentUser) return false;
       if (currentUser.role === 'system_admin') return true;
 
-      const user = getUserByIdFromStorage(userId);
+      const user = await getUserById(userId);
       if (!user) return false;
 
       if (currentUser.role === 'quality_manager') {
@@ -512,21 +446,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // التحقق من إمكانية مراجعة قسم معين
   const canAuditSection = useCallback(
-    (sectionId: string): boolean => {
+    async (sectionId: string): Promise<boolean> => {
       if (!currentUser || !currentUser.canBeAuditor) return false;
 
-      const section = getSectionByIdFromStorage(sectionId);
+      const section = allSections.find(s => s.id === sectionId);
       if (!section) return false;
 
       return canAuditDepartment(section.departmentId);
     },
-    [currentUser, canAuditDepartment]
+    [currentUser, canAuditDepartment, allSections]
   );
 
   // الإدارات التي يمكن للمستخدم مراجعتها
-  const getAuditableDepartments = useCallback((): Department[] => {
+  const getAuditableDepartments = useCallback(async (): Promise<Department[]> => {
     if (!currentUser || !currentUser.canBeAuditor) return [];
-    const departments = getAllDepartments();
+
+    const departments = await getAllDepartmentsFromFirestore();
 
     if (currentUser.role === 'system_admin' || currentUser.role === 'quality_manager') {
       return departments.filter((d) => d.isActive);
@@ -539,12 +474,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return departments.filter(
       (d) => d.isActive && currentUser.auditableDepartmentIds.includes(d.id)
     );
-  }, [currentUser]);
-
-  // قائمة المستخدمين للتبديل (لمدير النظام فقط) - بدون حسابات النظام
-  const availableUsers = useMemo(() => {
-    if (!currentUser || currentUser.role !== 'system_admin') return [];
-    return getVisibleUsers().filter((u) => u.isActive);
   }, [currentUser]);
 
   // ===========================================
@@ -576,6 +505,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     getAuditableDepartments,
     availableUsers,
     resetUserPassword,
+    refreshData,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

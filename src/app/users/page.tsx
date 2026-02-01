@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
@@ -8,14 +8,20 @@ import { Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-  users as initialUsers,
-  departments as initialDepartments,
-  sections as initialSections,
   getRoleNameAr,
   getRoleNameEn,
 } from '@/data/mock-data';
 import { Department, Section } from '@/types';
 import { User, UserRole } from '@/types';
+import {
+  getVisibleUsers,
+  getAllDepartments,
+  getAllSections,
+  saveUser,
+  deleteUser as deleteUserFromFirestore,
+  setPassword,
+  DEFAULT_PASSWORD,
+} from '@/lib/firestore';
 import {
   Users,
   Search,
@@ -35,6 +41,7 @@ import {
   ShieldAlert,
   KeyRound,
   Check,
+  Loader2,
 } from 'lucide-react';
 
 // نموذج مستخدم فارغ
@@ -65,35 +72,39 @@ export default function UsersPage() {
   const hasAccess = currentUser?.role === 'system_admin' || currentUser?.role === 'quality_manager';
   const isSystemAdmin = currentUser?.role === 'system_admin';
 
-  // State للأقسام والإدارات من localStorage
-  const [departments, setDepartments] = useState<Department[]>(initialDepartments);
-  const [sections, setSections] = useState<Section[]>(initialSections);
+  // State للأقسام والإدارات من Firestore
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [sections, setSections] = useState<Section[]>([]);
 
   // State للمستخدمين
   const [usersData, setUsersData] = useState<User[]>([]);
 
-  // تحميل البيانات من localStorage
-  useEffect(() => {
-    // تحميل الأقسام
-    const storedDepts = localStorage.getItem('qms_departments');
-    const storedSections = localStorage.getItem('qms_sections');
+  // Loading state
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
 
-    if (storedDepts) {
-      setDepartments(JSON.parse(storedDepts));
+  // تحميل البيانات من Firestore
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const [users, depts, sects] = await Promise.all([
+        getVisibleUsers(),
+        getAllDepartments(),
+        getAllSections(),
+      ]);
+      setUsersData(users);
+      setDepartments(depts);
+      setSections(sects);
+    } catch (error) {
+      console.error('Error loading data:', error);
+    } finally {
+      setIsLoading(false);
     }
-    if (storedSections) {
-      setSections(JSON.parse(storedSections));
-    }
-
-    // تحميل المستخدمين (بدون حسابات النظام المخفية)
-    const storedUsers = localStorage.getItem('qms_users');
-    let loadedUsers: User[] = storedUsers ? JSON.parse(storedUsers) : initialUsers;
-
-    // إخفاء حسابات النظام (isSystemAccount) من الجميع
-    loadedUsers = loadedUsers.filter(u => !u.isSystemAccount);
-
-    setUsersData(loadedUsers);
   }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   // دوال مساعدة للحصول على الأقسام والإدارات
   const getDepartmentById = (id: string) => departments.find(d => d.id === id);
@@ -158,7 +169,7 @@ export default function UsersPage() {
   // الأدوار المتاحة - فقط مدير النظام يمكنه إضافة مدير نظام آخر
   const allRoles: UserRole[] = ['system_admin', 'quality_manager', 'auditor', 'department_manager', 'section_head', 'employee'];
   const roles: UserRole[] = isSystemAdmin
-    ? allRoles
+    ? allRoles.filter(role => role !== 'system_admin') // منع إنشاء مدير نظام جديد
     : allRoles.filter(role => role !== 'system_admin');
 
   // Stats
@@ -223,7 +234,7 @@ export default function UsersPage() {
       errors.email = language === 'ar' ? 'البريد الإلكتروني مطلوب' : 'Email is required';
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       errors.email = language === 'ar' ? 'البريد الإلكتروني غير صالح' : 'Invalid email address';
-    } else if (!isEditing && usersData.some(u => u.email === formData.email)) {
+    } else if (!isEditing && usersData.some(u => u.email.toLowerCase() === formData.email.toLowerCase())) {
       errors.email = language === 'ar' ? 'البريد الإلكتروني موجود مسبقاً' : 'Email already exists';
     }
 
@@ -244,11 +255,11 @@ export default function UsersPage() {
   };
 
   // حفظ المستخدم
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!validateForm()) return;
 
-    // منع غير مدير النظام من إنشاء مدير نظام
-    if (!isSystemAdmin && formData.role === 'system_admin') {
+    // منع إنشاء مدير نظام
+    if (formData.role === 'system_admin') {
       setFormErrors(prev => ({
         ...prev,
         role: language === 'ar' ? 'لا يمكنك إنشاء مدير نظام' : 'You cannot create a system admin'
@@ -256,72 +267,85 @@ export default function UsersPage() {
       return;
     }
 
-    let newUsers: User[];
+    setIsSaving(true);
 
-    if (isEditing && selectedUser) {
-      // تحديث مستخدم موجود
-      newUsers = usersData.map(u =>
-        u.id === selectedUser.id
-          ? { ...u, ...formData, updatedAt: new Date() }
-          : u
-      );
-      setUsersData(newUsers);
-    } else {
-      // إضافة مستخدم جديد
-      const newUser: User = {
-        id: `user-${Date.now()}`,
-        ...formData,
-        employeeNumber: formData.employeeNumber || `EMP-${String(usersData.length + 1).padStart(4, '0')}`,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      newUsers = [...usersData, newUser];
-      setUsersData(newUsers);
+    try {
+      if (isEditing && selectedUser) {
+        // تحديث مستخدم موجود
+        const updatedUser: User = {
+          ...selectedUser,
+          ...formData,
+          updatedAt: new Date(),
+        };
+        const success = await saveUser(updatedUser);
+        if (success) {
+          await loadData(); // إعادة تحميل البيانات
+        }
+      } else {
+        // إضافة مستخدم جديد
+        const newUser: User = {
+          id: `user-${Date.now()}`,
+          ...formData,
+          email: formData.email.toLowerCase(),
+          employeeNumber: formData.employeeNumber || `EMP-${String(usersData.length + 1).padStart(4, '0')}`,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
 
-      // إضافة كلمة مرور افتراضية للمستخدم الجديد
-      const passwords = JSON.parse(localStorage.getItem('qms_passwords') || '{}');
-      passwords[newUser.id] = 'Welcome@123';
-      localStorage.setItem('qms_passwords', JSON.stringify(passwords));
+        const success = await saveUser(newUser);
+        if (success) {
+          // إضافة كلمة مرور افتراضية للمستخدم الجديد
+          await setPassword(newUser.id, DEFAULT_PASSWORD);
+          await loadData(); // إعادة تحميل البيانات
+        }
+      }
+
+      setShowFormModal(false);
+      setSelectedUser(null);
+    } catch (error) {
+      console.error('Error saving user:', error);
+    } finally {
+      setIsSaving(false);
     }
-
-    // حفظ في localStorage مع الاحتفاظ بحسابات النظام
-    const storedUsers = localStorage.getItem('qms_users');
-    const systemAccounts = storedUsers
-      ? JSON.parse(storedUsers).filter((u: any) => u.isSystemAccount)
-      : [];
-    localStorage.setItem('qms_users', JSON.stringify([...systemAccounts, ...newUsers]));
-
-    setShowFormModal(false);
-    setSelectedUser(null);
   };
 
   // حذف المستخدم
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (selectedUser) {
-      const newUsers = usersData.filter(u => u.id !== selectedUser.id);
-      setUsersData(newUsers);
-      // حفظ في localStorage مع الاحتفاظ بحسابات النظام
-      const storedUsers = localStorage.getItem('qms_users');
-      const systemAccounts = storedUsers
-        ? JSON.parse(storedUsers).filter((u: any) => u.isSystemAccount)
-        : [];
-      localStorage.setItem('qms_users', JSON.stringify([...systemAccounts, ...newUsers]));
-      setShowDeleteConfirm(false);
-      setShowFormModal(false);
-      setSelectedUser(null);
+      setIsSaving(true);
+      try {
+        const success = await deleteUserFromFirestore(selectedUser.id);
+        if (success) {
+          await loadData(); // إعادة تحميل البيانات
+        }
+        setShowDeleteConfirm(false);
+        setShowFormModal(false);
+        setSelectedUser(null);
+      } catch (error) {
+        console.error('Error deleting user:', error);
+      } finally {
+        setIsSaving(false);
+      }
     }
   };
 
   // إعادة تعيين كلمة المرور
-  const handleResetPassword = () => {
+  const handleResetPassword = async () => {
     if (selectedUser) {
-      const success = resetUserPassword(selectedUser.id);
-      if (success) {
-        setPasswordResetSuccess(true);
-        setTimeout(() => {
-          setPasswordResetSuccess(false);
-          setShowResetPasswordConfirm(false);
-        }, 2000);
+      setIsSaving(true);
+      try {
+        const success = await resetUserPassword(selectedUser.id);
+        if (success) {
+          setPasswordResetSuccess(true);
+          setTimeout(() => {
+            setPasswordResetSuccess(false);
+            setShowResetPasswordConfirm(false);
+          }, 2000);
+        }
+      } catch (error) {
+        console.error('Error resetting password:', error);
+      } finally {
+        setIsSaving(false);
       }
     }
   };
@@ -366,6 +390,20 @@ export default function UsersPage() {
           >
             {language === 'ar' ? 'العودة للرئيسية' : 'Back to Dashboard'}
           </button>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <DashboardLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh]">
+          <Loader2 className="h-12 w-12 text-[var(--primary)] animate-spin" />
+          <p className="mt-4 text-[var(--foreground-secondary)]">
+            {language === 'ar' ? 'جاري التحميل...' : 'Loading...'}
+          </p>
         </div>
       </DashboardLayout>
     );
@@ -1101,7 +1139,8 @@ export default function UsersPage() {
                 {isEditing && isSystemAdmin ? (
                   <button
                     onClick={() => setShowDeleteConfirm(true)}
-                    className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20"
+                    disabled={isSaving}
+                    className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
                   >
                     <Trash2 className="h-4 w-4" />
                     {t('common.delete')}
@@ -1112,15 +1151,21 @@ export default function UsersPage() {
                 <div className="flex gap-3">
                   <button
                     onClick={() => setShowFormModal(false)}
-                    className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] transition-colors hover:bg-[var(--background-secondary)]"
+                    disabled={isSaving}
+                    className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] transition-colors hover:bg-[var(--background-secondary)] disabled:opacity-50"
                   >
                     {t('common.cancel')}
                   </button>
                   <button
                     onClick={handleSave}
-                    className="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--primary-hover)]"
+                    disabled={isSaving}
+                    className="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--primary-hover)] disabled:opacity-50"
                   >
-                    <Save className="h-4 w-4" />
+                    {isSaving ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="h-4 w-4" />
+                    )}
                     {t('common.save')}
                   </button>
                 </div>
@@ -1160,14 +1205,17 @@ export default function UsersPage() {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={() => setShowDeleteConfirm(false)}
-                  className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] transition-colors hover:bg-[var(--background-secondary)]"
+                  disabled={isSaving}
+                  className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] transition-colors hover:bg-[var(--background-secondary)] disabled:opacity-50"
                 >
                   {t('common.cancel')}
                 </button>
                 <button
                   onClick={handleDelete}
-                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700"
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
                 >
+                  {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                   {t('common.delete')}
                 </button>
               </div>
@@ -1227,14 +1275,17 @@ export default function UsersPage() {
                   <div className="flex justify-end gap-3">
                     <button
                       onClick={() => setShowResetPasswordConfirm(false)}
-                      className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] transition-colors hover:bg-[var(--background-secondary)]"
+                      disabled={isSaving}
+                      className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] transition-colors hover:bg-[var(--background-secondary)] disabled:opacity-50"
                     >
                       {t('common.cancel')}
                     </button>
                     <button
                       onClick={handleResetPassword}
-                      className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-700"
+                      disabled={isSaving}
+                      className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
                     >
+                      {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                       {language === 'ar' ? 'إعادة التعيين' : 'Reset Password'}
                     </button>
                   </div>
