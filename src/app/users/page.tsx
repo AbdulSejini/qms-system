@@ -35,6 +35,8 @@ import {
   Trash2,
   AlertCircle,
   ShieldAlert,
+  KeyRound,
+  Check,
 } from 'lucide-react';
 
 // نموذج مستخدم فارغ
@@ -58,7 +60,7 @@ const emptyUser: Omit<User, 'id' | 'createdAt' | 'updatedAt'> = {
 
 export default function UsersPage() {
   const { t, language, isRTL } = useTranslation();
-  const { currentUser, canManageUsers, canManageDepartments } = useAuth();
+  const { currentUser, canManageUsers, canManageDepartments, resetUserPassword } = useAuth();
   const router = useRouter();
 
   // التحقق من الصلاحيات - فقط مدير النظام ومدير إدارة الجودة
@@ -92,6 +94,8 @@ export default function UsersPage() {
   const [formData, setFormData] = useState<Omit<User, 'id' | 'createdAt' | 'updatedAt'>>(emptyUser);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showResetPasswordConfirm, setShowResetPasswordConfirm] = useState(false);
+  const [passwordResetSuccess, setPasswordResetSuccess] = useState(false);
 
   // Filter users
   const filteredUsers = useMemo(() => {
@@ -218,23 +222,36 @@ export default function UsersPage() {
   const handleSave = () => {
     if (!validateForm()) return;
 
+    let newUsers: User[];
+
     if (isEditing && selectedUser) {
       // تحديث مستخدم موجود
-      setUsersData(prev => prev.map(u =>
+      newUsers = usersData.map(u =>
         u.id === selectedUser.id
           ? { ...u, ...formData, updatedAt: new Date() }
           : u
-      ));
+      );
+      setUsersData(newUsers);
     } else {
       // إضافة مستخدم جديد
       const newUser: User = {
         id: `user-${Date.now()}`,
         ...formData,
+        employeeNumber: formData.employeeNumber || `EMP-${String(usersData.length + 1).padStart(4, '0')}`,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
-      setUsersData(prev => [...prev, newUser]);
+      newUsers = [...usersData, newUser];
+      setUsersData(newUsers);
+
+      // إضافة كلمة مرور افتراضية للمستخدم الجديد
+      const passwords = JSON.parse(localStorage.getItem('qms_passwords') || '{}');
+      passwords[newUser.id] = 'Welcome@123';
+      localStorage.setItem('qms_passwords', JSON.stringify(passwords));
     }
+
+    // حفظ في localStorage
+    localStorage.setItem('qms_users', JSON.stringify(newUsers));
 
     setShowFormModal(false);
     setSelectedUser(null);
@@ -243,10 +260,27 @@ export default function UsersPage() {
   // حذف المستخدم
   const handleDelete = () => {
     if (selectedUser) {
-      setUsersData(prev => prev.filter(u => u.id !== selectedUser.id));
+      const newUsers = usersData.filter(u => u.id !== selectedUser.id);
+      setUsersData(newUsers);
+      // حفظ في localStorage
+      localStorage.setItem('qms_users', JSON.stringify(newUsers));
       setShowDeleteConfirm(false);
       setShowFormModal(false);
       setSelectedUser(null);
+    }
+  };
+
+  // إعادة تعيين كلمة المرور
+  const handleResetPassword = () => {
+    if (selectedUser) {
+      const success = resetUserPassword(selectedUser.id);
+      if (success) {
+        setPasswordResetSuccess(true);
+        setTimeout(() => {
+          setPasswordResetSuccess(false);
+          setShowResetPasswordConfirm(false);
+        }, 2000);
+      }
     }
   };
 
@@ -566,6 +600,18 @@ export default function UsersPage() {
                             >
                               <Edit2 className="h-4 w-4" />
                             </button>
+                            {user.role !== 'system_admin' && (
+                              <button
+                                onClick={() => {
+                                  setSelectedUser(user);
+                                  setShowResetPasswordConfirm(true);
+                                }}
+                                className="rounded-lg p-2 text-[var(--foreground-secondary)] transition-colors hover:bg-amber-50 hover:text-amber-600 dark:hover:bg-amber-900/20"
+                                title={language === 'ar' ? 'إعادة تعيين كلمة المرور' : 'Reset Password'}
+                              >
+                                <KeyRound className="h-4 w-4" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1091,6 +1137,75 @@ export default function UsersPage() {
                   {t('common.delete')}
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Reset Password Confirmation Modal */}
+        {showResetPasswordConfirm && selectedUser && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+              onClick={() => !passwordResetSuccess && setShowResetPasswordConfirm(false)}
+            />
+            <div className="relative w-full max-w-md rounded-2xl bg-[var(--card)] p-6 shadow-xl">
+              {passwordResetSuccess ? (
+                <div className="flex flex-col items-center py-4">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30 mb-4">
+                    <Check className="h-8 w-8 text-green-600 dark:text-green-400" />
+                  </div>
+                  <h3 className="text-lg font-bold text-[var(--foreground)] mb-2">
+                    {language === 'ar' ? 'تم بنجاح!' : 'Success!'}
+                  </h3>
+                  <p className="text-sm text-[var(--foreground-secondary)] text-center">
+                    {language === 'ar'
+                      ? 'تم إعادة تعيين كلمة المرور إلى: Welcome@123'
+                      : 'Password has been reset to: Welcome@123'}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+                      <KeyRound className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-[var(--foreground)]">
+                        {language === 'ar' ? 'إعادة تعيين كلمة المرور' : 'Reset Password'}
+                      </h3>
+                      <p className="text-sm text-[var(--foreground-secondary)]">
+                        {language === 'ar'
+                          ? `إعادة تعيين كلمة مرور "${selectedUser.fullNameAr}"؟`
+                          : `Reset password for "${selectedUser.fullNameEn}"?`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800 p-4 mb-6">
+                    <p className="text-sm text-amber-800 dark:text-amber-200">
+                      {language === 'ar'
+                        ? 'سيتم تعيين كلمة المرور الجديدة إلى:'
+                        : 'New password will be set to:'}
+                    </p>
+                    <p className="text-lg font-mono font-bold text-amber-900 dark:text-amber-100 mt-1">
+                      Welcome@123
+                    </p>
+                  </div>
+                  <div className="flex justify-end gap-3">
+                    <button
+                      onClick={() => setShowResetPasswordConfirm(false)}
+                      className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] transition-colors hover:bg-[var(--background-secondary)]"
+                    >
+                      {t('common.cancel')}
+                    </button>
+                    <button
+                      onClick={handleResetPassword}
+                      className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-700"
+                    >
+                      {language === 'ar' ? 'إعادة التعيين' : 'Reset Password'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}

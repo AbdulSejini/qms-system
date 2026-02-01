@@ -65,7 +65,7 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
   const { t, isRTL } = useTranslation();
   const { language, setLanguage } = useLanguage();
   const { theme, setTheme } = useTheme();
-  const { currentUser, switchUser, availableUsers, permissions } = useAuth();
+  const { currentUser, switchUser, availableUsers, permissions, logout } = useAuth();
   const router = useRouter();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showUserSwitcher, setShowUserSwitcher] = useState(false);
@@ -430,23 +430,29 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
                     {t('navigation.settings')}
                   </button>
                 </div>
-                {/* User Switcher (للتطوير) */}
+                {/* User Switcher - فقط لمدير النظام */}
+                {currentUser?.role === 'system_admin' && (
+                  <div className="border-t border-[var(--border)] py-1">
+                    <button
+                      onClick={() => {
+                        setShowUserMenu(false);
+                        setShowUserSwitcher(true);
+                      }}
+                      className="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-[var(--foreground)] transition-colors hover:bg-[var(--background-tertiary)]"
+                    >
+                      <UserCog className="h-4 w-4 text-[var(--foreground-secondary)]" />
+                      {language === 'ar' ? 'تبديل المستخدم' : 'Switch User'}
+                    </button>
+                  </div>
+                )}
+
                 <div className="border-t border-[var(--border)] py-1">
                   <button
                     onClick={() => {
                       setShowUserMenu(false);
-                      setShowUserSwitcher(true);
+                      logout();
+                      router.push('/login');
                     }}
-                    className="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-[var(--foreground)] transition-colors hover:bg-[var(--background-tertiary)]"
-                  >
-                    <UserCog className="h-4 w-4 text-[var(--foreground-secondary)]" />
-                    {language === 'ar' ? 'تبديل المستخدم (تطوير)' : 'Switch User (Dev)'}
-                  </button>
-                </div>
-
-                <div className="border-t border-[var(--border)] py-1">
-                  <button
-                    onClick={() => setShowUserMenu(false)}
                     className="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-[var(--status-error)] transition-colors hover:bg-[var(--status-error-bg)]"
                   >
                     <LogOut className="h-4 w-4" />
