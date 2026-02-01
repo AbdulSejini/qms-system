@@ -111,77 +111,77 @@ export default function FollowUpPage() {
       const loadedItems: FollowUpItem[] = [];
 
       audits.forEach((audit: any) => {
-          // Add audit tasks for audits in progress
-          if (audit.status && audit.status !== 'completed' && audit.status !== 'cancelled') {
-            loadedItems.push({
-              id: `audit-task-${audit.id}`,
-              type: 'audit_task',
-              title: `متابعة: ${audit.titleAr || audit.title || 'مراجعة'}`,
-              titleEn: `Follow-up: ${audit.titleEn || audit.title || 'Audit'}`,
-              description: audit.scope || audit.objective,
-              descriptionEn: audit.scope || audit.objective,
-              status: calculateStatus(audit.endDate || audit.startDate, audit.status),
-              priority: audit.type === 'external' ? 'critical' : 'high',
-              dueDate: audit.endDate || audit.startDate,
-              assignedTo: audit.leadAuditorId || 'user-3',
-              departmentId: audit.departmentId || 'dept-2',
-              relatedAuditId: audit.id,
-              progress: audit.status === 'execution' ? 50 : audit.status === 'awaiting_management' ? 75 : 25,
-              lastUpdate: audit.updatedAt || audit.createdAt,
-              createdAt: audit.createdAt,
-            });
-          }
+        // Add audit tasks for audits in progress
+        if (audit.status && audit.status !== 'completed' && audit.status !== 'cancelled') {
+          loadedItems.push({
+            id: `audit-task-${audit.id}`,
+            type: 'audit_task',
+            title: `متابعة: ${audit.titleAr || audit.title || 'مراجعة'}`,
+            titleEn: `Follow-up: ${audit.titleEn || audit.title || 'Audit'}`,
+            description: audit.scope || audit.objective,
+            descriptionEn: audit.scope || audit.objective,
+            status: calculateStatus(audit.endDate || audit.startDate, audit.status),
+            priority: audit.type === 'external' ? 'critical' : 'high',
+            dueDate: audit.endDate || audit.startDate,
+            assignedTo: audit.leadAuditorId || 'user-3',
+            departmentId: audit.departmentId || 'dept-2',
+            relatedAuditId: audit.id,
+            progress: audit.status === 'execution' ? 50 : audit.status === 'awaiting_management' ? 75 : 25,
+            lastUpdate: audit.updatedAt || audit.createdAt,
+            createdAt: audit.createdAt,
+          });
+        }
 
-          // Add findings from this audit
-          if (audit.findings && Array.isArray(audit.findings)) {
-            audit.findings.forEach((finding: any) => {
-              if (finding.status !== 'closed') {
-                const dueDate = finding.estimatedClosingDate || finding.dueDate || audit.endDate;
+        // Add findings from this audit
+        if (audit.findings && Array.isArray(audit.findings)) {
+          audit.findings.forEach((finding: any) => {
+            if (finding.status !== 'closed') {
+              const dueDate = finding.estimatedClosingDate || finding.dueDate || audit.endDate;
+              loadedItems.push({
+                id: `finding-${finding.id}`,
+                type: 'finding',
+                title: finding.finding || finding.titleAr || 'ملاحظة',
+                titleEn: finding.finding || finding.titleEn || 'Finding',
+                description: finding.evidence || finding.descriptionAr,
+                descriptionEn: finding.evidence || finding.descriptionEn,
+                status: calculateStatus(dueDate, finding.status),
+                priority: getPriorityFromSeverity(finding.categoryB || finding.severity),
+                dueDate: dueDate,
+                assignedTo: finding.responsibleId || audit.leadAuditorId || 'user-3',
+                departmentId: finding.departmentId || audit.departmentId || 'dept-2',
+                sectionId: finding.sectionId,
+                relatedAuditId: audit.id,
+                relatedFindingId: finding.id,
+                progress: finding.status === 'in_progress' ? 50 : finding.status === 'pending_verification' ? 90 : 0,
+                lastUpdate: finding.updatedAt || finding.createdAt,
+                createdAt: finding.createdAt,
+              });
+
+              // Add corrective action if exists
+              if (finding.correctiveAction) {
                 loadedItems.push({
-                  id: `finding-${finding.id}`,
-                  type: 'finding',
-                  title: finding.finding || finding.titleAr || 'ملاحظة',
-                  titleEn: finding.finding || finding.titleEn || 'Finding',
-                  description: finding.evidence || finding.descriptionAr,
-                  descriptionEn: finding.evidence || finding.descriptionEn,
+                  id: `ca-${finding.id}`,
+                  type: 'corrective_action',
+                  title: `إجراء تصحيحي: ${finding.finding?.substring(0, 30) || 'ملاحظة'}`,
+                  titleEn: `Corrective Action: ${finding.finding?.substring(0, 30) || 'Finding'}`,
+                  description: finding.correctiveAction,
+                  descriptionEn: finding.correctiveAction,
                   status: calculateStatus(dueDate, finding.status),
                   priority: getPriorityFromSeverity(finding.categoryB || finding.severity),
                   dueDate: dueDate,
                   assignedTo: finding.responsibleId || audit.leadAuditorId || 'user-3',
                   departmentId: finding.departmentId || audit.departmentId || 'dept-2',
-                  sectionId: finding.sectionId,
                   relatedAuditId: audit.id,
                   relatedFindingId: finding.id,
-                  progress: finding.status === 'in_progress' ? 50 : finding.status === 'pending_verification' ? 90 : 0,
+                  progress: finding.status === 'in_progress' ? 60 : finding.status === 'pending_verification' ? 95 : 30,
                   lastUpdate: finding.updatedAt || finding.createdAt,
                   createdAt: finding.createdAt,
                 });
-
-                // Add corrective action if exists
-                if (finding.correctiveAction) {
-                  loadedItems.push({
-                    id: `ca-${finding.id}`,
-                    type: 'corrective_action',
-                    title: `إجراء تصحيحي: ${finding.finding?.substring(0, 30) || 'ملاحظة'}`,
-                    titleEn: `Corrective Action: ${finding.finding?.substring(0, 30) || 'Finding'}`,
-                    description: finding.correctiveAction,
-                    descriptionEn: finding.correctiveAction,
-                    status: calculateStatus(dueDate, finding.status),
-                    priority: getPriorityFromSeverity(finding.categoryB || finding.severity),
-                    dueDate: dueDate,
-                    assignedTo: finding.responsibleId || audit.leadAuditorId || 'user-3',
-                    departmentId: finding.departmentId || audit.departmentId || 'dept-2',
-                    relatedAuditId: audit.id,
-                    relatedFindingId: finding.id,
-                    progress: finding.status === 'in_progress' ? 60 : finding.status === 'pending_verification' ? 95 : 30,
-                    lastUpdate: finding.updatedAt || finding.createdAt,
-                    createdAt: finding.createdAt,
-                  });
-                }
               }
-            });
-          }
-        });
+            }
+          });
+        }
+      });
 
       setFollowUpItems(loadedItems);
     });
