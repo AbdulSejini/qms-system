@@ -79,15 +79,20 @@ const convertTimestamps = (data: any): any => {
   return converted;
 };
 
-// Convert Date objects to Firestore-compatible format
+// Convert Date objects to Firestore-compatible format and remove undefined values
 const prepareForFirestore = (data: any): any => {
   if (!data) return data;
 
   const prepared = { ...data };
 
-  // Convert Date objects to ISO strings for Firestore
+  // Process each key
   Object.keys(prepared).forEach(key => {
-    if (prepared[key] instanceof Date) {
+    // Remove undefined values (Firestore doesn't accept undefined)
+    if (prepared[key] === undefined) {
+      delete prepared[key];
+    }
+    // Convert Date objects to ISO strings for Firestore
+    else if (prepared[key] instanceof Date) {
       prepared[key] = prepared[key].toISOString();
     }
   });
