@@ -6,11 +6,7 @@ import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
-import {
-  users as allUsers,
-  departments as allDepartments,
-  sections as allSections,
-} from '@/data/mock-data';
+// البيانات تأتي من AuthContext بدلاً من mock-data
 import {
   ArrowRight,
   ArrowLeft,
@@ -47,9 +43,6 @@ const auditTypes = [
   { value: 'certification', labelAr: 'شهادة', labelEn: 'Certification', descAr: 'مراجعة للحصول على شهادة', descEn: 'Certification audit' },
 ];
 
-// Get auditors from users
-const auditors = allUsers.filter(u => u.canBeAuditor && u.isActive);
-
 // Duration options for audit end date
 const durationOptions = [
   { value: 'same_day', days: 0, labelAr: 'نفس اليوم', labelEn: 'Same Day' },
@@ -64,7 +57,12 @@ const durationOptions = [
 export default function NewAuditPage() {
   const router = useRouter();
   const { t, language } = useTranslation();
-  const { currentUser } = useAuth();
+  const { currentUser, departments: allDepartments, sections: allSections, users: allUsers } = useAuth();
+
+  // Get auditors from users
+  const auditors = useMemo(() => {
+    return allUsers.filter(u => u.canBeAuditor && u.isActive);
+  }, [allUsers]);
 
   // Current step in the wizard
   const [currentStep, setCurrentStep] = useState(1);
