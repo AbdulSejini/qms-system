@@ -372,13 +372,18 @@ export default function NewAuditPage() {
     audit.id = auditId;
 
     // Add notification for quality manager if not self-created
+    console.log('Current user role:', currentUser?.role, 'isQualityManager:', isQualityManager);
+
     if (!isQualityManager) {
       // Find all quality managers to notify
       const allUsersData = await getAllUsers();
+      console.log('All users loaded:', allUsersData.length);
       const qualityManagers = allUsersData.filter(u => u.role === 'quality_manager' && u.isActive);
+      console.log('Quality managers found:', qualityManagers.length, qualityManagers.map(q => ({ id: q.id, name: q.fullNameEn })));
 
       for (const qm of qualityManagers) {
-        await addNotification({
+        console.log('Sending notification to quality manager:', qm.id, qm.fullNameEn);
+        const notifId = await addNotification({
           type: 'audit_approval_request',
           title: language === 'ar' ? 'طلب موافقة على مراجعة جديدة' : 'New Audit Approval Request',
           message: language === 'ar'
@@ -388,7 +393,10 @@ export default function NewAuditPage() {
           senderId: currentUser?.id,
           auditId: auditId,
         });
+        console.log('Notification result:', notifId ? 'Success' : 'Failed');
       }
+    } else {
+      console.log('Skipping notification - user is quality manager');
     }
 
     // Add notifications for team members (excluding the creator)

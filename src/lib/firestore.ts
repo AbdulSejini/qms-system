@@ -483,6 +483,12 @@ export interface Notification {
 // Add notification
 export const addNotification = async (notification: Omit<Notification, 'id' | 'createdAt' | 'read'>): Promise<string | null> => {
   try {
+    console.log('Adding notification:', {
+      type: notification.type,
+      recipientId: notification.recipientId,
+      title: notification.title,
+    });
+
     const notificationId = `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const notificationRef = doc(db, COLLECTIONS.NOTIFICATIONS, notificationId);
     await setDoc(notificationRef, prepareForFirestore({
@@ -491,6 +497,8 @@ export const addNotification = async (notification: Omit<Notification, 'id' | 'c
       read: false,
       createdAt: new Date().toISOString(),
     }));
+
+    console.log('Notification added successfully:', notificationId);
     return notificationId;
   } catch (error) {
     console.error('Error adding notification:', error);
@@ -517,15 +525,21 @@ export const subscribeToNotifications = (
   callback: (notifications: Notification[]) => void
 ): Unsubscribe => {
   const notificationsRef = collection(db, COLLECTIONS.NOTIFICATIONS);
-  const q = query(notificationsRef, where('recipientId', '==', userId), orderBy('createdAt', 'desc'));
+  // Simple query without orderBy to avoid composite index requirement
+  const q = query(notificationsRef, where('recipientId', '==', userId));
 
   return onSnapshot(q, (snapshot) => {
-    const notifications = snapshot.docs.map(doc =>
-      convertTimestamps({ ...doc.data() }) as Notification
-    );
+    console.log('Notifications snapshot received:', snapshot.docs.length, 'for user:', userId);
+    const notifications = snapshot.docs
+      .map(doc => convertTimestamps({ ...doc.data() }) as Notification)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()); // Sort in JS instead
     callback(notifications);
   }, (error) => {
     console.error('Error listening to notifications:', error);
+    // If index is required, Firestore will throw an error with a link to create it
+    if (error.message?.includes('index')) {
+      console.error('Firestore index required. Check console for the link to create it.');
+    }
     callback([]);
   });
 };
