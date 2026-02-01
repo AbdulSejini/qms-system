@@ -59,15 +59,15 @@ const emptySection: Omit<Section, 'id' | 'createdAt' | 'updatedAt'> = {
 
 export default function DepartmentsPage() {
   const { t, language, isRTL } = useTranslation();
-  const { canManageDepartments, hasPermission, departments, sections, users, refreshData } = useAuth();
+  const { canManageDepartments, hasPermission, departments, sections, users, dataLoaded, refreshData } = useAuth();
 
   // استخدام البيانات من الـ cache
   const departmentsData = departments;
   const sectionsData = sections;
   const usersData = users;
 
-  // Loading state
-  const isLoading = departments.length === 0 && sections.length === 0;
+  // Loading state - use dataLoaded from context instead of checking array lengths
+  const isLoading = !dataLoaded;
   const [isSaving, setIsSaving] = useState(false);
 
   // تحميل البيانات عند الحاجة

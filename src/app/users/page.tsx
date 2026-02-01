@@ -61,7 +61,7 @@ const emptyUser: Omit<User, 'id' | 'createdAt' | 'updatedAt'> = {
 
 export default function UsersPage() {
   const { t, language, isRTL } = useTranslation();
-  const { currentUser, canManageUsers, canManageDepartments, resetUserPassword, departments, sections, users, refreshData } = useAuth();
+  const { currentUser, canManageUsers, canManageDepartments, resetUserPassword, departments, sections, users, dataLoaded, refreshData } = useAuth();
   const router = useRouter();
 
   // التحقق من الصلاحيات - فقط مدير النظام ومدير إدارة الجودة
@@ -71,8 +71,8 @@ export default function UsersPage() {
   // استخدام البيانات من الـ cache
   const usersData = users;
 
-  // Loading state
-  const isLoading = users.length === 0 && departments.length === 0;
+  // Loading state - use dataLoaded from context instead of checking array lengths
+  const isLoading = !dataLoaded;
   const [isSaving, setIsSaving] = useState(false);
 
   // تحميل البيانات عند الحاجة

@@ -70,6 +70,7 @@ interface AuthContextType {
   departments: Department[];
   sections: Section[];
   users: User[];
+  dataLoaded: boolean;
 
   // إعادة تعيين كلمة المرور
   resetUserPassword: (userId: string) => Promise<boolean>;
@@ -91,6 +92,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [dataLoaded, setDataLoaded] = useState(false);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -111,8 +113,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSections(sects);
       setUsers(usrs);
       dataLoadedRef.current = true;
+      setDataLoaded(true);
     } catch (error) {
       console.error('Error loading data:', error);
+      setDataLoaded(true); // Set to true even on error to prevent infinite loading
     }
   }, []);
 
@@ -489,6 +493,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     departments,
     sections,
     users,
+    dataLoaded,
     resetUserPassword,
     refreshData,
   };
