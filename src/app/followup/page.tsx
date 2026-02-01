@@ -63,135 +63,28 @@ interface FollowUpItem {
   createdAt: string;
 }
 
-// Sample follow-up data
-const generateFollowUpItems = (): FollowUpItem[] => {
-  return [
-    {
-      id: 'fu-1',
-      type: 'finding',
-      title: 'إغلاق ملاحظة توثيق الصيانة',
-      titleEn: 'Close Maintenance Documentation Finding',
-      description: 'تحديث وتوثيق جميع إجراءات الصيانة الوقائية',
-      descriptionEn: 'Update and document all preventive maintenance procedures',
-      status: 'in_progress',
-      priority: 'high',
-      dueDate: '2026-02-15',
-      assignedTo: 'user-8',
-      departmentId: 'dept-3',
-      sectionId: 'sec-5',
-      relatedAuditId: '1',
-      relatedFindingId: 'f1',
-      progress: 60,
-      lastUpdate: '2026-01-30',
-      comments: 3,
-      createdAt: '2026-01-26',
-    },
-    {
-      id: 'fu-2',
-      type: 'corrective_action',
-      title: 'تحديث سجلات التدريب',
-      titleEn: 'Update Training Records',
-      description: 'إكمال سجلات التدريب الناقصة للموظفين',
-      descriptionEn: 'Complete missing employee training records',
-      status: 'pending',
-      priority: 'medium',
-      dueDate: '2026-02-08',
-      assignedTo: 'user-4',
-      departmentId: 'dept-1',
-      progress: 20,
-      lastUpdate: '2026-01-28',
-      comments: 1,
-      createdAt: '2026-01-20',
-    },
-    {
-      id: 'fu-3',
-      type: 'finding',
-      title: 'معالجة عدم المطابقة في المشتريات',
-      titleEn: 'Address Procurement Non-Conformity',
-      description: 'تصحيح إجراءات تقييم الموردين',
-      descriptionEn: 'Correct supplier evaluation procedures',
-      status: 'overdue',
-      priority: 'critical',
-      dueDate: '2026-01-25',
-      assignedTo: 'user-11',
-      departmentId: 'dept-4',
-      sectionId: 'sec-7',
-      relatedAuditId: '4',
-      progress: 40,
-      lastUpdate: '2026-01-20',
-      comments: 5,
-      createdAt: '2026-01-10',
-    },
-    {
-      id: 'fu-4',
-      type: 'audit_task',
-      title: 'إعداد خطة المراجعة الخارجية',
-      titleEn: 'Prepare External Audit Plan',
-      description: 'تجهيز الوثائق والسجلات للمراجعة الخارجية',
-      descriptionEn: 'Prepare documents and records for external audit',
-      status: 'in_progress',
-      priority: 'critical',
-      dueDate: '2026-02-18',
-      assignedTo: 'user-3',
-      departmentId: 'dept-2',
-      relatedAuditId: '3',
-      progress: 75,
-      lastUpdate: '2026-01-31',
-      comments: 2,
-      createdAt: '2026-01-15',
-    },
-    {
-      id: 'fu-5',
-      type: 'document_review',
-      title: 'مراجعة دليل الجودة',
-      titleEn: 'Review Quality Manual',
-      description: 'مراجعة وتحديث دليل الجودة السنوي',
-      descriptionEn: 'Annual quality manual review and update',
-      status: 'pending',
-      priority: 'medium',
-      dueDate: '2026-02-28',
-      assignedTo: 'user-3',
-      departmentId: 'dept-2',
-      progress: 0,
-      lastUpdate: '2026-01-25',
-      createdAt: '2026-01-25',
-    },
-    {
-      id: 'fu-6',
-      type: 'corrective_action',
-      title: 'تحسين عملية الفحص',
-      titleEn: 'Improve Inspection Process',
-      description: 'تطوير قائمة فحص جديدة للمنتجات',
-      descriptionEn: 'Develop new product inspection checklist',
-      status: 'awaiting_verification',
-      priority: 'high',
-      dueDate: '2026-02-05',
-      assignedTo: 'user-8',
-      departmentId: 'dept-3',
-      sectionId: 'sec-6',
-      progress: 100,
-      lastUpdate: '2026-02-01',
-      comments: 4,
-      createdAt: '2026-01-18',
-    },
-    {
-      id: 'fu-7',
-      type: 'finding',
-      title: 'تصحيح معايرة الأجهزة',
-      titleEn: 'Correct Equipment Calibration',
-      description: 'إعادة معايرة أجهزة القياس المنتهية',
-      descriptionEn: 'Recalibrate expired measurement equipment',
-      status: 'completed',
-      priority: 'high',
-      dueDate: '2026-01-30',
-      assignedTo: 'user-9',
-      departmentId: 'dept-3',
-      progress: 100,
-      lastUpdate: '2026-01-29',
-      comments: 2,
-      createdAt: '2026-01-15',
-    },
-  ];
+// Helper to get priority from severity
+const getPriorityFromSeverity = (severity: string): 'low' | 'medium' | 'high' | 'critical' => {
+  switch (severity) {
+    case 'critical': return 'critical';
+    case 'major': case 'major_nc': return 'high';
+    case 'minor': case 'minor_nc': return 'medium';
+    case 'observation': return 'low';
+    default: return 'medium';
+  }
+};
+
+// Helper to calculate status based on dates
+const calculateStatus = (dueDate: string, currentStatus: string): 'pending' | 'in_progress' | 'overdue' | 'completed' | 'awaiting_verification' => {
+  if (currentStatus === 'closed' || currentStatus === 'completed') return 'completed';
+  if (currentStatus === 'pending_verification') return 'awaiting_verification';
+
+  const today = new Date('2026-02-01');
+  const due = new Date(dueDate);
+
+  if (due < today && currentStatus !== 'closed') return 'overdue';
+  if (currentStatus === 'in_progress') return 'in_progress';
+  return 'pending';
 };
 
 export default function FollowUpPage() {
@@ -210,9 +103,104 @@ export default function FollowUpPage() {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showSendReminderModal, setShowSendReminderModal] = useState(false);
 
-  // Load data
+  // Load data from localStorage (audits and findings)
   useEffect(() => {
-    setFollowUpItems(generateFollowUpItems());
+    const loadedItems: FollowUpItem[] = [];
+
+    // Load from audits
+    const storedAudits = localStorage.getItem('qms_audits');
+    if (storedAudits) {
+      try {
+        const audits = JSON.parse(storedAudits);
+        audits.forEach((audit: any) => {
+          // Add audit tasks for audits in progress
+          if (audit.status && audit.status !== 'completed' && audit.status !== 'cancelled') {
+            loadedItems.push({
+              id: `audit-task-${audit.id}`,
+              type: 'audit_task',
+              title: `متابعة: ${audit.titleAr || audit.title || 'مراجعة'}`,
+              titleEn: `Follow-up: ${audit.titleEn || audit.title || 'Audit'}`,
+              description: audit.scope || audit.objective,
+              descriptionEn: audit.scope || audit.objective,
+              status: calculateStatus(audit.endDate || audit.startDate, audit.status),
+              priority: audit.type === 'external' ? 'critical' : 'high',
+              dueDate: audit.endDate || audit.startDate,
+              assignedTo: audit.leadAuditorId || 'user-3',
+              departmentId: audit.departmentId || 'dept-2',
+              relatedAuditId: audit.id,
+              progress: audit.status === 'execution' ? 50 : audit.status === 'awaiting_management' ? 75 : 25,
+              lastUpdate: audit.updatedAt || audit.createdAt,
+              createdAt: audit.createdAt,
+            });
+          }
+
+          // Add findings from this audit
+          if (audit.findings && Array.isArray(audit.findings)) {
+            audit.findings.forEach((finding: any) => {
+              if (finding.status !== 'closed') {
+                const dueDate = finding.estimatedClosingDate || finding.dueDate || audit.endDate;
+                loadedItems.push({
+                  id: `finding-${finding.id}`,
+                  type: 'finding',
+                  title: finding.finding || finding.titleAr || 'ملاحظة',
+                  titleEn: finding.finding || finding.titleEn || 'Finding',
+                  description: finding.evidence || finding.descriptionAr,
+                  descriptionEn: finding.evidence || finding.descriptionEn,
+                  status: calculateStatus(dueDate, finding.status),
+                  priority: getPriorityFromSeverity(finding.categoryB || finding.severity),
+                  dueDate: dueDate,
+                  assignedTo: finding.responsibleId || audit.leadAuditorId || 'user-3',
+                  departmentId: finding.departmentId || audit.departmentId || 'dept-2',
+                  sectionId: finding.sectionId,
+                  relatedAuditId: audit.id,
+                  relatedFindingId: finding.id,
+                  progress: finding.status === 'in_progress' ? 50 : finding.status === 'pending_verification' ? 90 : 0,
+                  lastUpdate: finding.updatedAt || finding.createdAt,
+                  createdAt: finding.createdAt,
+                });
+
+                // Add corrective action if exists
+                if (finding.correctiveAction) {
+                  loadedItems.push({
+                    id: `ca-${finding.id}`,
+                    type: 'corrective_action',
+                    title: `إجراء تصحيحي: ${finding.finding?.substring(0, 30) || 'ملاحظة'}`,
+                    titleEn: `Corrective Action: ${finding.finding?.substring(0, 30) || 'Finding'}`,
+                    description: finding.correctiveAction,
+                    descriptionEn: finding.correctiveAction,
+                    status: calculateStatus(dueDate, finding.status),
+                    priority: getPriorityFromSeverity(finding.categoryB || finding.severity),
+                    dueDate: dueDate,
+                    assignedTo: finding.responsibleId || audit.leadAuditorId || 'user-3',
+                    departmentId: finding.departmentId || audit.departmentId || 'dept-2',
+                    relatedAuditId: audit.id,
+                    relatedFindingId: finding.id,
+                    progress: finding.status === 'in_progress' ? 60 : finding.status === 'pending_verification' ? 95 : 30,
+                    lastUpdate: finding.updatedAt || finding.createdAt,
+                    createdAt: finding.createdAt,
+                  });
+                }
+              }
+            });
+          }
+        });
+      } catch (e) {
+        console.error('Error loading follow-up items:', e);
+      }
+    }
+
+    // No demo data - only show actual data from localStorage
+
+    setFollowUpItems(loadedItems);
+
+    // Listen for storage changes
+    const handleStorageChange = () => {
+      // Trigger reload
+      window.location.reload();
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   // Filter items based on user role

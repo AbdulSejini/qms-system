@@ -59,115 +59,15 @@ const formatDate = (date: Date) => {
   return date.toISOString().split('T')[0];
 };
 
-// Sample events data - in real app, this would come from audits and findings
-const generateEvents = (): CalendarEvent[] => {
-  return [
-    // Audits
-    {
-      id: 'evt-1',
-      title: 'مراجعة قسم الإنتاج',
-      titleEn: 'Production Department Audit',
-      type: 'audit',
-      date: '2026-02-03',
-      endDate: '2026-02-05',
-      departmentId: 'dept-3',
-      description: 'مراجعة عمليات التصنيع والجودة',
-      priority: 'high',
-      status: 'execution',
-      relatedId: '1',
-    },
-    {
-      id: 'evt-2',
-      title: 'مراجعة الموارد البشرية',
-      titleEn: 'Human Resources Audit',
-      type: 'audit',
-      date: '2026-02-10',
-      endDate: '2026-02-12',
-      departmentId: 'dept-1',
-      description: 'مراجعة عمليات التوظيف والتدريب',
-      priority: 'medium',
-      status: 'planning',
-      relatedId: '2',
-    },
-    {
-      id: 'evt-3',
-      title: 'مراجعة ISO الخارجية',
-      titleEn: 'External ISO Audit',
-      type: 'audit',
-      date: '2026-02-20',
-      endDate: '2026-02-22',
-      departmentId: 'dept-2',
-      description: 'تجديد شهادة ISO 9001:2015',
-      priority: 'critical',
-      status: 'planning',
-      relatedId: '3',
-    },
-    // Finding due dates
-    {
-      id: 'evt-4',
-      title: 'موعد إغلاق ملاحظة - توثيق الصيانة',
-      titleEn: 'Finding Due - Maintenance Documentation',
-      type: 'finding_due',
-      date: '2026-02-15',
-      departmentId: 'dept-3',
-      description: 'عدم توثيق بعض إجراءات الصيانة الوقائية',
-      priority: 'high',
-      status: 'open',
-      relatedId: 'f1',
-    },
-    {
-      id: 'evt-5',
-      title: 'موعد إغلاق ملاحظة - السجلات',
-      titleEn: 'Finding Due - Records',
-      type: 'finding_due',
-      date: '2026-02-08',
-      departmentId: 'dept-1',
-      description: 'نقص في سجلات التدريب',
-      priority: 'medium',
-      status: 'in_progress',
-      relatedId: 'f2',
-    },
-    {
-      id: 'evt-6',
-      title: 'اجتماع مراجعة الإدارة',
-      titleEn: 'Management Review Meeting',
-      type: 'meeting',
-      date: '2026-02-25',
-      description: 'اجتماع مراجعة الإدارة الربع سنوي',
-      priority: 'high',
-    },
-    {
-      id: 'evt-7',
-      title: 'موعد تجديد الشهادة',
-      titleEn: 'Certificate Renewal Deadline',
-      type: 'deadline',
-      date: '2026-03-01',
-      description: 'آخر موعد لتجديد شهادة ISO 9001',
-      priority: 'critical',
-    },
-    // More events for February
-    {
-      id: 'evt-8',
-      title: 'مراجعة المشتريات',
-      titleEn: 'Procurement Audit',
-      type: 'audit',
-      date: '2026-02-17',
-      endDate: '2026-02-18',
-      departmentId: 'dept-4',
-      description: 'مراجعة عمليات الشراء والموردين',
-      priority: 'medium',
-      status: 'planning',
-    },
-    {
-      id: 'evt-9',
-      title: 'موعد تسليم تقرير الجودة',
-      titleEn: 'Quality Report Deadline',
-      type: 'deadline',
-      date: '2026-02-28',
-      description: 'تسليم تقرير الجودة الشهري',
-      priority: 'medium',
-    },
-  ];
+// Helper function to get priority from severity
+const getPriorityFromSeverity = (severity: string): 'low' | 'medium' | 'high' | 'critical' => {
+  switch (severity) {
+    case 'critical': return 'critical';
+    case 'major': return 'high';
+    case 'minor': return 'medium';
+    case 'observation': return 'low';
+    default: return 'medium';
+  }
 };
 
 export default function CalendarPage() {
@@ -183,22 +83,22 @@ export default function CalendarPage() {
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
 
-  // Load events
+  // Load events from actual audits and findings data
   useEffect(() => {
-    // In real app, load from localStorage or API
-    const storedAudits = localStorage.getItem('qms_audits');
-    let loadedEvents = generateEvents();
+    const loadedEvents: CalendarEvent[] = [];
 
+    // Load audits from localStorage
+    const storedAudits = localStorage.getItem('qms_audits');
     if (storedAudits) {
       try {
         const audits = JSON.parse(storedAudits);
-        // Add audits as events
         audits.forEach((audit: any) => {
+          // Add audit as event
           if (audit.startDate) {
             loadedEvents.push({
               id: `audit-${audit.id}`,
-              title: audit.titleAr,
-              titleEn: audit.titleEn,
+              title: audit.titleAr || audit.title || 'مراجعة',
+              titleEn: audit.titleEn || audit.title || 'Audit',
               type: 'audit',
               date: audit.startDate,
               endDate: audit.endDate,
@@ -209,13 +109,51 @@ export default function CalendarPage() {
               relatedId: audit.id,
             });
           }
+
+          // Add findings from this audit as events
+          if (audit.findings && Array.isArray(audit.findings)) {
+            audit.findings.forEach((finding: any) => {
+              if (finding.estimatedClosingDate || finding.dueDate) {
+                loadedEvents.push({
+                  id: `finding-${finding.id}`,
+                  title: `موعد إغلاق: ${finding.finding || finding.titleAr || 'ملاحظة'}`.substring(0, 50),
+                  titleEn: `Due: ${finding.finding || finding.titleEn || 'Finding'}`.substring(0, 50),
+                  type: 'finding_due',
+                  date: finding.estimatedClosingDate || finding.dueDate,
+                  departmentId: finding.departmentId || audit.departmentId,
+                  description: finding.evidence || finding.descriptionAr || '',
+                  priority: getPriorityFromSeverity(finding.categoryB === 'major_nc' ? 'major' : finding.categoryB === 'minor_nc' ? 'minor' : 'observation'),
+                  status: finding.status || 'open',
+                  relatedId: finding.id,
+                });
+              }
+            });
+          }
         });
       } catch (e) {
-        console.error('Error loading audits for calendar');
+        console.error('Error loading audits for calendar:', e);
       }
     }
 
+    // No demo data - only show actual data from localStorage
+
     setEvents(loadedEvents);
+
+    // Listen for storage changes to refresh data
+    const handleStorageChange = () => {
+      // Re-run the effect to reload data
+      const newAudits = localStorage.getItem('qms_audits');
+      if (newAudits) {
+        // Trigger re-render
+        setEvents([]);
+        setTimeout(() => {
+          window.location.reload();
+        }, 100);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   // Filter events based on user role and permissions

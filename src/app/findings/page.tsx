@@ -34,91 +34,7 @@ import { departments as allDepartments, sections as allSections, users as allUse
 import { OneDrivePicker } from '@/components/ui/OneDrivePicker';
 import type { OneDriveFile } from '@/lib/onedrive';
 
-// Demo data
-const findings = [
-  {
-    id: '1',
-    number: 'AUD-2026-0001-F01',
-    auditNumber: 'AUD-2026-0001',
-    titleAr: 'عدم تحديث إجراء الصيانة',
-    titleEn: 'Maintenance Procedure Not Updated',
-    descriptionAr: 'لم يتم تحديث إجراء الصيانة الوقائية منذ أكثر من عام',
-    descriptionEn: 'Preventive maintenance procedure has not been updated for over a year',
-    severity: 'minor',
-    status: 'open',
-    clause: '7.1.3',
-    responsibleAr: 'محمد العلي',
-    responsibleEn: 'Mohammed Al-Ali',
-    dueDate: '2026-02-10',
-    createdAt: '2026-01-25',
-  },
-  {
-    id: '2',
-    number: 'AUD-2026-0001-F02',
-    auditNumber: 'AUD-2026-0001',
-    titleAr: 'نقص في تدريب الموظفين',
-    titleEn: 'Lack of Employee Training',
-    descriptionAr: 'لم يتم تدريب الموظفين الجدد على إجراءات الجودة',
-    descriptionEn: 'New employees have not been trained on quality procedures',
-    severity: 'major',
-    status: 'in_progress',
-    clause: '7.2',
-    responsibleAr: 'سارة الحمد',
-    responsibleEn: 'Sarah Al-Hamad',
-    dueDate: '2026-02-05',
-    createdAt: '2026-01-25',
-  },
-  {
-    id: '3',
-    number: 'AUD-2026-0001-F03',
-    auditNumber: 'AUD-2026-0001',
-    titleAr: 'عدم وجود سجلات المعايرة',
-    titleEn: 'Missing Calibration Records',
-    descriptionAr: 'لا توجد سجلات معايرة لأجهزة القياس',
-    descriptionEn: 'Calibration records for measuring devices are missing',
-    severity: 'critical',
-    status: 'open',
-    clause: '7.1.5',
-    responsibleAr: 'عبدالله الزهراني',
-    responsibleEn: 'Abdullah Al-Zahrani',
-    dueDate: '2026-02-01',
-    createdAt: '2026-01-25',
-  },
-  {
-    id: '4',
-    number: 'AUD-2025-0012-F01',
-    auditNumber: 'AUD-2025-0012',
-    titleAr: 'تأخر في تقييم الموردين',
-    titleEn: 'Delayed Supplier Evaluation',
-    descriptionAr: 'لم يتم تقييم الموردين في الوقت المحدد',
-    descriptionEn: 'Supplier evaluation was not completed on time',
-    severity: 'minor',
-    status: 'closed',
-    clause: '8.4.1',
-    responsibleAr: 'فهد المالكي',
-    responsibleEn: 'Fahad Al-Maliki',
-    dueDate: '2025-12-30',
-    closedAt: '2025-12-28',
-    createdAt: '2025-12-10',
-  },
-  {
-    id: '5',
-    number: 'AUD-2025-0012-F02',
-    auditNumber: 'AUD-2025-0012',
-    titleAr: 'ملاحظة: تحسين نموذج الطلب',
-    titleEn: 'Observation: Improve Request Form',
-    descriptionAr: 'يمكن تحسين نموذج طلب الشراء لتسهيل العملية',
-    descriptionEn: 'Purchase request form can be improved to facilitate the process',
-    severity: 'observation',
-    status: 'verified',
-    clause: '8.4.2',
-    responsibleAr: 'خالد السعيد',
-    responsibleEn: 'Khalid Al-Saeed',
-    dueDate: '2026-01-15',
-    closedAt: '2026-01-10',
-    createdAt: '2025-12-10',
-  },
-];
+// No demo data - only actual data from localStorage
 
 // Finding interface
 interface Finding {
@@ -234,8 +150,8 @@ export default function FindingsPage() {
     return dept ? (lang === 'ar' ? dept.nameAr : dept.nameEn) : '';
   };
 
-  // Combined findings (demo + from audits) - sorted by newest first
-  const combinedFindings = [...findings, ...allFindings].sort((a, b) => {
+  // All findings from audits - sorted by newest first
+  const combinedFindings = [...allFindings].sort((a, b) => {
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
 
