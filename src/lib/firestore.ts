@@ -409,14 +409,16 @@ export const getActiveSessions = async (): Promise<any[]> => {
   }
 };
 
-// Update last activity for a session
+// Update last activity for a session (v2 - fixed to use setDoc with merge)
 export const updateSessionActivity = async (userId: string): Promise<boolean> => {
   try {
     const sessionRef = doc(db, COLLECTIONS.ACTIVE_SESSIONS, userId);
-    // Use setDoc with merge to create or update the session
+    // Use setDoc with merge to create or update the session (prevents "No document to update" error)
     await setDoc(sessionRef, {
+      userId: userId,
       lastActivity: new Date().toISOString(),
     }, { merge: true });
+    console.log('Session activity updated for:', userId);
     return true;
   } catch (error) {
     console.error('Error updating session activity:', error);
