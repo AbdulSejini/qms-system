@@ -24,6 +24,11 @@ import {
   Plus,
   Eye,
   ListChecks,
+  Wifi,
+  WifiOff,
+  ChevronDown,
+  ChevronUp,
+  User as UserIcon,
 } from 'lucide-react';
 
 // Types
@@ -59,6 +64,15 @@ interface RecentFinding {
   dueDate: string;
 }
 
+interface ActiveSession {
+  id: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  loginAt: string;
+  lastActivity?: string;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const { t, language, isRTL } = useTranslation();
@@ -78,6 +92,11 @@ export default function DashboardPage() {
   const [recentAudits, setRecentAudits] = useState<RecentAudit[]>([]);
   const [recentFindings, setRecentFindings] = useState<RecentFinding[]>([]);
   const [upcomingTasks, setUpcomingTasks] = useState<any[]>([]);
+  const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
+  const [showActiveSessions, setShowActiveSessions] = useState(true);
+
+  // تحقق إذا كان المستخدم الحالي مدير النظام
+  const isSystemAdmin = currentUser?.role === 'system_admin';
 
   // Load dashboard data
   useEffect(() => {
@@ -214,6 +233,61 @@ export default function DashboardPage() {
     return () => window.removeEventListener('storage', loadDashboardData);
   }, [language]);
 
+  // تحميل الجلسات النشطة (لمدير النظام فقط)
+  useEffect(() => {
+    if (!isSystemAdmin) return;
+
+    const loadActiveSessions = () => {
+      const sessions: ActiveSession[] = [];
+      const storedUsers = localStorage.getItem('qms_users');
+      const users = storedUsers ? JSON.parse(storedUsers) : [];
+
+      // الجلسة الحالية (مدير النظام)
+      const currentSession = localStorage.getItem('qms_session');
+      if (currentSession) {
+        const sessionData = JSON.parse(currentSession);
+        sessions.push({
+          id: 'current',
+          userId: currentUser?.id || 'user-1',
+          userName: language === 'ar' ? (currentUser?.fullNameAr || 'مدير النظام') : (currentUser?.fullNameEn || 'System Admin'),
+          userRole: 'system_admin',
+          loginAt: sessionData.loginAt,
+          lastActivity: new Date().toISOString(),
+        });
+      }
+
+      // تحميل جلسات المستخدمين الآخرين من localStorage
+      const allSessions = localStorage.getItem('qms_active_sessions');
+      if (allSessions) {
+        const parsedSessions = JSON.parse(allSessions);
+        parsedSessions.forEach((session: any) => {
+          if (session.userId !== currentUser?.id) {
+            const user = users.find((u: any) => u.id === session.userId);
+            if (user) {
+              sessions.push({
+                id: session.id || session.userId,
+                userId: session.userId,
+                userName: language === 'ar' ? user.fullNameAr : user.fullNameEn,
+                userRole: user.role,
+                loginAt: session.loginAt,
+                lastActivity: session.lastActivity,
+              });
+            }
+          }
+        });
+      }
+
+      setActiveSessions(sessions);
+    };
+
+    loadActiveSessions();
+
+    // تحديث كل 30 ثانية
+    const interval = setInterval(loadActiveSessions, 30000);
+
+    return () => clearInterval(interval);
+  }, [isSystemAdmin, currentUser, language]);
+
   const getStatusBadge = (status: string) => {
     const statusMap: Record<string, { variant: any; label: string }> = {
       planning: { variant: 'secondary', label: language === 'ar' ? 'تخطيط' : 'Planning' },
@@ -241,6 +315,38 @@ export default function DashboardPage() {
   };
 
   const Arrow = isRTL ? ArrowLeft : ArrowRight;
+
+  // دالة للحصول على اسم الدور
+  const getRoleName = (role: string) => {
+    const roleNames: Record<string, { ar: string; en: string }> = {
+      system_admin: { ar: 'مدير النظام', en: 'System Admin' },
+      quality_manager: { ar: 'مدير الجودة', en: 'Quality Manager' },
+      auditor: { ar: 'مراجع', en: 'Auditor' },
+      department_manager: { ar: 'مدير إدارة', en: 'Dept. Manager' },
+      section_head: { ar: 'رئيس قسم', en: 'Section Head' },
+      employee: { ar: 'موظف', en: 'Employee' },
+    };
+    return language === 'ar' ? roleNames[role]?.ar || role : roleNames[role]?.en || role;
+  };
+
+  // دالة لحساب الوقت المنقضي
+  const getTimeAgo = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+    if (diff < 60) return language === 'ar' ? 'الآن' : 'Now';
+    if (diff < 3600) {
+      const mins = Math.floor(diff / 60);
+      return language === 'ar' ? `منذ ${mins} دقيقة` : `${mins}m ago`;
+    }
+    if (diff < 86400) {
+      const hours = Math.floor(diff / 3600);
+      return language === 'ar' ? `منذ ${hours} ساعة` : `${hours}h ago`;
+    }
+    const days = Math.floor(diff / 86400);
+    return language === 'ar' ? `منذ ${days} يوم` : `${days}d ago`;
+  };
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -275,6 +381,85 @@ export default function DashboardPage() {
             </Button>
           </div>
         </div>
+
+        {/* Active Sessions - لمدير النظام فقط */}
+        {isSystemAdmin && (
+          <Card className="border-green-200 dark:border-green-800/50">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <div className="relative">
+                    <Wifi className="h-5 w-5 text-green-600 dark:text-green-400" />
+                    <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-green-500 animate-pulse" />
+                  </div>
+                  {language === 'ar' ? 'المستخدمين المتصلين' : 'Active Users'}
+                  <span className="text-sm font-normal text-[var(--foreground-secondary)]">
+                    ({activeSessions.length})
+                  </span>
+                </CardTitle>
+                <button
+                  onClick={() => setShowActiveSessions(!showActiveSessions)}
+                  className="p-1.5 rounded-lg hover:bg-[var(--background-tertiary)] transition-colors"
+                  title={showActiveSessions ? (language === 'ar' ? 'إخفاء' : 'Hide') : (language === 'ar' ? 'إظهار' : 'Show')}
+                >
+                  {showActiveSessions ? (
+                    <ChevronUp className="h-4 w-4 text-[var(--foreground-secondary)]" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-[var(--foreground-secondary)]" />
+                  )}
+                </button>
+              </div>
+            </CardHeader>
+            {showActiveSessions && (
+              <CardContent className="pt-0">
+                {activeSessions.length > 0 ? (
+                  <div className="space-y-2">
+                    {activeSessions.map((session) => (
+                      <div
+                        key={session.id}
+                        className="flex items-center justify-between rounded-lg bg-[var(--background-secondary)] p-3"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="relative">
+                            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-semibold text-sm">
+                              {session.userName.charAt(0)}
+                            </div>
+                            <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full bg-green-500 ring-2 ring-[var(--background-secondary)]" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-sm text-[var(--foreground)]">
+                              {session.userName}
+                              {session.id === 'current' && (
+                                <span className="ms-2 text-xs text-green-600 dark:text-green-400">
+                                  ({language === 'ar' ? 'أنت' : 'You'})
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-[var(--foreground-secondary)]">
+                              {getRoleName(session.userRole)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-end">
+                          <p className="text-xs text-[var(--foreground-secondary)]">
+                            {getTimeAgo(session.lastActivity || session.loginAt)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-4 text-center">
+                    <WifiOff className="h-8 w-8 text-[var(--foreground-muted)] mb-2" />
+                    <p className="text-sm text-[var(--foreground-secondary)]">
+                      {language === 'ar' ? 'لا يوجد مستخدمين متصلين' : 'No active users'}
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            )}
+          </Card>
+        )}
 
         {/* Stats Grid */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

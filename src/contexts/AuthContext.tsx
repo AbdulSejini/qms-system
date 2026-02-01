@@ -245,20 +245,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     // حفظ الجلسة
-    setCurrentUserId(user.id);
-    localStorage.setItem('qms_session', JSON.stringify({
+    const sessionData = {
       userId: user.id,
       loginAt: new Date().toISOString(),
-    }));
+    };
+    setCurrentUserId(user.id);
+    localStorage.setItem('qms_session', JSON.stringify(sessionData));
+
+    // إضافة للجلسات النشطة
+    const activeSessions = JSON.parse(localStorage.getItem('qms_active_sessions') || '[]');
+    const existingIndex = activeSessions.findIndex((s: any) => s.userId === user.id);
+    const newSession = {
+      id: `session-${Date.now()}`,
+      userId: user.id,
+      loginAt: sessionData.loginAt,
+      lastActivity: new Date().toISOString(),
+    };
+    if (existingIndex >= 0) {
+      activeSessions[existingIndex] = newSession;
+    } else {
+      activeSessions.push(newSession);
+    }
+    localStorage.setItem('qms_active_sessions', JSON.stringify(activeSessions));
 
     return true;
   }, []);
 
   // تسجيل الخروج
   const logout = useCallback(() => {
+    // إزالة من الجلسات النشطة
+    if (currentUserId) {
+      const activeSessions = JSON.parse(localStorage.getItem('qms_active_sessions') || '[]');
+      const filteredSessions = activeSessions.filter((s: any) => s.userId !== currentUserId);
+      localStorage.setItem('qms_active_sessions', JSON.stringify(filteredSessions));
+    }
+
     setCurrentUserId(null);
     localStorage.removeItem('qms_session');
-  }, []);
+  }, [currentUserId]);
 
   // تبديل المستخدم (لمدير النظام فقط)
   const switchUser = useCallback((userId: string) => {
