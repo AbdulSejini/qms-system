@@ -122,11 +122,28 @@ export default function DepartmentsPage() {
     );
   }, [departmentsData, searchQuery]);
 
+  // تحميل المستخدمين من localStorage (باستثناء مدير النظام)
+  const [usersCount, setUsersCount] = useState(0);
+
+  useEffect(() => {
+    const storedUsers = localStorage.getItem('qms_users');
+    if (storedUsers) {
+      const allUsers = JSON.parse(storedUsers);
+      // استبعاد مدير النظام من الإحصائيات
+      const regularUsers = allUsers.filter((u: any) => u.role !== 'system_admin' && u.isActive);
+      setUsersCount(regularUsers.length);
+    } else {
+      // من البيانات الافتراضية - استبعاد مدير النظام
+      const regularUsers = users.filter(u => u.role !== 'system_admin' && u.isActive);
+      setUsersCount(regularUsers.length);
+    }
+  }, []);
+
   // Stats
   const stats = {
     departments: departmentsData.length,
     sections: sectionsData.length,
-    employees: users.length,
+    employees: usersCount,
   };
 
   const Arrow = isRTL ? ChevronLeft : ChevronRight;
