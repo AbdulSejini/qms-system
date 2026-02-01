@@ -669,12 +669,13 @@ export default function AuditDetailPage() {
 
   // Save audit changes to Firestore
   const saveAudit = async (updatedAudit: Audit) => {
-    // Update in Firestore
+    // Update in Firestore - include all important fields
     await updateAuditInFirestore(auditId, {
       titleAr: updatedAudit.titleAr,
       titleEn: updatedAudit.titleEn,
       type: updatedAudit.type,
       status: updatedAudit.status as any,
+      currentStage: updatedAudit.currentStage, // Important: save the current stage
       departmentId: updatedAudit.departmentId,
       sectionId: updatedAudit.sectionId,
       leadAuditorId: updatedAudit.leadAuditorId,
@@ -684,6 +685,10 @@ export default function AuditDetailPage() {
       objectives: updatedAudit.objective,
       scope: updatedAudit.scope,
       findings: updatedAudit.findings,
+      questions: updatedAudit.questions, // Save questions with answers
+      qmsApproval: updatedAudit.qmsApproval, // Save QMS approval data
+      qmsApprovalData: updatedAudit.qmsApprovalData, // Save detailed QMS approval data
+      activityLog: updatedAudit.activityLog, // Save activity log
     });
     setAudit(updatedAudit);
   };

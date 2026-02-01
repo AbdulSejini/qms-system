@@ -599,7 +599,8 @@ export interface Audit {
   titleAr: string;
   titleEn: string;
   type: 'internal' | 'external' | 'surveillance' | 'certification';
-  status: 'draft' | 'pending_approval' | 'approved' | 'in_progress' | 'completed' | 'cancelled' | 'postponed';
+  status: 'draft' | 'pending_approval' | 'approved' | 'in_progress' | 'completed' | 'cancelled' | 'postponed' | 'planning' | 'execution' | 'qms_review' | 'corrective_actions' | 'verification';
+  currentStage?: number; // 0=planning, 1=execution, 2=qms_review, 3=corrective_actions, 4=verification, 5=completed
   departmentId: string;
   sectionId?: string;
   leadAuditorId: string;
@@ -609,7 +610,11 @@ export interface Audit {
   objectives?: string;
   scope?: string;
   criteria?: string;
+  questions?: any[]; // Audit questions with answers
   findings?: any[];
+  qmsApproval?: any; // QMS approval data
+  qmsApprovalData?: any; // Detailed QMS approval data
+  activityLog?: any[]; // Activity log
   createdBy: string;
   createdAt: string;
   updatedAt: string;
