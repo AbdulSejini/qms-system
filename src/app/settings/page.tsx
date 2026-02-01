@@ -18,6 +18,9 @@ import {
   Save,
   Check,
   AlertCircle,
+  Trash2,
+  Database,
+  RefreshCw,
 } from 'lucide-react';
 
 export default function SettingsPage() {
@@ -39,6 +42,14 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState(false);
+
+  // حالة مسح البيانات
+  const [showClearDataConfirm, setShowClearDataConfirm] = useState(false);
+  const [clearDataSuccess, setClearDataSuccess] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+
+  // تحقق من أن المستخدم مدير النظام
+  const isSystemAdmin = currentUser?.role === 'system_admin';
 
   // تحميل بيانات المستخدم
   useEffect(() => {
@@ -128,6 +139,24 @@ export default function SettingsPage() {
       setConfirmPassword('');
       setTimeout(() => setPasswordSuccess(false), 3000);
     }
+  };
+
+  // مسح بيانات المراجعات
+  const handleClearAuditsData = () => {
+    setIsClearing(true);
+
+    // مسح بيانات المراجعات فقط
+    localStorage.removeItem('qms_audits');
+
+    setClearDataSuccess(true);
+    setShowClearDataConfirm(false);
+    setIsClearing(false);
+
+    setTimeout(() => {
+      setClearDataSuccess(false);
+      // إعادة تحميل الصفحة لتحديث البيانات
+      window.location.reload();
+    }, 2000);
   };
 
   return (
@@ -300,6 +329,57 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
+          {/* Data Management - لمدير النظام فقط */}
+          {isSystemAdmin && (
+            <Card className="border-red-200 dark:border-red-800/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Database className="h-5 w-5 text-red-500" />
+                  {language === 'ar' ? 'إدارة البيانات' : 'Data Management'}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4">
+                  <p className="text-sm text-amber-700 dark:text-amber-300">
+                    {language === 'ar'
+                      ? 'تحذير: مسح البيانات لا يمكن التراجع عنه. تأكد من حفظ نسخة احتياطية قبل المتابعة.'
+                      : 'Warning: Data deletion cannot be undone. Make sure to backup before proceeding.'}
+                  </p>
+                </div>
+
+                {clearDataSuccess && (
+                  <div className="flex items-center gap-2 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-3">
+                    <Check className="h-4 w-4 text-green-500" />
+                    <span className="text-sm text-green-600 dark:text-green-400">
+                      {language === 'ar' ? 'تم مسح البيانات بنجاح' : 'Data cleared successfully'}
+                    </span>
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  <button
+                    onClick={() => setShowClearDataConfirm(true)}
+                    className="flex w-full items-center justify-between rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-4 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Trash2 className="h-5 w-5" />
+                      <div className="text-start">
+                        <p className="font-medium">
+                          {language === 'ar' ? 'مسح بيانات المراجعات' : 'Clear Audits Data'}
+                        </p>
+                        <p className="text-xs opacity-70">
+                          {language === 'ar'
+                            ? 'حذف جميع المراجعات والملاحظات والمتابعات'
+                            : 'Delete all audits, findings, and follow-ups'}
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Security Settings */}
           <Card>
             <CardHeader>
@@ -397,6 +477,61 @@ export default function SettingsPage() {
               : (language === 'ar' ? 'حفظ التغييرات' : 'Save Changes')}
           </Button>
         </div>
+
+        {/* نافذة تأكيد مسح البيانات */}
+        {showClearDataConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+              onClick={() => setShowClearDataConfirm(false)}
+            />
+            <div className="relative w-full max-w-md rounded-2xl bg-[var(--card)] p-6 shadow-xl">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+                  <Trash2 className="h-6 w-6 text-red-600 dark:text-red-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-[var(--foreground)]">
+                    {language === 'ar' ? 'تأكيد مسح البيانات' : 'Confirm Data Deletion'}
+                  </h3>
+                  <p className="text-sm text-[var(--foreground-secondary)]">
+                    {language === 'ar'
+                      ? 'سيتم حذف جميع المراجعات والملاحظات'
+                      : 'All audits and findings will be deleted'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-4 mb-6">
+                <p className="text-sm text-red-700 dark:text-red-300">
+                  {language === 'ar'
+                    ? 'هذا الإجراء لا يمكن التراجع عنه!'
+                    : 'This action cannot be undone!'}
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowClearDataConfirm(false)}
+                  disabled={isClearing}
+                >
+                  {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={handleClearAuditsData}
+                  disabled={isClearing}
+                  leftIcon={isClearing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                >
+                  {isClearing
+                    ? (language === 'ar' ? 'جاري المسح...' : 'Clearing...')
+                    : (language === 'ar' ? 'مسح البيانات' : 'Clear Data')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </DashboardLayout>
   );
