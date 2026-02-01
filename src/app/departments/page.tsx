@@ -129,12 +129,12 @@ export default function DepartmentsPage() {
     const storedUsers = localStorage.getItem('qms_users');
     if (storedUsers) {
       const allUsers = JSON.parse(storedUsers);
-      // استبعاد مدير النظام من الإحصائيات
-      const regularUsers = allUsers.filter((u: any) => u.role !== 'system_admin' && u.isActive);
+      // استبعاد حسابات النظام المخفية من الإحصائيات
+      const regularUsers = allUsers.filter((u: any) => !u.isSystemAccount && u.isActive);
       setUsersCount(regularUsers.length);
     } else {
-      // من البيانات الافتراضية - استبعاد مدير النظام
-      const regularUsers = users.filter(u => u.role !== 'system_admin' && u.isActive);
+      // من البيانات الافتراضية - استبعاد حسابات النظام
+      const regularUsers = users.filter(u => !(u as any).isSystemAccount && u.isActive);
       setUsersCount(regularUsers.length);
     }
   }, []);

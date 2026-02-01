@@ -123,7 +123,8 @@ export function Sidebar({ isCollapsed, onToggle, isMobileOpen, onMobileClose }: 
     const loadActiveSessions = () => {
       const sessions: ActiveSession[] = [];
       const storedUsers = localStorage.getItem('qms_users');
-      const users = storedUsers ? JSON.parse(storedUsers) : [];
+      // إخفاء حسابات النظام
+      const users = storedUsers ? JSON.parse(storedUsers).filter((u: any) => !u.isSystemAccount) : [];
 
       // الجلسة الحالية
       const currentSession = localStorage.getItem('qms_session');

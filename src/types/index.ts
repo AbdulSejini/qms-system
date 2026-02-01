@@ -153,6 +153,7 @@ export interface User {
   jobTitleEn?: string;
 
   isActive: boolean;
+  isSystemAccount?: boolean; // حساب نظام مخفي - لا يظهر في الإحصائيات والقوائم
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;

@@ -75,7 +75,8 @@ export default function PerformancePage() {
 
       try {
         const audits = JSON.parse(storedAudits);
-        const users = storedUsers ? JSON.parse(storedUsers) : [];
+        // إخفاء حسابات النظام
+        const users = storedUsers ? JSON.parse(storedUsers).filter((u: any) => !u.isSystemAccount) : [];
         const departments = storedDepartments ? JSON.parse(storedDepartments) : [];
 
         // Calculate auditor performance

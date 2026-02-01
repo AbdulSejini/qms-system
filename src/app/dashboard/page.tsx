@@ -94,7 +94,8 @@ export default function DashboardPage() {
         audits = JSON.parse(storedAudits);
       }
       if (storedUsers) {
-        users = JSON.parse(storedUsers);
+        // إخفاء حسابات النظام من الإحصائيات
+        users = JSON.parse(storedUsers).filter((u: any) => !u.isSystemAccount);
       }
       if (storedDepartments) {
         departments = JSON.parse(storedDepartments);
@@ -134,7 +135,7 @@ export default function DashboardPage() {
         openFindings,
         overdueFindings,
         closedFindings,
-        totalUsers: users.length + 1, // +1 for default admin
+        totalUsers: users.length,
         totalDepartments: departments.length,
       });
 
@@ -254,7 +255,9 @@ export default function DashboardPage() {
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 p-6 rounded-2xl bg-gradient-to-r from-[var(--primary)] to-[var(--primary-hover)] text-white">
           <div>
             <h1 className="text-2xl font-bold">
-              {getGreeting()}، {currentUser?.fullNameAr || currentUser?.fullNameEn || (language === 'ar' ? 'مدير النظام' : 'System Admin')}
+              {getGreeting()}، {language === 'ar'
+                ? (currentUser?.fullNameAr || currentUser?.fullNameEn || 'مدير النظام')
+                : (currentUser?.fullNameEn || currentUser?.fullNameAr || 'System Admin')}
             </h1>
             <p className="text-white/80 mt-1">
               {language === 'ar'

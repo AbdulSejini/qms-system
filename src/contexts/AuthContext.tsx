@@ -14,12 +14,14 @@ import {
 // مدير النظام الرئيسي - بيانات ثابتة ومحمية
 // ===========================================
 
+const SYSTEM_ADMIN_ID = 'system-admin-root';
+
 const SYSTEM_ADMIN: User = {
-  id: 'user-1',
-  employeeNumber: 'EMP-0001',
+  id: SYSTEM_ADMIN_ID,
+  employeeNumber: 'SYS-0001',
   email: 'abdul.sejini@gmail.com',
-  fullNameAr: 'عبدالإله سجيني',
-  fullNameEn: 'Abdul Sejini',
+  fullNameAr: 'مدير النظام',
+  fullNameEn: 'System Administrator',
   role: 'system_admin',
   departmentId: '',
   sectionId: '',
@@ -30,11 +32,38 @@ const SYSTEM_ADMIN: User = {
   jobTitleAr: 'مدير النظام',
   jobTitleEn: 'System Administrator',
   isActive: true,
+  isSystemAccount: true, // حساب نظام مخفي
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
 };
 
 const SYSTEM_ADMIN_PASSWORD = 'Doha@1988';
+
+// ===========================================
+// تهيئة مدير النظام في localStorage
+// ===========================================
+const initializeSystemAdmin = () => {
+  if (typeof window === 'undefined') return;
+
+  // التأكد من وجود مدير النظام في قائمة المستخدمين
+  const storedUsers = localStorage.getItem('qms_users');
+  let users: User[] = storedUsers ? JSON.parse(storedUsers) : [];
+
+  const hasSystemAdmin = users.some((u: User) => u.id === SYSTEM_ADMIN_ID);
+  if (!hasSystemAdmin) {
+    users = [SYSTEM_ADMIN, ...users];
+    localStorage.setItem('qms_users', JSON.stringify(users));
+  }
+
+  // التأكد من وجود كلمة مرور مدير النظام
+  const storedPasswords = localStorage.getItem('qms_passwords');
+  const passwords: Record<string, string> = storedPasswords ? JSON.parse(storedPasswords) : {};
+
+  if (!passwords[SYSTEM_ADMIN_ID]) {
+    passwords[SYSTEM_ADMIN_ID] = SYSTEM_ADMIN_PASSWORD;
+    localStorage.setItem('qms_passwords', JSON.stringify(passwords));
+  }
+};
 
 // ===========================================
 // Context Types
@@ -86,26 +115,27 @@ interface AuthContextType {
 // Helper Functions
 // ===========================================
 
-// الحصول على جميع المستخدمين من localStorage + مدير النظام
+// الحصول على جميع المستخدمين من localStorage
 const getAllUsers = (): User[] => {
-  if (typeof window === 'undefined') return [SYSTEM_ADMIN];
+  if (typeof window === 'undefined') return [];
+
+  // تهيئة مدير النظام أولاً
+  initializeSystemAdmin();
   const stored = localStorage.getItem('qms_users');
   if (stored) {
-    const storedUsers = JSON.parse(stored);
-    // تأكد من وجود مدير النظام دائماً
-    const hasAdmin = storedUsers.some((u: User) => u.id === SYSTEM_ADMIN.id);
-    if (!hasAdmin) {
-      return [SYSTEM_ADMIN, ...storedUsers];
-    }
-    // تحديث بيانات مدير النظام في حالة تغيرها
-    return storedUsers.map((u: User) => u.id === SYSTEM_ADMIN.id ? SYSTEM_ADMIN : u);
+    return JSON.parse(stored);
   }
-  return [SYSTEM_ADMIN];
+  return [];
+};
+
+// الحصول على المستخدمين المرئيين (بدون حسابات النظام المخفية)
+const getVisibleUsers = (): User[] => {
+  const allUsers = getAllUsers();
+  return allUsers.filter(u => !u.isSystemAccount);
 };
 
 // الحصول على مستخدم بواسطة الـ ID
 const getUserByIdFromStorage = (userId: string): User | undefined => {
-  if (userId === SYSTEM_ADMIN.id) return SYSTEM_ADMIN;
   const users = getAllUsers();
   return users.find(u => u.id === userId);
 };
@@ -138,22 +168,21 @@ const getSectionByIdFromStorage = (sectionId: string): Section | undefined => {
 
 // الحصول على كلمات المرور من localStorage
 const getPasswords = (): Record<string, string> => {
-  if (typeof window === 'undefined') return { [SYSTEM_ADMIN.id]: SYSTEM_ADMIN_PASSWORD };
+  if (typeof window === 'undefined') return {};
+
+  // تهيئة مدير النظام أولاً
+  initializeSystemAdmin();
+
   const stored = localStorage.getItem('qms_passwords');
   if (stored) {
-    const passwords = JSON.parse(stored);
-    // تأكد من وجود كلمة مرور مدير النظام دائماً
-    passwords[SYSTEM_ADMIN.id] = SYSTEM_ADMIN_PASSWORD;
-    return passwords;
+    return JSON.parse(stored);
   }
-  return { [SYSTEM_ADMIN.id]: SYSTEM_ADMIN_PASSWORD };
+  return {};
 };
 
 // حفظ كلمات المرور
 const savePasswords = (passwords: Record<string, string>) => {
   if (typeof window !== 'undefined') {
-    // لا تسمح بتغيير كلمة مرور مدير النظام
-    passwords[SYSTEM_ADMIN.id] = SYSTEM_ADMIN_PASSWORD;
     localStorage.setItem('qms_passwords', JSON.stringify(passwords));
   }
 };
@@ -209,49 +238,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // تسجيل الدخول
   const login = useCallback(async (username: string, password: string): Promise<boolean> => {
-    // التحقق من مدير النظام أولاً (بيانات ثابتة)
-    if (username.toLowerCase() === SYSTEM_ADMIN.email.toLowerCase()) {
-      if (password === SYSTEM_ADMIN_PASSWORD) {
-        setCurrentUserId(SYSTEM_ADMIN.id);
-        localStorage.setItem('qms_session', JSON.stringify({
-          userId: SYSTEM_ADMIN.id,
-          loginAt: new Date().toISOString(),
-        }));
-        return true;
-      }
-      return false;
-    }
-
-    // البحث في المستخدمين الآخرين
+    // البحث في جميع المستخدمين (بما فيهم مدير النظام)
     const users = getAllUsers();
     const passwords = getPasswords();
-
-    // تسجيل للتشخيص (يمكن إزالته لاحقاً)
-    console.log('Login attempt:', { username, usersCount: users.length });
-    console.log('Available users:', users.map(u => ({ id: u.id, email: u.email, isActive: u.isActive })));
-    console.log('Passwords available for:', Object.keys(passwords));
 
     // البحث عن المستخدم بالبريد الإلكتروني
     const user = users.find(
       (u) =>
         u.isActive &&
-        u.id !== SYSTEM_ADMIN.id &&
         u.email.toLowerCase() === username.toLowerCase()
     );
 
-    console.log('Found user:', user ? { id: user.id, email: user.email } : 'Not found');
-
     if (!user) {
-      console.log('User not found or inactive');
       return false;
     }
 
     // التحقق من كلمة المرور
     const userPassword = passwords[user.id];
-    console.log('Password check:', { userId: user.id, hasPassword: !!userPassword, passwordMatch: userPassword === password });
 
     if (!userPassword || userPassword !== password) {
-      console.log('Password mismatch');
       return false;
     }
 
@@ -313,8 +318,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const resetUserPassword = useCallback((userId: string): boolean => {
     if (!currentUser) return false;
 
-    // لا يمكن إعادة تعيين كلمة مرور مدير النظام
-    if (userId === SYSTEM_ADMIN.id) return false;
+    // لا يمكن إعادة تعيين كلمة مرور حساب نظام
+    const targetUser = getUserByIdFromStorage(userId);
+    if (targetUser?.isSystemAccount) return false;
 
     // التحقق من الصلاحية
     const canReset =
@@ -397,10 +403,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
   }, [currentUser, permissions.canViewAllData]);
 
-  // المستخدمين المتاحين للمستخدم الحالي
+  // المستخدمين المتاحين للمستخدم الحالي (بدون حسابات النظام المخفية)
   const getAccessibleUsers = useCallback((): User[] => {
     if (!currentUser) return [];
-    const users = getAllUsers();
+    // استخدام المستخدمين المرئيين فقط (بدون حسابات النظام)
+    const users = getVisibleUsers();
 
     if (currentUser.role === 'system_admin') {
       return users.filter((u) => u.isActive);
@@ -534,10 +541,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
   }, [currentUser]);
 
-  // قائمة المستخدمين للتبديل (لمدير النظام فقط)
+  // قائمة المستخدمين للتبديل (لمدير النظام فقط) - بدون حسابات النظام
   const availableUsers = useMemo(() => {
     if (!currentUser || currentUser.role !== 'system_admin') return [];
-    return getAllUsers().filter((u) => u.isActive);
+    return getVisibleUsers().filter((u) => u.isActive);
   }, [currentUser]);
 
   // ===========================================

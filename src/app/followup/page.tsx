@@ -111,7 +111,8 @@ export default function FollowUpPage() {
     const storedSections = localStorage.getItem('qms_sections');
 
     if (storedUsers) {
-      setAllUsers(JSON.parse(storedUsers));
+      // إخفاء حسابات النظام
+      setAllUsers(JSON.parse(storedUsers).filter((u: any) => !u.isSystemAccount));
     }
     if (storedDepts) {
       setAllDepartments(JSON.parse(storedDepts));

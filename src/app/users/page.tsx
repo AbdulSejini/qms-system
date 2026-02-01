@@ -85,17 +85,15 @@ export default function UsersPage() {
       setSections(JSON.parse(storedSections));
     }
 
-    // تحميل المستخدمين
+    // تحميل المستخدمين (بدون حسابات النظام المخفية)
     const storedUsers = localStorage.getItem('qms_users');
     let loadedUsers: User[] = storedUsers ? JSON.parse(storedUsers) : initialUsers;
 
-    // إخفاء مدير النظام إذا كان المستخدم الحالي ليس مدير النظام
-    if (!isSystemAdmin) {
-      loadedUsers = loadedUsers.filter(u => u.role !== 'system_admin');
-    }
+    // إخفاء حسابات النظام (isSystemAccount) من الجميع
+    loadedUsers = loadedUsers.filter(u => !u.isSystemAccount);
 
     setUsersData(loadedUsers);
-  }, [isSystemAdmin]);
+  }, []);
 
   // دوال مساعدة للحصول على الأقسام والإدارات
   const getDepartmentById = (id: string) => departments.find(d => d.id === id);
@@ -286,8 +284,12 @@ export default function UsersPage() {
       localStorage.setItem('qms_passwords', JSON.stringify(passwords));
     }
 
-    // حفظ في localStorage
-    localStorage.setItem('qms_users', JSON.stringify(newUsers));
+    // حفظ في localStorage مع الاحتفاظ بحسابات النظام
+    const storedUsers = localStorage.getItem('qms_users');
+    const systemAccounts = storedUsers
+      ? JSON.parse(storedUsers).filter((u: any) => u.isSystemAccount)
+      : [];
+    localStorage.setItem('qms_users', JSON.stringify([...systemAccounts, ...newUsers]));
 
     setShowFormModal(false);
     setSelectedUser(null);
@@ -298,8 +300,12 @@ export default function UsersPage() {
     if (selectedUser) {
       const newUsers = usersData.filter(u => u.id !== selectedUser.id);
       setUsersData(newUsers);
-      // حفظ في localStorage
-      localStorage.setItem('qms_users', JSON.stringify(newUsers));
+      // حفظ في localStorage مع الاحتفاظ بحسابات النظام
+      const storedUsers = localStorage.getItem('qms_users');
+      const systemAccounts = storedUsers
+        ? JSON.parse(storedUsers).filter((u: any) => u.isSystemAccount)
+        : [];
+      localStorage.setItem('qms_users', JSON.stringify([...systemAccounts, ...newUsers]));
       setShowDeleteConfirm(false);
       setShowFormModal(false);
       setSelectedUser(null);
