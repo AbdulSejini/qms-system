@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
@@ -62,9 +62,27 @@ export default function DepartmentsPage() {
   const { t, language, isRTL } = useTranslation();
   const { canManageDepartments, hasPermission } = useAuth();
 
-  // State للبيانات
-  const [departmentsData, setDepartmentsData] = useState<Department[]>(initialDepartments);
-  const [sectionsData, setSectionsData] = useState<Section[]>(initialSections);
+  // State للبيانات - تحميل من localStorage
+  const [departmentsData, setDepartmentsData] = useState<Department[]>([]);
+  const [sectionsData, setSectionsData] = useState<Section[]>([]);
+
+  // تحميل البيانات من localStorage عند بدء التشغيل
+  useEffect(() => {
+    const storedDepts = localStorage.getItem('qms_departments');
+    const storedSections = localStorage.getItem('qms_sections');
+
+    if (storedDepts) {
+      setDepartmentsData(JSON.parse(storedDepts));
+    } else {
+      setDepartmentsData(initialDepartments);
+    }
+
+    if (storedSections) {
+      setSectionsData(JSON.parse(storedSections));
+    } else {
+      setSectionsData(initialSections);
+    }
+  }, []);
 
   // State للعرض
   const [viewMode, setViewMode] = useState<'tree' | 'list'>('tree');
@@ -234,12 +252,14 @@ export default function DepartmentsPage() {
   const handleSaveDept = () => {
     if (!validateDeptForm()) return;
 
+    let newDepts: Department[];
+
     if (isEditing && selectedDepartment) {
-      setDepartmentsData(prev => prev.map(d =>
+      newDepts = departmentsData.map(d =>
         d.id === selectedDepartment.id
           ? { ...d, ...deptFormData, updatedAt: new Date() }
           : d
-      ));
+      );
     } else {
       const newDept: Department = {
         id: `dept-${Date.now()}`,
@@ -247,8 +267,12 @@ export default function DepartmentsPage() {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
-      setDepartmentsData(prev => [...prev, newDept]);
+      newDepts = [...departmentsData, newDept];
     }
+
+    setDepartmentsData(newDepts);
+    // حفظ في localStorage
+    localStorage.setItem('qms_departments', JSON.stringify(newDepts));
 
     setShowDeptFormModal(false);
     setSelectedDepartment(null);
@@ -258,12 +282,14 @@ export default function DepartmentsPage() {
   const handleSaveSection = () => {
     if (!validateSectionForm()) return;
 
+    let newSections: Section[];
+
     if (isEditing && selectedSection) {
-      setSectionsData(prev => prev.map(s =>
+      newSections = sectionsData.map(s =>
         s.id === selectedSection.id
           ? { ...s, ...sectionFormData, updatedAt: new Date() }
           : s
-      ));
+      );
     } else {
       const newSection: Section = {
         id: `sec-${Date.now()}`,
@@ -271,8 +297,12 @@ export default function DepartmentsPage() {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
-      setSectionsData(prev => [...prev, newSection]);
+      newSections = [...sectionsData, newSection];
     }
+
+    setSectionsData(newSections);
+    // حفظ في localStorage
+    localStorage.setItem('qms_sections', JSON.stringify(newSections));
 
     setShowSectionFormModal(false);
     setSelectedSection(null);
@@ -281,10 +311,18 @@ export default function DepartmentsPage() {
   // حذف
   const handleDelete = () => {
     if (deleteType === 'department' && selectedDepartment) {
-      setDepartmentsData(prev => prev.filter(d => d.id !== selectedDepartment.id));
-      setSectionsData(prev => prev.filter(s => s.departmentId !== selectedDepartment.id));
+      const newDepts = departmentsData.filter(d => d.id !== selectedDepartment.id);
+      const newSections = sectionsData.filter(s => s.departmentId !== selectedDepartment.id);
+      setDepartmentsData(newDepts);
+      setSectionsData(newSections);
+      // حفظ في localStorage
+      localStorage.setItem('qms_departments', JSON.stringify(newDepts));
+      localStorage.setItem('qms_sections', JSON.stringify(newSections));
     } else if (deleteType === 'section' && selectedSection) {
-      setSectionsData(prev => prev.filter(s => s.id !== selectedSection.id));
+      const newSections = sectionsData.filter(s => s.id !== selectedSection.id);
+      setSectionsData(newSections);
+      // حفظ في localStorage
+      localStorage.setItem('qms_sections', JSON.stringify(newSections));
     }
     setShowDeleteConfirm(false);
     setShowDeptFormModal(false);
