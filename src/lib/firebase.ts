@@ -1,8 +1,12 @@
 // Firebase configuration and initialization
 import { initializeApp, getApps } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
 
-const firebaseConfig = {
+// Exported so callers that must create an account without disturbing the current
+// session (the Users page) can spin up a secondary app instance:
+//   initializeApp(firebaseConfig, 'userCreation') -> getAuth(secondaryApp)
+export const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
   projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
@@ -17,5 +21,8 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0
 
 // Initialize Firestore
 export const db = getFirestore(app);
+
+// Initialize Firebase Auth - its own persistence replaces the old localStorage session
+export const auth = getAuth(app);
 
 export default app;

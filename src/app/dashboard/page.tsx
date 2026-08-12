@@ -7,13 +7,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Badge, Button } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { subscribeToAudits, Audit as FirestoreAudit } from '@/lib/firestore';
+import { subscribeToAudits, subscribeToAnnualPlans, Audit as FirestoreAudit } from '@/lib/firestore';
+import { AnnualPlan } from '@/types';
 import {
   ClipboardCheck,
   AlertCircle,
   CheckCircle,
   Clock,
   Calendar,
+  CalendarClock,
   TrendingUp,
   ArrowRight,
   ArrowLeft,
@@ -22,6 +24,8 @@ import {
   Target,
   Plus,
   ListChecks,
+  CheckSquare,
+  FileCheck,
 } from 'lucide-react';
 
 // Types
@@ -33,7 +37,6 @@ interface DashboardStats {
   openFindings: number;
   overdueFindings: number;
   closedFindings: number;
-  totalUsers: number;
   totalDepartments: number;
 }
 
@@ -57,144 +60,273 @@ interface RecentFinding {
   dueDate: string;
 }
 
+// بند بانتظار تصرّف المستخدم الحالي - مراجعة بانتظار الاعتماد أو خطة سنوية هو معتمِدها
+interface PendingApprovalItem {
+  id: string;
+  kind: 'audit' | 'plan';
+  title: string;
+  subtitle: string;
+  href: string;
+}
+
+// مراجعة لم يبدأ تنفيذها بعد
+interface UpcomingAudit {
+  id: string;
+  title: string;
+  startDate: string;
+  departmentName: string;
+  daysRemaining: number;
+}
+
 
 export default function DashboardPage() {
   const router = useRouter();
   const { t, language, isRTL } = useTranslation();
-  const { currentUser, hasPermission, users, departments } = useAuth();
+  const { currentUser, hasPermission, departments } = useAuth();
 
-  const [stats, setStats] = useState<DashboardStats>({
-    totalAudits: 0,
-    activeAudits: 0,
-    completedAudits: 0,
-    totalFindings: 0,
-    openFindings: 0,
-    overdueFindings: 0,
-    closedFindings: 0,
-    totalUsers: 0,
-    totalDepartments: 0,
-  });
-  const [recentAudits, setRecentAudits] = useState<RecentAudit[]>([]);
-  const [recentFindings, setRecentFindings] = useState<RecentFinding[]>([]);
-  const [upcomingTasks, setUpcomingTasks] = useState<any[]>([]);
+  // Raw audits from Firestore - كل الإحصائيات تُشتق منها عبر useMemo
+  const [rawAudits, setRawAudits] = useState<FirestoreAudit[]>([]);
 
-  // Load dashboard data from Firestore
+  // Raw annual plans from Firestore - تُشتق منها نسبة إنجاز الخطة والموافقات المعلّقة
+  const [rawPlans, setRawPlans] = useState<AnnualPlan[]>([]);
+
+  // Subscribe to audits from Firestore (once - no dependency on users/departments/language)
   useEffect(() => {
-    // Subscribe to audits from Firestore
     const unsubscribe = subscribeToAudits((firestoreAudits) => {
-      let allFindings: any[] = [];
-
-      // إخفاء حسابات النظام من الإحصائيات
-      const visibleUsers = users.filter((u: any) => !u.isSystemAccount);
-
-      // Extract all findings from audits
-      firestoreAudits.forEach((audit: any) => {
-        if (audit.findings && Array.isArray(audit.findings)) {
-          audit.findings.forEach((finding: any) => {
-            allFindings.push({
-              ...finding,
-              auditNumber: audit.number || audit.id,
-              auditId: audit.id,
-            });
-          });
-        }
-      });
-
-      // Calculate stats
-      const activeAudits = firestoreAudits.filter(a =>
-        a.status !== 'completed' && a.status !== 'cancelled'
-      ).length;
-      const completedAudits = firestoreAudits.filter(a => a.status === 'completed').length;
-      const openFindings = allFindings.filter(f => f.status !== 'closed').length;
-      const closedFindings = allFindings.filter(f => f.status === 'closed').length;
-      const overdueFindings = allFindings.filter(f => {
-        if (f.status === 'closed') return false;
-        const dueDate = new Date(f.estimatedClosingDate || f.dueDate);
-        return dueDate < new Date();
-      }).length;
-
-      setStats({
-        totalAudits: firestoreAudits.length,
-        activeAudits,
-        completedAudits,
-        totalFindings: allFindings.length,
-        openFindings,
-        overdueFindings,
-        closedFindings,
-        totalUsers: visibleUsers.length,
-        totalDepartments: departments.length,
-      });
-
-      // Recent audits (last 5)
-      const sortedAudits = [...firestoreAudits]
-        .sort((a, b) => new Date(b.createdAt || b.startDate).getTime() - new Date(a.createdAt || a.startDate).getTime())
-        .slice(0, 5)
-        .map(audit => {
-          const dept = departments.find((d: any) => d.id === audit.departmentId);
-          return {
-            id: audit.id,
-            number: audit.id.replace('audit-', 'AUD-'),
-            titleAr: audit.titleAr || 'مراجعة',
-            titleEn: audit.titleEn || 'Audit',
-            status: audit.status,
-            startDate: audit.startDate,
-            departmentName: dept ? (language === 'ar' ? dept.nameAr : dept.nameEn) : '',
-          };
-        });
-      setRecentAudits(sortedAudits);
-
-      // Recent findings (last 4)
-      const sortedFindings = [...allFindings]
-        .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
-        .slice(0, 4)
-        .map(finding => ({
-          id: finding.id,
-          number: finding.number || `${finding.auditNumber}-F`,
-          titleAr: finding.finding || finding.titleAr || 'ملاحظة',
-          titleEn: finding.finding || finding.titleEn || 'Finding',
-          severity: finding.categoryB === 'major_nc' ? 'major' : finding.categoryB === 'minor_nc' ? 'minor' : 'observation',
-          status: finding.status || 'open',
-          dueDate: finding.estimatedClosingDate || finding.dueDate || '',
-        }));
-      setRecentFindings(sortedFindings);
-
-      // Upcoming tasks
-      const tasks: any[] = [];
-
-      // Add upcoming audits
-      firestoreAudits.filter(a => a.status !== 'completed' && a.status !== 'cancelled').forEach(audit => {
-        if (audit.startDate) {
-          tasks.push({
-            id: `audit-${audit.id}`,
-            type: 'audit',
-            title: language === 'ar' ? (audit.titleAr || 'مراجعة') : (audit.titleEn || 'Audit'),
-            date: audit.startDate,
-            priority: audit.type === 'external' ? 'high' : 'medium',
-          });
-        }
-      });
-
-      // Add finding due dates
-      allFindings.filter(f => f.status !== 'closed').forEach(finding => {
-        const dueDate = finding.estimatedClosingDate || finding.dueDate;
-        if (dueDate) {
-          tasks.push({
-            id: `finding-${finding.id}`,
-            type: 'finding',
-            title: language === 'ar' ? (finding.finding?.substring(0, 40) || 'ملاحظة') : (finding.finding?.substring(0, 40) || 'Finding'),
-            date: dueDate,
-            priority: finding.categoryB === 'major_nc' ? 'high' : 'medium',
-          });
-        }
-      });
-
-      // Sort by date and take first 5
-      tasks.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-      setUpcomingTasks(tasks.slice(0, 5));
+      setRawAudits(firestoreAudits);
     });
 
     return () => unsubscribe();
-  }, [language]);
+  }, []);
+
+  // Subscribe to annual plans from Firestore (once - same pattern as audits)
+  useEffect(() => {
+    const unsubscribe = subscribeToAnnualPlans((firestorePlans) => {
+      setRawPlans(firestorePlans);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Extract all findings from audits
+  const allFindings = useMemo(() => {
+    const findings: any[] = [];
+    rawAudits.forEach((audit: any) => {
+      if (audit.findings && Array.isArray(audit.findings)) {
+        audit.findings.forEach((finding: any) => {
+          findings.push({
+            ...finding,
+            auditNumber: audit.number || audit.id,
+            auditId: audit.id,
+          });
+        });
+      }
+    });
+    return findings;
+  }, [rawAudits]);
+
+  // Calculate stats
+  const stats = useMemo<DashboardStats>(() => {
+    const activeAudits = rawAudits.filter(a =>
+      a.status !== 'completed' && a.status !== 'cancelled'
+    ).length;
+    const completedAudits = rawAudits.filter(a => a.status === 'completed').length;
+    const openFindings = allFindings.filter(f => f.status !== 'closed').length;
+    const closedFindings = allFindings.filter(f => f.status === 'closed').length;
+    const overdueFindings = allFindings.filter(f => {
+      if (f.status === 'closed') return false;
+      const dueDate = new Date(f.estimatedClosingDate || f.dueDate);
+      return dueDate < new Date();
+    }).length;
+
+    return {
+      totalAudits: rawAudits.length,
+      activeAudits,
+      completedAudits,
+      totalFindings: allFindings.length,
+      openFindings,
+      overdueFindings,
+      closedFindings,
+      totalDepartments: departments.length,
+    };
+  }, [rawAudits, allFindings, departments]);
+
+  // Recent audits (last 5)
+  const recentAudits = useMemo<RecentAudit[]>(() => {
+    return [...rawAudits]
+      .sort((a, b) => new Date(b.createdAt || b.startDate).getTime() - new Date(a.createdAt || a.startDate).getTime())
+      .slice(0, 5)
+      .map(audit => {
+        const dept = departments.find((d: any) => d.id === audit.departmentId);
+        return {
+          id: audit.id,
+          number: audit.id.replace('audit-', 'AUD-'),
+          titleAr: audit.titleAr || 'مراجعة',
+          titleEn: audit.titleEn || 'Audit',
+          status: audit.status,
+          startDate: audit.startDate,
+          departmentName: dept ? (language === 'ar' ? dept.nameAr : dept.nameEn) : '',
+        };
+      });
+  }, [rawAudits, departments, language]);
+
+  // Recent findings (last 4)
+  const recentFindings = useMemo<RecentFinding[]>(() => {
+    return [...allFindings]
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+      .slice(0, 4)
+      .map(finding => ({
+        id: finding.id,
+        number: finding.number || `${finding.auditNumber}-F`,
+        titleAr: finding.finding || finding.titleAr || 'ملاحظة',
+        titleEn: finding.finding || finding.titleEn || 'Finding',
+        severity: finding.categoryB === 'major_nc' ? 'major' : finding.categoryB === 'minor_nc' ? 'minor' : 'observation',
+        status: finding.status || 'open',
+        dueDate: finding.estimatedClosingDate || finding.dueDate || '',
+      }));
+  }, [allFindings]);
+
+  // Finding due dates - المراجعات القادمة صار لها ودجت مستقلة، فبقيت هنا استحقاقات الملاحظات
+  const findingDeadlines = useMemo<any[]>(() => {
+    const tasks: any[] = [];
+
+    allFindings.filter(f => f.status !== 'closed').forEach(finding => {
+      const dueDate = finding.estimatedClosingDate || finding.dueDate;
+      if (dueDate) {
+        tasks.push({
+          id: `finding-${finding.id}`,
+          type: 'finding',
+          title: language === 'ar' ? (finding.finding?.substring(0, 40) || 'ملاحظة') : (finding.finding?.substring(0, 40) || 'Finding'),
+          date: dueDate,
+          priority: finding.categoryB === 'major_nc' ? 'high' : 'medium',
+        });
+      }
+    });
+
+    // Sort by date and take first 5
+    tasks.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    return tasks.slice(0, 5);
+  }, [allFindings, language]);
+
+  // Annual audit progress - بنود خطة السنة الحالية المعتمدة مقابل ما أُنشئت له مراجعة فعلياً.
+  // البند يُحتسب منجزاً فقط إذا كان auditId موجوداً وما زالت المراجعة قائمة.
+  const currentYear = new Date().getFullYear();
+  const annualProgress = useMemo(() => {
+    const approvedPlans = rawPlans
+      .filter(p => p.year === currentYear && p.status === 'approved')
+      .sort((a, b) =>
+        new Date(b.updatedAt || b.createdAt || 0).getTime() -
+        new Date(a.updatedAt || a.createdAt || 0).getTime()
+      );
+    const plan = approvedPlans[0];
+
+    if (!plan) {
+      return { hasPlan: false, planned: 0, created: 0, percentage: 0 };
+    }
+
+    const auditIds = new Set(rawAudits.map(a => a.id));
+    const items = plan.items || [];
+    const created = items.filter(item => item.auditId && auditIds.has(item.auditId)).length;
+
+    return {
+      hasPlan: true,
+      planned: items.length,
+      created,
+      percentage: items.length > 0 ? Math.round((created / items.length) * 100) : 0,
+    };
+  }, [rawPlans, rawAudits, currentYear]);
+
+  // Pending approvals - ما ينتظر تصرّف المستخدم الحالي وحده، لا كل ما هو معلّق في النظام
+  const pendingApprovals = useMemo<PendingApprovalItem[]>(() => {
+    const items: PendingApprovalItem[] = [];
+    if (!currentUser) return items;
+
+    // المراجعات: من يملك صلاحية الاعتماد فقط (مدير النظام ومدير الجودة)
+    if (hasPermission('canApproveAudits')) {
+      rawAudits
+        .filter(a => a.status === 'pending_approval' || a.status === 'qms_review')
+        .forEach(audit => {
+          const dept = departments.find((d: any) => d.id === audit.departmentId);
+          items.push({
+            id: `audit-${audit.id}`,
+            kind: 'audit',
+            title: language === 'ar' ? (audit.titleAr || 'مراجعة') : (audit.titleEn || 'Audit'),
+            subtitle: dept
+              ? (language === 'ar' ? dept.nameAr : dept.nameEn)
+              : (audit.status === 'qms_review'
+                  ? (language === 'ar' ? 'مراجعة إدارة الجودة' : 'QMS review')
+                  : (language === 'ar' ? 'بانتظار الاعتماد' : 'Awaiting approval')),
+            href: `/audits/${audit.id}`,
+          });
+        });
+    }
+
+    // الخطط السنوية: المعتمِد المسمّى في الخطة - ومدير النظام، تماماً كما في صفحة الخطط
+    rawPlans
+      .filter(p =>
+        p.status === 'pending_approval' &&
+        (p.approverId === currentUser.id || currentUser.role === 'system_admin')
+      )
+      .forEach(plan => {
+        const itemCount = plan.items?.length || 0;
+        items.push({
+          id: `plan-${plan.id}`,
+          kind: 'plan',
+          title: language === 'ar'
+            ? (plan.titleAr || `الخطة السنوية ${plan.year}`)
+            : (plan.titleEn || `Annual Plan ${plan.year}`),
+          subtitle: language === 'ar' ? `${itemCount} بند مخطط` : `${itemCount} planned items`,
+          href: '/plans', // صفحة الخطط تعرض القائمة، ولا يوجد مسار لخطة مفردة
+        });
+      });
+
+    return items;
+  }, [rawAudits, rawPlans, departments, currentUser, hasPermission, language]);
+
+  // Upcoming audits - المراجعات التي لم يحن موعد بدايتها بعد، الأقرب أولاً
+  const upcomingAudits = useMemo<UpcomingAudit[]>(() => {
+    const now = Date.now();
+    return rawAudits
+      .filter(a =>
+        a.status !== 'completed' &&
+        a.status !== 'cancelled' &&
+        a.startDate &&
+        new Date(a.startDate).getTime() > now
+      )
+      .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
+      .slice(0, 5)
+      .map(audit => {
+        const dept = departments.find((d: any) => d.id === audit.departmentId);
+        return {
+          id: audit.id,
+          title: language === 'ar' ? (audit.titleAr || 'مراجعة') : (audit.titleEn || 'Audit'),
+          startDate: audit.startDate,
+          departmentName: dept ? (language === 'ar' ? dept.nameAr : dept.nameEn) : '',
+          daysRemaining: Math.ceil((new Date(audit.startDate).getTime() - now) / (1000 * 60 * 60 * 24)),
+        };
+      });
+  }, [rawAudits, departments, language]);
+
+  // Checklist status - الأسئلة المُجابة مقابل الإجمالي عبر المراجعات النشطة
+  const checklistStatus = useMemo(() => {
+    let total = 0;
+    let answered = 0;
+
+    rawAudits
+      .filter(a => a.status !== 'completed' && a.status !== 'cancelled')
+      .forEach(audit => {
+        (audit.questions || []).forEach((q: any) => {
+          total++;
+          if (q.status && q.status !== 'pending') answered++;
+        });
+      });
+
+    return {
+      total,
+      answered,
+      percentage: total > 0 ? Math.round((answered / total) * 100) : 0,
+    };
+  }, [rawAudits]);
 
   const getStatusBadge = (status: string) => {
     const statusMap: Record<string, { variant: any; label: string }> = {
@@ -244,8 +376,8 @@ export default function DashboardPage() {
             </h1>
             <p className="text-white/80 mt-1">
               {language === 'ar'
-                ? 'إليك ملخص نشاط نظام إدارة الجودة'
-                : 'Here\'s your QMS activity summary'}
+                ? 'إليك ملخص نشاط نظام مراجعة لنظام الجودة QMS'
+                : 'Here\'s your QMS audit activity summary'}
             </p>
           </div>
           <div className="flex gap-3">
@@ -332,25 +464,138 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Users & Departments */}
+          {/* Pending Approvals - بانتظار تصرّف المستخدم الحالي */}
           <Card className="hover:shadow-lg transition-shadow">
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-[var(--foreground-secondary)]">
-                    {language === 'ar' ? 'الفريق' : 'Team'}
+                    {language === 'ar' ? 'بانتظار موافقتك' : 'Pending Approvals'}
                   </p>
-                  <p className="text-3xl font-bold mt-1">{stats.totalUsers}</p>
+                  <p className="text-3xl font-bold mt-1">{pendingApprovals.length}</p>
                   <div className="flex items-center gap-2 mt-2">
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
-                      {stats.totalDepartments} {language === 'ar' ? 'إدارات' : 'depts'}
-                    </span>
+                    {pendingApprovals.length > 0 ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                        {pendingApprovals.filter(i => i.kind === 'audit').length} {language === 'ar' ? 'مراجعات' : 'audits'}
+                        {' · '}
+                        {pendingApprovals.filter(i => i.kind === 'plan').length} {language === 'ar' ? 'خطط' : 'plans'}
+                      </span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">
+                        {language === 'ar' ? 'لا شيء معلّق' : 'nothing pending'}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="p-4 rounded-2xl bg-purple-100 dark:bg-purple-900/30">
-                  <Users className="h-7 w-7 text-purple-600 dark:text-purple-400" />
+                  <FileCheck className="h-7 w-7 text-purple-600 dark:text-purple-400" />
                 </div>
               </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Annual Plan Progress & Checklist Status */}
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* Annual Audit Progress */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <Target className="h-5 w-5 text-[var(--primary)]" />
+                  {language === 'ar' ? `إنجاز الخطة السنوية ${currentYear}` : `Annual Audit Progress ${currentYear}`}
+                </CardTitle>
+                <button
+                  onClick={() => router.push('/plans')}
+                  className="flex items-center gap-1 text-sm text-[var(--primary)] hover:underline"
+                >
+                  {language === 'ar' ? 'عرض الخطة' : 'View Plan'}
+                  <Arrow className="h-4 w-4" />
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {annualProgress.hasPlan ? (
+                <div>
+                  <div className="flex items-end justify-between mb-2">
+                    <p className="text-3xl font-bold">{annualProgress.percentage}%</p>
+                    <p className="text-sm text-[var(--foreground-secondary)]">
+                      {language === 'ar'
+                        ? `${annualProgress.created} من ${annualProgress.planned} بند أُنشئت له مراجعة`
+                        : `${annualProgress.created} of ${annualProgress.planned} planned items have an audit`}
+                    </p>
+                  </div>
+                  <div className="w-full bg-[var(--background-secondary)] rounded-full h-2">
+                    <div
+                      className={`h-2 rounded-full ${
+                        annualProgress.percentage === 100
+                          ? 'bg-green-500'
+                          : annualProgress.percentage >= 50
+                            ? 'bg-blue-500'
+                            : 'bg-orange-500'
+                      }`}
+                      style={{ width: `${annualProgress.percentage}%` }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-6">
+                  <Calendar className="h-10 w-10 mx-auto text-[var(--foreground-muted)] mb-2" />
+                  <p className="text-sm text-[var(--foreground-secondary)]">
+                    {language === 'ar'
+                      ? `لا توجد خطة سنوية معتمدة لعام ${currentYear}`
+                      : `No approved annual plan for ${currentYear}`}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Checklist Status */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CheckSquare className="h-5 w-5 text-[var(--primary)]" />
+                {language === 'ar' ? 'حالة قوائم الفحص' : 'Checklist Status'}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {checklistStatus.total > 0 ? (
+                <div>
+                  <div className="flex items-end justify-between mb-2">
+                    <p className="text-3xl font-bold">
+                      {checklistStatus.answered}
+                      <span className="text-xl font-normal text-[var(--foreground-secondary)]"> / {checklistStatus.total}</span>
+                    </p>
+                    <p className="text-sm text-[var(--foreground-secondary)]">
+                      {language === 'ar'
+                        ? `${checklistStatus.percentage}% مُجابة في المراجعات النشطة`
+                        : `${checklistStatus.percentage}% answered across active audits`}
+                    </p>
+                  </div>
+                  <div className="w-full bg-[var(--background-secondary)] rounded-full h-2">
+                    <div
+                      className={`h-2 rounded-full ${
+                        checklistStatus.percentage === 100
+                          ? 'bg-green-500'
+                          : checklistStatus.percentage >= 50
+                            ? 'bg-blue-500'
+                            : 'bg-orange-500'
+                      }`}
+                      style={{ width: `${checklistStatus.percentage}%` }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-6">
+                  <ListChecks className="h-10 w-10 mx-auto text-[var(--foreground-muted)] mb-2" />
+                  <p className="text-sm text-[var(--foreground-secondary)]">
+                    {language === 'ar'
+                      ? 'لا توجد أسئلة في المراجعات النشطة'
+                      : 'No checklist questions in active audits'}
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -429,13 +674,128 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Upcoming Tasks */}
+          {/* Pending Approvals */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FileCheck className="h-5 w-5 text-[var(--primary)]" />
+                {language === 'ar' ? 'بانتظار موافقتك' : 'Pending Approvals'}
+                {pendingApprovals.length > 0 && (
+                  <Badge variant="warning">{pendingApprovals.length}</Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {pendingApprovals.length > 0 ? (
+                <div className="space-y-3">
+                  {pendingApprovals.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => router.push(item.href)}
+                      className="p-3 rounded-lg border border-[var(--border)] transition-all cursor-pointer hover:bg-[var(--background-tertiary)] hover:shadow-sm"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`p-2 rounded-lg ${
+                          item.kind === 'audit'
+                            ? 'bg-blue-100 dark:bg-blue-900/30'
+                            : 'bg-purple-100 dark:bg-purple-900/30'
+                        }`}>
+                          {item.kind === 'audit'
+                            ? <ClipboardCheck className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                            : <Calendar className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                          }
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{item.title}</p>
+                          <p className="text-xs mt-0.5 text-[var(--foreground-secondary)] truncate">
+                            {item.subtitle}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-6">
+                  <CheckCircle className="h-10 w-10 mx-auto text-green-500 mb-2" />
+                  <p className="text-sm text-[var(--foreground-secondary)]">
+                    {language === 'ar' ? 'لا شيء بانتظار موافقتك' : 'Nothing waiting on you'}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Upcoming Audits & Finding Deadlines */}
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* Upcoming Audits */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <CalendarClock className="h-5 w-5 text-[var(--primary)]" />
+                  {language === 'ar' ? 'المراجعات القادمة' : 'Upcoming Audits'}
+                </CardTitle>
+                <button
+                  onClick={() => router.push('/audits')}
+                  className="flex items-center gap-1 text-sm text-[var(--primary)] hover:underline"
+                >
+                  {language === 'ar' ? 'عرض الكل' : 'View All'}
+                  <Arrow className="h-4 w-4" />
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {upcomingAudits.length > 0 ? (
+                <div className="space-y-3">
+                  {upcomingAudits.map((audit) => (
+                    <div
+                      key={audit.id}
+                      onClick={() => router.push(`/audits/${audit.id}`)}
+                      className="flex items-center justify-between gap-3 p-3 rounded-lg border border-[var(--border)] transition-all hover:bg-[var(--background-tertiary)] hover:shadow-sm cursor-pointer"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{audit.title}</p>
+                        <div className="flex items-center gap-3 mt-0.5 text-xs text-[var(--foreground-secondary)]">
+                          {audit.departmentName && (
+                            <span className="flex items-center gap-1 truncate">
+                              <Building2 className="h-3 w-3" />
+                              {audit.departmentName}
+                            </span>
+                          )}
+                          <span className="flex items-center gap-1 whitespace-nowrap">
+                            <Calendar className="h-3 w-3" />
+                            {new Date(audit.startDate).toLocaleDateString(language === 'ar' ? 'ar-SA' : 'en-US')}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 whitespace-nowrap">
+                        {language === 'ar'
+                          ? `متبقي ${audit.daysRemaining} يوم`
+                          : `in ${audit.daysRemaining} ${audit.daysRemaining === 1 ? 'day' : 'days'}`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-6">
+                  <CalendarClock className="h-10 w-10 mx-auto text-[var(--foreground-muted)] mb-2" />
+                  <p className="text-sm text-[var(--foreground-secondary)]">
+                    {language === 'ar' ? 'لا توجد مراجعات قادمة' : 'No upcoming audits'}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Finding Deadlines */}
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="flex items-center gap-2">
                   <ListChecks className="h-5 w-5 text-[var(--status-warning)]" />
-                  {language === 'ar' ? 'المهام القادمة' : 'Upcoming Tasks'}
+                  {language === 'ar' ? 'استحقاقات الملاحظات' : 'Finding Deadlines'}
                 </CardTitle>
                 <button
                   onClick={() => router.push('/followup')}
@@ -447,9 +807,9 @@ export default function DashboardPage() {
               </div>
             </CardHeader>
             <CardContent>
-              {upcomingTasks.length > 0 ? (
+              {findingDeadlines.length > 0 ? (
                 <div className="space-y-3">
-                  {upcomingTasks.map((task) => {
+                  {findingDeadlines.map((task) => {
                     const isOverdue = new Date(task.date) < new Date();
                     return (
                       <div
@@ -461,15 +821,8 @@ export default function DashboardPage() {
                         }`}
                       >
                         <div className="flex items-start gap-3">
-                          <div className={`p-2 rounded-lg ${
-                            task.type === 'audit'
-                              ? 'bg-blue-100 dark:bg-blue-900/30'
-                              : 'bg-orange-100 dark:bg-orange-900/30'
-                          }`}>
-                            {task.type === 'audit'
-                              ? <ClipboardCheck className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                              : <AlertCircle className="h-4 w-4 text-orange-600 dark:text-orange-400" />
-                            }
+                          <div className="p-2 rounded-lg bg-orange-100 dark:bg-orange-900/30">
+                            <AlertCircle className="h-4 w-4 text-orange-600 dark:text-orange-400" />
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium truncate">{task.title}</p>
@@ -487,7 +840,7 @@ export default function DashboardPage() {
                 <div className="text-center py-6">
                   <CheckCircle className="h-10 w-10 mx-auto text-green-500 mb-2" />
                   <p className="text-sm text-[var(--foreground-secondary)]">
-                    {language === 'ar' ? 'لا توجد مهام قادمة' : 'No upcoming tasks'}
+                    {language === 'ar' ? 'لا توجد استحقاقات قادمة' : 'No upcoming deadlines'}
                   </p>
                 </div>
               )}
@@ -548,7 +901,7 @@ export default function DashboardPage() {
             <CardContent className="p-8 text-center">
               <Target className="h-16 w-16 mx-auto text-[var(--primary)] mb-4" />
               <h3 className="text-xl font-semibold mb-2">
-                {language === 'ar' ? 'ابدأ إعداد نظام إدارة الجودة' : 'Start Setting Up Your QMS'}
+                {language === 'ar' ? 'ابدأ إعداد نظام مراجعة لنظام الجودة QMS' : 'Start Setting Up Your QMS Audit System'}
               </h3>
               <p className="text-[var(--foreground-secondary)] mb-6 max-w-md mx-auto">
                 {language === 'ar'

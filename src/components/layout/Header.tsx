@@ -26,10 +26,14 @@ import {
   Users,
   Calendar,
   FileWarning,
+  CalendarRange,
+  CalendarCheck,
+  CalendarX,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { MobileMenuButton } from './Sidebar';
 import { getRoleNameAr, getRoleNameEn } from '@/data/mock-data';
+import { logger } from '@/lib/logger';
 import { useRouter } from 'next/navigation';
 import {
   subscribeToNotifications,
@@ -58,20 +62,20 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
   // Load notifications from Firestore in real-time
   useEffect(() => {
     if (!currentUser?.id) {
-      console.log('No current user, skipping notifications subscription');
+      logger.log('No current user, skipping notifications subscription');
       return;
     }
 
-    console.log('Subscribing to notifications for user:', currentUser.id, currentUser.fullNameEn);
+    logger.log('Subscribing to notifications for user:', currentUser.id, currentUser.fullNameEn);
 
     // Subscribe to real-time notifications from Firestore
     const unsubscribe = subscribeToNotifications(currentUser.id, (firestoreNotifications) => {
-      console.log('Received notifications:', firestoreNotifications.length, firestoreNotifications);
+      logger.log('Received notifications:', firestoreNotifications.length, firestoreNotifications);
       setNotifications(firestoreNotifications);
     });
 
     return () => {
-      console.log('Unsubscribing from notifications');
+      logger.log('Unsubscribing from notifications');
       unsubscribe();
     };
   }, [currentUser?.id]);
@@ -84,9 +88,15 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
   // Animate bell when there are unread notifications
   useEffect(() => {
     if (unreadCount > 0) {
-      setBellAnimating(true);
-      const timeout = setTimeout(() => setBellAnimating(false), 1000);
-      return () => clearTimeout(timeout);
+      const animateTimer = setTimeout(() => setBellAnimating(true), 0);
+      const resetTimer = setTimeout(() => setBellAnimating(false), 1000);
+      return () => {
+        clearTimeout(animateTimer);
+        clearTimeout(resetTimer);
+      };
+    } else {
+      const resetTimer = setTimeout(() => setBellAnimating(false), 0);
+      return () => clearTimeout(resetTimer);
     }
   }, [unreadCount]);
 
@@ -107,11 +117,22 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
     await deleteNotificationFromFirestore(notificationId);
   };
 
-  // Handle notification click
+  // Handle notification click.
+  // Audit notifications carry auditId; the annual-plan ones (plan_approval_request,
+  // plan_approved, plan_rejected, and the withdrawal notice sent when a plan is
+  // recalled) carry planId instead and used to be a dead click. They open the plan
+  // directly through a deep link, which also covers an approver whose role has no
+  // /plans entry in the sidebar - the page itself is not role-gated, only the nav is.
+  // The plans page reads `plan` through useSearchParams and drops it from the URL
+  // when the plan is closed, so this link also works for a reader who is already
+  // sitting on /plans - which is when it used to do nothing at all.
   const handleNotificationClick = (notification: Notification) => {
     markAsRead(notification.id);
     if (notification.auditId) {
       router.push(`/audits/${notification.auditId}`);
+      setShowNotifications(false);
+    } else if (notification.planId) {
+      router.push(`/plans?plan=${encodeURIComponent(notification.planId)}`);
       setShowNotifications(false);
     }
   };
@@ -127,13 +148,13 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
   // استخدام المستخدم الحالي من السياق
   const user = currentUser
     ? {
-        name: language === 'ar' ? currentUser.fullNameAr : currentUser.fullNameEn,
-        role: language === 'ar' ? getRoleNameAr(currentUser.role) : getRoleNameEn(currentUser.role),
-      }
+      name: language === 'ar' ? currentUser.fullNameAr : currentUser.fullNameEn,
+      role: language === 'ar' ? getRoleNameAr(currentUser.role) : getRoleNameEn(currentUser.role),
+    }
     : {
-        name: language === 'ar' ? 'زائر' : 'Guest',
-        role: language === 'ar' ? 'غير مسجل' : 'Not logged in',
-      };
+      name: language === 'ar' ? 'زائر' : 'Guest',
+      role: language === 'ar' ? 'غير مسجل' : 'Not logged in',
+    };
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-4 lg:px-6 shadow-sm">
@@ -259,6 +280,9 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
                           notification.type === 'audit_scheduled' && 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400',
                           notification.type === 'corrective_action_response_required' && 'bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400',
                           notification.type === 'new_finding' && 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400',
+                          notification.type === 'plan_approval_request' && 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400',
+                          notification.type === 'plan_approved' && 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400',
+                          notification.type === 'plan_rejected' && 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400',
                           notification.type === 'general' && 'bg-gray-100 dark:bg-gray-900/30 text-gray-600 dark:text-gray-400'
                         )}>
                           {notification.type === 'audit_approval_request' && <ClipboardCheck className="h-5 w-5" />}
@@ -271,6 +295,9 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
                           {notification.type === 'audit_scheduled' && <Calendar className="h-5 w-5" />}
                           {notification.type === 'corrective_action_response_required' && <AlertCircle className="h-5 w-5" />}
                           {notification.type === 'new_finding' && <FileWarning className="h-5 w-5" />}
+                          {notification.type === 'plan_approval_request' && <CalendarRange className="h-5 w-5" />}
+                          {notification.type === 'plan_approved' && <CalendarCheck className="h-5 w-5" />}
+                          {notification.type === 'plan_rejected' && <CalendarX className="h-5 w-5" />}
                           {notification.type === 'general' && <Bell className="h-5 w-5" />}
                         </div>
 

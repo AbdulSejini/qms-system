@@ -2,15 +2,35 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { sendPasswordResetEmail } from 'firebase/auth';
 import { useTranslation, useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { Eye, EyeOff, Lock, User, AlertCircle, Loader2 } from 'lucide-react';
+import { auth } from '@/lib/firebase';
+import {
+  bootstrapSystemAdmin,
+  MIN_PASSWORD_LENGTH,
+  type BootstrapAdminReason,
+  type SignInReason,
+} from '@/lib/auth';
+import { getUserById, SYSTEM_ADMIN_ID, SYSTEM_ADMIN_EMAIL } from '@/lib/firestore';
+import { User } from '@/types';
+import { CableMark } from '@/components/shared/CableMark';
+import { Eye, EyeOff, Lock, User as UserIcon, AlertCircle, Loader2, Check, ShieldAlert, Mail } from 'lucide-react';
+
+// رمز خطأ Firebase يصل على كائن عادي وليس على صنف مشتق من Error
+const errorCode = (error: unknown): string => {
+  if (error && typeof error === 'object' && 'code' in error) {
+    return String((error as { code?: unknown }).code ?? '');
+  }
+  return '';
+};
 
 export default function LoginPage() {
   const router = useRouter();
   const { t, isRTL } = useTranslation();
   const { language, setLanguage } = useLanguage();
-  const { login, isAuthenticated, currentUser } = useAuth();
+  // loginWithResult تعيد سبب الفشل (وليس مجرد false) حتى تُعرض رسالة مطابقة للحالة
+  const { loginWithResult, isAuthenticated, currentUser, isLoading: isAuthLoading } = useAuth();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -18,24 +38,229 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // إذا كان المستخدم مسجل دخوله، انتقل للوحة التحكم
+  // إعادة تعيين كلمة المرور ذاتياً عبر بريد Firebase - المسار الوحيد للاسترجاع
+  // بعد التخلي عن كلمات المرور القديمة
+  const [resetMessage, setResetMessage] = useState('');
+  const [resetError, setResetError] = useState('');
+  const [isSendingReset, setIsSendingReset] = useState(false);
+
+  // الإعداد الأولي لمرة واحدة لحساب مدير النظام
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [adminUser, setAdminUser] = useState<User | null>(null);
+  const [setupPassword, setSetupPassword] = useState('');
+  const [setupConfirmPassword, setSetupConfirmPassword] = useState('');
+  const [setupError, setSetupError] = useState('');
+  const [setupSuccess, setSetupSuccess] = useState(false);
+  const [isSettingUp, setIsSettingUp] = useState(false);
+
+  // إذا كان المستخدم مسجل دخوله، انتقل للوحة التحكم.
+  // يُستثنى وقت الإعداد الأولي: إنشاء حساب مدير النظام يجري كاملاً على نسخة Firebase
+  // ثانوية فلا يُفترض أن يمس الجلسة الحالية، ويبقى الاستثناء احتياطاً حتى لا ينتقل
+  // المشغّل إلى لوحة التحكم في منتصف الإعداد.
   useEffect(() => {
-    if (isAuthenticated && currentUser) {
+    if (isAuthenticated && currentUser && !isSettingUp) {
       router.push('/dashboard');
     }
-  }, [isAuthenticated, currentUser, router]);
+  }, [isAuthenticated, currentUser, isSettingUp, router]);
+
+  // فحص التشغيل الأول: قراءة واحدة فقط لوثيقة مدير النظام.
+  //
+  // هي القراءة الوحيدة التي تسمح بها القواعد لزائر غير مسجّل دخوله، وهي مسموحة
+  // ما دامت الوثيقة بلا authUid - أي ما دام الإعداد الأولي لم يكتمل. فور كتابة
+  // authUid (آخر خطوة في bootstrapSystemAdmin) تُمنع هذه القراءة نفسها، فتعيد
+  // getUserById القيمة null وتختفي اللوحة إلى الأبد. لذلك لا فرق هنا بين "الوثيقة
+  // غير موجودة" و"مُنعت القراءة": كلاهما يعني ألا تُعرض اللوحة - إما لأن النظام
+  // مُعدّ فعلاً، أو لأننا لا نعرف، وعرض اللوحة على غير يقين يمنح أي زائر حساب
+  // مدير النظام. أما المشغّل الذي ينتظر اللوحة فسيراها لأن قراءته ستنجح.
+  //
+  // لم تعد هناك أي قراءة لمجموعة passwords: القواعد تمنعها، ولم تعد دليلاً على شيء.
+  //
+  // setupSuccess يوقف الفحص نهائياً في هذه الجلسة حتى لا تعود اللوحة للظهور بعد نجاح
+  // الإعداد.
+  useEffect(() => {
+    if (isAuthLoading || isAuthenticated || setupSuccess) return;
+
+    let cancelled = false;
+    const checkFirstRun = async () => {
+      const admin = await getUserById(SYSTEM_ADMIN_ID);
+      if (cancelled) return;
+
+      setAdminUser(admin);
+
+      const authUid = (admin as (User & { authUid?: string }) | null)?.authUid;
+      setNeedsSetup(admin !== null && !authUid);
+    };
+
+    checkFirstRun();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthLoading, isAuthenticated, setupSuccess]);
+
+  // رسالة صريحة لكل سبب فشل في الإعداد الأولي. هذا المسار هو الطريق الوحيد لدخول
+  // المالك، فلا يُقال عن أي فشل فيه إنه "خطأ ما".
+  const describeBootstrapReason = (reason: BootstrapAdminReason): string => {
+    switch (reason) {
+      case 'account_exists':
+        return isRTL
+          ? 'حساب مدير النظام موجود بالفعل. سجّل الدخول به، وإن نسيت كلمة المرور فاستخدم رابط إعادة التعيين.'
+          : 'The system administrator account already exists. Sign in with it, or use the reset link if you forgot the password.';
+      case 'not_linked':
+        return isRTL
+          ? 'تعذّرت كتابة صلاحية الحساب، فأُلغي الحساب ولم يتغيّر شيء. تأكد من نشر قواعد Firestore ثم أعد المحاولة - هذه اللوحة ما زالت صالحة.'
+          : 'The account authorization could not be written, so the account was removed again and nothing changed. Make sure the Firestore rules are deployed, then try again - this panel is still usable.';
+      case 'weak_password':
+        return isRTL
+          ? `كلمة المرور يجب أن تكون ${MIN_PASSWORD_LENGTH} أحرف على الأقل`
+          : `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+      case 'auth_not_enabled':
+        return isRTL
+          ? 'تسجيل الدخول بالبريد وكلمة المرور غير مفعّل في مشروع Firebase'
+          : 'Email/password sign-in is not enabled in the Firebase project';
+      case 'auth_not_configured':
+        return isRTL
+          ? 'إعدادات الاتصال بـ Firebase غير مكتملة أو غير صحيحة'
+          : 'The Firebase connection settings are missing or incorrect';
+      case 'too_many_requests':
+        return isRTL
+          ? 'تم إيقاف المحاولات مؤقتاً بعد عدد كبير من الطلبات. انتظر قليلاً ثم أعد المحاولة.'
+          : 'Requests are temporarily blocked after too many attempts. Wait a moment and try again.';
+      case 'network_error':
+        return isRTL
+          ? 'تعذر الوصول إلى الخادم. تحقق من اتصالك بالشبكة ثم أعد المحاولة.'
+          : 'Could not reach the server. Check your network connection and try again.';
+      default:
+        return isRTL
+          ? 'فشل في إنشاء حساب مدير النظام'
+          : 'Failed to create the system administrator account';
+    }
+  };
+
+  // إنشاء حساب مدير النظام لأول مرة: حساب Firebase Auth، ثم وثيقة الصلاحية
+  // authUsers/{uid}، ثم حقل authUid على وثيقة مدير النظام - بهذا الترتيب، وكلها في
+  // bootstrapSystemAdmin حتى يكون التراجع عن أي فشل داخل عملية واحدة.
+  // لم نعد نكتب في مجموعة passwords القديمة: مصدر الحقيقة الآن هو Firebase Auth.
+  const handleSetupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSetupError('');
+
+    if (!setupPassword || !setupConfirmPassword) {
+      setSetupError(isRTL ? 'جميع الحقول مطلوبة' : 'All fields are required');
+      return;
+    }
+
+    if (setupPassword !== setupConfirmPassword) {
+      setSetupError(isRTL ? 'كلمة المرور الجديدة غير متطابقة' : 'New passwords do not match');
+      return;
+    }
+
+    if (setupPassword.length < MIN_PASSWORD_LENGTH) {
+      setSetupError(
+        isRTL
+          ? `كلمة المرور يجب أن تكون ${MIN_PASSWORD_LENGTH} أحرف على الأقل`
+          : `Password must be at least ${MIN_PASSWORD_LENGTH} characters`
+      );
+      return;
+    }
+
+    if (!adminUser) {
+      setSetupError(isRTL ? 'تعذر قراءة حساب مدير النظام' : 'Could not read the system administrator account');
+      return;
+    }
+
+    setIsSettingUp(true);
+
+    try {
+      const result = await bootstrapSystemAdmin(adminUser, SYSTEM_ADMIN_EMAIL, setupPassword);
+
+      if (result.ok) {
+        setSetupPassword('');
+        setSetupConfirmPassword('');
+        setNeedsSetup(false);
+        setSetupSuccess(true);
+        // تعبئة اسم المستخدم ببريد مدير النظام حتى لا يضطر المشغّل لتذكره
+        setUsername(SYSTEM_ADMIN_EMAIL);
+        return;
+      }
+
+      setSetupError(describeBootstrapReason(result.reason));
+
+      // الحساب موجود أصلاً: الإعداد الأولي انتهى (ربما في جهاز آخر)، فتُخفى اللوحة
+      // ويُوجَّه المشغّل إلى نموذج الدخول. أما بقية الأسباب فالإعداد ما زال ممكناً،
+      // ولا يصح إخفاء اللوحة عنها.
+      if (result.reason === 'account_exists') {
+        setNeedsSetup(false);
+        setUsername(SYSTEM_ADMIN_EMAIL);
+      }
+    } catch (err) {
+      // bootstrapSystemAdmin لا ترمي، لكن الفشل هنا هو الطريق الوحيد لدخول المالك
+      // فلا يُترك دون رسالة
+      console.error('Error bootstrapping the system administrator account:', err);
+      setSetupError(describeBootstrapReason('error'));
+    } finally {
+      setIsSettingUp(false);
+    }
+  };
+
+  // رسالة موحّدة لكل سبب فشل يعيده تسجيل الدخول
+  const describeReason = (reason: SignInReason): string => {
+    switch (reason) {
+      case 'inactive':
+        return isRTL
+          ? 'هذا الحساب معطّل. يرجى التواصل مع إدارة الجودة.'
+          : 'This account is disabled. Please contact the quality department.';
+      case 'invalid_credentials':
+        return isRTL ? 'اسم المستخدم أو كلمة المرور غير صحيحة' : 'Invalid username or password';
+      case 'account_exists':
+        return isRTL
+          ? 'لهذا البريد حساب دخول بالفعل، وكلمة المرور القديمة لم تعد صالحة. سجّل الدخول بكلمة المرور الحالية أو استخدم رابط إعادة التعيين.'
+          : 'A sign-in account already exists for this email and the old password is no longer valid. Sign in with your current password, or use the reset link.';
+      case 'not_linked':
+        return isRTL
+          ? 'تم التحقق من الحساب لكنه غير مربوط بسجل موظف فعّال، فلن يتمكن من قراءة أي بيانات. تواصل مع مدير النظام لربط الحساب.'
+          : 'The account was authenticated but is not linked to an active employee record, so it cannot read any data. Contact the system administrator to link it.';
+      case 'auth_not_enabled':
+        return isRTL
+          ? 'تسجيل الدخول بالبريد وكلمة المرور غير مفعّل في مشروع Firebase. هذه مشكلة إعداد تخص النظام كله - أبلغ مدير النظام.'
+          : 'Email/password sign-in is not enabled in the Firebase project. This is a system-wide configuration problem - report it to the system administrator.';
+      case 'auth_not_configured':
+        return isRTL
+          ? 'إعدادات الاتصال بـ Firebase غير مكتملة أو غير صحيحة. هذه مشكلة إعداد تخص النظام كله - أبلغ مدير النظام.'
+          : 'The Firebase connection settings are missing or incorrect. This is a system-wide configuration problem - report it to the system administrator.';
+      case 'too_many_requests':
+        return isRTL
+          ? 'تم إيقاف المحاولات مؤقتاً بعد عدد كبير من المحاولات الفاشلة. انتظر قليلاً ثم أعد المحاولة.'
+          : 'Sign-in attempts are temporarily blocked after too many failed tries. Wait a moment and try again.';
+      case 'network_error':
+        return isRTL
+          ? 'تعذر الوصول إلى الخادم. تحقق من اتصالك بالشبكة ثم أعد المحاولة.'
+          : 'Could not reach the server. Check your network connection and try again.';
+      case 'service_unavailable':
+        // بيانات الدخول صحيحة والحساب سليم - تعذّرت قراءة الصلاحيات فقط. الرسالة
+        // العامة كانت تحوّل عطلاً مؤقتاً إلى شك في الحساب، وهو بالضبط ما أُضيف هذا
+        // السبب لمنعه.
+        return isRTL
+          ? 'تم قبول بيانات الدخول، لكن تعذّر الوصول إلى بيانات الصلاحيات في هذه اللحظة. المشكلة مؤقتة في الاتصال ولا علاقة لها بحسابك - أعد المحاولة بعد قليل.'
+          : 'Your credentials were accepted, but your permissions could not be read just now. This is a temporary connection problem, not a problem with your account - please try again in a moment.';
+      default:
+        return isRTL ? 'حدث خطأ أثناء تسجيل الدخول' : 'An error occurred during login';
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setResetMessage('');
+    setResetError('');
     setIsLoading(true);
 
     try {
-      const success = await login(username, password);
-      if (success) {
+      const result = await loginWithResult(username, password);
+      if (result.ok) {
         router.push('/dashboard');
       } else {
-        setError(isRTL ? 'اسم المستخدم أو كلمة المرور غير صحيحة' : 'Invalid username or password');
+        setError(describeReason(result.reason));
       }
     } catch {
       setError(isRTL ? 'حدث خطأ أثناء تسجيل الدخول' : 'An error occurred during login');
@@ -44,42 +269,266 @@ export default function LoginPage() {
     }
   };
 
+  // إرسال رابط إعادة تعيين كلمة المرور إلى البريد المكتوب في حقل اسم المستخدم
+  const handlePasswordReset = async () => {
+    setError('');
+    setResetError('');
+    setResetMessage('');
+
+    const email = username.trim().toLowerCase();
+    if (!email || !email.includes('@')) {
+      setResetError(
+        isRTL
+          ? 'اكتب بريدك الإلكتروني في حقل اسم المستخدم أولاً'
+          : 'Enter your email address in the username field first'
+      );
+      return;
+    }
+
+    setIsSendingReset(true);
+
+    // رسالة محايدة لا تكشف ما إذا كان البريد مسجلاً في النظام - وهي نفس سياسة
+    // Firebase عند تفعيل الحماية من تعداد الحسابات
+    const neutralMessage = isRTL
+      ? 'إذا كان هناك حساب مرتبط بهذا البريد فقد أُرسل إليه رابط إعادة تعيين كلمة المرور. تحقق من بريدك ومن مجلد الرسائل غير المرغوب فيها.'
+      : 'If an account exists for this email, a password reset link has been sent to it. Check your inbox and your spam folder.';
+
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setResetMessage(neutralMessage);
+    } catch (err) {
+      const code = errorCode(err);
+
+      if (code === 'auth/user-not-found') {
+        // نفس الرسالة المحايدة: لا نكشف الحسابات غير الموجودة
+        setResetMessage(neutralMessage);
+      } else if (code === 'auth/invalid-email') {
+        setResetError(isRTL ? 'صيغة البريد الإلكتروني غير صحيحة' : 'The email address is not valid');
+      } else if (code === 'auth/too-many-requests') {
+        setResetError(
+          isRTL
+            ? 'تم إرسال عدد كبير من الطلبات. حاول مرة أخرى بعد قليل.'
+            : 'Too many requests. Please try again in a moment.'
+        );
+      } else {
+        setResetError(
+          isRTL ? 'تعذر إرسال رابط إعادة التعيين' : 'Could not send the password reset link'
+        );
+      }
+    } finally {
+      setIsSendingReset(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[var(--background)] via-[var(--background-secondary)] to-[var(--background)]" dir={isRTL ? 'rtl' : 'ltr'}>
+    <div className="min-h-screen lg:grid lg:grid-cols-[1.05fr_1fr]" dir={isRTL ? 'rtl' : 'ltr'}>
       {/* Language Switcher */}
-      <div className="absolute top-4 end-4">
+      <div className="absolute top-4 end-4 z-20">
         <button
           onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--card-bg)] border border-[var(--border)] text-sm text-[var(--foreground-secondary)] hover:text-[var(--foreground)] hover:bg-[var(--background-tertiary)] transition-colors"
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--card-bg)]/80 backdrop-blur border border-[var(--border)] text-sm text-[var(--foreground-secondary)] hover:text-[var(--foreground)] hover:bg-[var(--background-tertiary)] transition-colors"
         >
           {language === 'ar' ? 'English' : 'العربية'}
         </button>
       </div>
 
-      <div className="w-full max-w-md p-8">
-        {/* Logo & Header */}
-        <div className="text-center mb-8">
-          <div className="flex justify-center mb-4">
-            <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[var(--primary-hover)] flex items-center justify-center shadow-lg">
-              <svg viewBox="0 0 24 24" className="h-8 w-8 text-white" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M9 12l2 2 4-4" />
-                <path d="M12 3c-1.2 0-2.4.6-3 1.7A3.6 3.6 0 004.6 9c-1 .6-1.7 1.8-1.7 3s.7 2.4 1.7 3c-.3 1.8.5 3.7 2.4 4.3 1.9.7 3.9-.2 4.7-2 .8 1.8 2.8 2.7 4.7 2a3.6 3.6 0 002.4-4.3c1-.6 1.7-1.8 1.7-3s-.7-2.4-1.7-3a3.6 3.6 0 00-4.4-4.3A3.6 3.6 0 0012 3z" />
-              </svg>
-            </div>
-          </div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">
-            {t('common.companyName')}
-          </h1>
-          <p className="text-[var(--foreground-secondary)] mt-2">
-            {isRTL ? 'نظام إدارة الجودة' : 'Quality Management System'}
-          </p>
+      {/* ── Brand panel ───────────────────────────────────────────────
+          A cable in cross-section: the company's own product as the mark.
+          Hidden on small screens so the form gets the whole viewport. */}
+      <aside className="qms-brand-panel relative hidden lg:flex flex-col justify-between overflow-hidden p-12 text-white">
+        {/* Oversized mark bled off the edge, as a watermark */}
+        <div
+          className="pointer-events-none absolute -bottom-24 opacity-[0.07]"
+          style={{ [isRTL ? 'left' : 'right']: '-6rem' }}
+          aria-hidden="true"
+        >
+          <CableMark size={620} animated={false} />
         </div>
 
-        {/* Login Form */}
-        <div className="bg-[var(--card-bg)] rounded-2xl border border-[var(--border)] shadow-xl p-6">
-          <h2 className="text-lg font-semibold text-[var(--foreground)] mb-6 text-center">
-            {isRTL ? 'تسجيل الدخول' : 'Sign In'}
+        <div className="relative qms-rise qms-rise-1">
+          <CableMark size={72} />
+        </div>
+
+        <div className="relative max-w-lg">
+          <h1 className="qms-rise qms-rise-2 text-4xl font-bold leading-tight tracking-tight">
+            {t('common.appName')}
+          </h1>
+          <p className="qms-rise qms-rise-3 mt-4 text-lg text-white/70">
+            {isRTL
+              ? 'إدارة دورة المراجعة الداخلية للجودة كاملة.'
+              : 'The complete internal quality audit lifecycle.'}
+          </p>
+
+          <div className="qms-rise qms-rise-4 mt-10 flex items-center gap-3">
+            <span className="h-px w-10 bg-[var(--primary)]" />
+            <span className="text-sm font-medium tracking-wide text-[var(--primary)]">
+              ISO 9001:2015
+            </span>
+          </div>
+        </div>
+
+        <p className="relative text-sm text-white/50">
+          {t('common.companyName')}
+        </p>
+      </aside>
+
+      {/* ── Form panel ─────────────────────────────────────────────── */}
+      <main className="flex items-center justify-center bg-[var(--background)] px-6 py-12">
+        <div className="w-full max-w-md">
+          {/* Compact brand lockup, shown only where the panel is hidden */}
+          <div className="qms-rise qms-rise-1 mb-8 flex flex-col items-center text-center lg:hidden">
+            <CableMark size={64} />
+            <h1 className="mt-4 text-xl font-bold text-[var(--foreground)]">
+              {t('common.companyName')}
+            </h1>
+            <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
+              {t('common.appName')}
+            </p>
+          </div>
+
+        {needsSetup && (
+          /* First-Run Administrator Setup - لوحة إضافية تظهر فوق نموذج تسجيل الدخول
+             فقط عندما لا توجد بيانات اعتماد لحساب مدير النظام */
+          <div className="bg-[var(--card-bg)] rounded-2xl border border-[var(--border)] shadow-xl p-6 mb-6">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <ShieldAlert className="h-5 w-5 text-amber-500" />
+              <h2 className="text-lg font-semibold text-[var(--foreground)]">
+                {isRTL ? 'إعداد مدير النظام لأول مرة' : 'First-Run Administrator Setup'}
+              </h2>
+            </div>
+
+            <div className="rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4 mb-5">
+              <p className="text-sm text-amber-700 dark:text-amber-300">
+                {isRTL
+                  ? 'هذا إعداد لمرة واحدة: لم يتم إنشاء حساب دخول لمدير النظام بعد. أي شخص يصل إلى هذه الشاشة الآن يستطيع إنشاؤه والحصول على أعلى صلاحية في النظام، فأكمل هذه الخطوة بنفسك قبل مشاركة الرابط مع أحد.'
+                  : 'This is a one-time setup: no sign-in account has been created for the system administrator yet. Anyone who reaches this screen right now can create it and gain the highest privilege in the system, so complete this step yourself before sharing the link with anyone.'}
+              </p>
+            </div>
+
+            {/* بريد مدير النظام - يُعرض لأنه هو اسم المستخدم الذي سيُسجَّل الدخول به */}
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--background)] p-4 mb-5">
+              <div className="flex items-center gap-2 mb-1">
+                <Mail className="h-4 w-4 text-[var(--foreground-secondary)]" />
+                <span className="text-sm font-medium text-[var(--foreground)]">
+                  {isRTL ? 'بريد مدير النظام' : 'System administrator email'}
+                </span>
+              </div>
+              <p className="text-sm text-[var(--foreground-secondary)] break-all" dir="ltr">
+                {SYSTEM_ADMIN_EMAIL}
+              </p>
+              <p className="text-xs text-[var(--foreground-secondary)] mt-2">
+                {isRTL
+                  ? 'سيُنشأ الحساب بهذا البريد، وهو نفسه ما تدخله في حقل اسم المستخدم لاحقاً.'
+                  : 'The account will be created with this email, and this is what you enter in the username field afterwards.'}
+              </p>
+            </div>
+
+            <form onSubmit={handleSetupSubmit} className="space-y-5">
+              {/* New Password Field */}
+              <div>
+                <label className="block text-sm font-medium text-[var(--foreground)] mb-2">
+                  {isRTL ? 'كلمة المرور الجديدة' : 'New Password'}
+                </label>
+                <div className="relative">
+                  <div className={`absolute top-1/2 -translate-y-1/2 ${isRTL ? 'right-3' : 'left-3'} text-[var(--foreground-secondary)]`}>
+                    <Lock className="h-5 w-5" />
+                  </div>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={setupPassword}
+                    onChange={(e) => setSetupPassword(e.target.value)}
+                    placeholder={isRTL ? 'أدخل كلمة المرور الجديدة' : 'Enter the new password'}
+                    className={`w-full ${isRTL ? 'pr-10 pl-12' : 'pl-10 pr-12'} py-3 rounded-xl border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] placeholder:text-[var(--foreground-secondary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent transition-all`}
+                    required
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className={`absolute top-1/2 -translate-y-1/2 ${isRTL ? 'left-3' : 'right-3'} text-[var(--foreground-secondary)] hover:text-[var(--foreground)] transition-colors`}
+                  >
+                    {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Confirm Password Field */}
+              <div>
+                <label className="block text-sm font-medium text-[var(--foreground)] mb-2">
+                  {isRTL ? 'تأكيد كلمة المرور' : 'Confirm Password'}
+                </label>
+                <div className="relative">
+                  <div className={`absolute top-1/2 -translate-y-1/2 ${isRTL ? 'right-3' : 'left-3'} text-[var(--foreground-secondary)]`}>
+                    <Lock className="h-5 w-5" />
+                  </div>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={setupConfirmPassword}
+                    onChange={(e) => setSetupConfirmPassword(e.target.value)}
+                    placeholder={isRTL ? 'أعد إدخال كلمة المرور' : 'Re-enter the password'}
+                    className={`w-full ${isRTL ? 'pr-10 pl-4' : 'pl-10 pr-4'} py-3 rounded-xl border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] placeholder:text-[var(--foreground-secondary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent transition-all`}
+                    required
+                    autoComplete="new-password"
+                  />
+                </div>
+              </div>
+
+              {/* Error Message */}
+              {setupError && (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                  <AlertCircle className="h-5 w-5 text-red-500" />
+                  <span className="text-sm text-red-600 dark:text-red-400">{setupError}</span>
+                </div>
+              )}
+
+              {/* Submit Button */}
+              <button
+                type="submit"
+                disabled={isSettingUp || !setupPassword || !setupConfirmPassword}
+                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[var(--primary)] to-[var(--primary-hover)] text-white font-medium transition-all hover:shadow-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isSettingUp ? (
+                  <>
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    {isRTL ? 'جاري الإنشاء...' : 'Creating...'}
+                  </>
+                ) : (
+                  isRTL ? 'إنشاء حساب مدير النظام' : 'Create Administrator Account'
+                )}
+              </button>
+            </form>
+
+            {/* Help Text */}
+            <p className="text-center text-sm text-[var(--foreground-secondary)] mt-6">
+              {isRTL
+                ? 'بعد الإنشاء يمكنك تسجيل الدخول بحساب مدير النظام، ولن تظهر هذه الشاشة مرة أخرى.'
+                : 'After creating it you can sign in with the system administrator account, and this screen will not appear again.'}
+            </p>
+          </div>
+        )}
+
+
+        <div className="qms-rise qms-rise-2 bg-[var(--card-bg)] rounded-2xl border border-[var(--border)] shadow-xl p-6 sm:p-8">
+          <h2 className="text-2xl font-bold text-[var(--foreground)]">
+            {isRTL ? 'تسجيل الدخول' : 'Sign in'}
           </h2>
+          <p className="mt-1.5 mb-6 text-sm text-[var(--foreground-secondary)]">
+            {isRTL
+              ? 'أدخل بيانات حسابك للمتابعة إلى لوحة التحكم.'
+              : 'Enter your credentials to continue to the dashboard.'}
+          </p>
+
+          {/* رسالة نجاح الإعداد الأولي */}
+          {setupSuccess && (
+            <div className="flex items-center gap-2 p-3 rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 mb-5">
+              <Check className="h-5 w-5 text-green-500" />
+              <span className="text-sm text-green-600 dark:text-green-400">
+                {isRTL
+                  ? 'تم إنشاء حساب مدير النظام. يمكنك تسجيل الدخول الآن بالبريد المعبأ أدناه.'
+                  : 'The system administrator account has been created. You can sign in now with the email filled in below.'}
+              </span>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Username Field */}
@@ -89,7 +538,7 @@ export default function LoginPage() {
               </label>
               <div className="relative">
                 <div className={`absolute top-1/2 -translate-y-1/2 ${isRTL ? 'right-3' : 'left-3'} text-[var(--foreground-secondary)]`}>
-                  <User className="h-5 w-5" />
+                  <UserIcon className="h-5 w-5" />
                 </div>
                 <input
                   type="text"
@@ -133,8 +582,8 @@ export default function LoginPage() {
 
             {/* Error Message */}
             {error && (
-              <div className="flex items-center gap-2 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
-                <AlertCircle className="h-5 w-5 text-red-500" />
+              <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                <AlertCircle className="h-5 w-5 shrink-0 text-red-500" />
                 <span className="text-sm text-red-600 dark:text-red-400">{error}</span>
               </div>
             )}
@@ -143,7 +592,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={isLoading || !username || !password}
-              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[var(--primary)] to-[var(--primary-hover)] text-white font-medium transition-all hover:shadow-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="qms-sheen relative overflow-hidden w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[var(--primary)] to-[var(--primary-hover)] text-white font-medium transition-all hover:shadow-lg hover:shadow-[var(--primary)]/25 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none flex items-center justify-center gap-2"
             >
               {isLoading ? (
                 <>
@@ -156,19 +605,56 @@ export default function LoginPage() {
             </button>
           </form>
 
+          {/* Forgot Password - إعادة تعيين ذاتية عبر البريد */}
+          <div className="mt-5 pt-5 border-t border-[var(--border)]">
+            <button
+              type="button"
+              onClick={handlePasswordReset}
+              disabled={isSendingReset}
+              className="w-full flex items-center justify-center gap-2 text-sm text-[var(--primary)] hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline transition-colors"
+            >
+              {isSendingReset ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {isRTL ? 'جاري الإرسال...' : 'Sending...'}
+                </>
+              ) : (
+                <>
+                  <Mail className="h-4 w-4" />
+                  {isRTL ? 'نسيت كلمة المرور؟' : 'Forgot your password?'}
+                </>
+              )}
+            </button>
+
+            {resetMessage && (
+              <div className="flex items-start gap-2 p-3 rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 mt-4">
+                <Check className="h-5 w-5 shrink-0 text-green-500" />
+                <span className="text-sm text-green-600 dark:text-green-400">{resetMessage}</span>
+              </div>
+            )}
+
+            {resetError && (
+              <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 mt-4">
+                <AlertCircle className="h-5 w-5 shrink-0 text-red-500" />
+                <span className="text-sm text-red-600 dark:text-red-400">{resetError}</span>
+              </div>
+            )}
+          </div>
+
           {/* Help Text */}
           <p className="text-center text-sm text-[var(--foreground-secondary)] mt-6">
             {isRTL
-              ? 'في حالة نسيان كلمة المرور، يرجى التواصل مع مدير النظام'
-              : 'If you forgot your password, please contact the system administrator'}
+              ? 'يُرسل رابط إعادة التعيين إلى البريد المكتوب في حقل اسم المستخدم. إذا تعذر عليك الوصول لبريدك، تواصل مع إدارة الجودة.'
+              : 'The reset link is sent to the email entered in the username field. If you cannot access your email, contact the quality department.'}
           </p>
         </div>
 
-        {/* Footer */}
-        <p className="text-center text-xs text-[var(--foreground-secondary)] mt-6">
-          © {new Date().getFullYear()} {t('common.companyName')} - QMS
-        </p>
-      </div>
+          {/* Footer */}
+          <p className="text-center text-xs text-[var(--foreground-secondary)] mt-6">
+            © {new Date().getFullYear()} {t('common.companyName')} — QMS
+          </p>
+        </div>
+      </main>
     </div>
   );
 }

@@ -3,12 +3,12 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout';
-import { Card, CardContent } from '@/components/ui';
+import { Card, CardContent, Skeleton } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { subscribeToAudits, updateAudit } from '@/lib/firestore';
+import { subscribeToAudits, updateAudit, getAuditNumber } from '@/lib/firestore';
 import {
   Plus,
   Search,
@@ -34,7 +34,7 @@ import {
 import { OneDrivePicker } from '@/components/ui/OneDrivePicker';
 import type { OneDriveFile } from '@/lib/onedrive';
 
-// No demo data - only actual data from localStorage
+// No demo data - only actual data from Firestore
 
 // Finding interface
 interface Finding {
@@ -59,13 +59,41 @@ interface Finding {
   rootCause?: string;
   correctiveAction?: string;
   evidence?: string;
-  attachments?: { type: string; name: string; webUrl?: string }[];
+  attachments?: { type: string; id?: string; name: string; size?: number; webUrl?: string }[];
   departmentResponse?: {
     comment?: string;
     closingDate: string;
-    attachments?: { type: string; name: string; webUrl?: string }[];
+    attachments?: { type: string; id?: string; name: string; size?: number; webUrl?: string }[];
   };
 }
+
+// Attachment cap per finding - the merge helper and the OneDrive picker must agree on it
+const MAX_ATTACHMENTS = 5;
+
+// updateAudit never throws (it catches internally and returns false) but it can hang forever
+// on a stalled connection, so every save races this timeout instead of blocking the form
+const SAVE_TIMEOUT_MS = 20000;
+
+// Audits that may still receive a new finding - the create modal's select is built from this
+const isAuditOpenForFindings = (audit: any) =>
+  audit?.status === 'execution' || audit?.status === 'in_progress';
+
+// Run the Firestore write against a deadline: 'ok' | 'failed' | 'timeout'
+type SaveResult = 'ok' | 'failed' | 'timeout';
+
+const saveWithTimeout = async (auditId: string, findings: any[]): Promise<SaveResult> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race<SaveResult>([
+      updateAudit(auditId, { findings }).then((success): SaveResult => (success ? 'ok' : 'failed')),
+      new Promise<SaveResult>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), SAVE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
 
 export default function FindingsPage() {
   const router = useRouter();
@@ -90,51 +118,190 @@ export default function FindingsPage() {
     attachments: [] as OneDriveFile[],
   });
 
+  // Save error messages - shown inside the modal when a Firestore write fails
+  const [editError, setEditError] = useState('');
+  const [createError, setCreateError] = useState('');
+
+  // In-flight write guards - a second click before the write acks would store a duplicate
+  const [isSaving, setIsSaving] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+
+  // Create finding states
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [auditsList, setAuditsList] = useState<any[]>([]); // Store raw audits for selection
+  const [selectedAuditId, setSelectedAuditId] = useState('');
+  const [newFindingData, setNewFindingData] = useState({
+    titleAr: '',
+    titleEn: '',
+    descriptionAr: '',
+    descriptionEn: '',
+    categoryB: '',
+    clause: '',
+    departmentId: '',
+    sectionId: '',
+    estimatedClosingDate: '',
+    attachments: [] as OneDriveFile[],
+  });
+
   // All findings from audits (loaded from Firestore)
   const [allFindings, setAllFindings] = useState<Finding[]>([]);
+
+  // Loading state
+  const [loading, setLoading] = useState(true);
 
   // Load findings from Firestore (from audits)
   useEffect(() => {
     const unsubscribe = subscribeToAudits((audits) => {
-        const findingsFromAudits: Finding[] = [];
+      const findingsFromAudits: Finding[] = [];
 
-        audits.forEach((audit: any) => {
-          if (audit.findings && audit.findings.length > 0) {
-            audit.findings.forEach((f: any) => {
-              findingsFromAudits.push({
-                id: f.id,
-                number: f.reportNumber || `${audit.number}-F${findingsFromAudits.length + 1}`,
-                auditId: audit.id,
-                auditNumber: audit.number,
-                titleAr: f.finding,
-                titleEn: f.finding,
-                descriptionAr: f.evidence || '',
-                descriptionEn: f.evidence || '',
-                severity: f.categoryB === 'major_nc' ? 'major' : f.categoryB === 'minor_nc' ? 'minor' : f.categoryB === 'observation' ? 'observation' : 'minor',
-                status: f.status === 'closed' ? 'closed' : f.status === 'in_progress' ? 'in_progress' : f.status === 'pending_verification' ? 'verified' : 'open',
-                clause: f.clause || '',
-                departmentId: f.departmentId,
-                sectionId: f.sectionId,
-                responsibleAr: getDepartmentName(f.departmentId, 'ar'),
-                responsibleEn: getDepartmentName(f.departmentId, 'en'),
-                dueDate: f.estimatedClosingDate,
-                closedAt: f.closedAt,
-                createdAt: f.createdAt,
-                rootCause: f.rootCause,
-                correctiveAction: f.correctiveAction,
-                evidence: f.evidence,
-                attachments: f.attachments,
-                departmentResponse: f.departmentResponse,
-              });
+      audits.forEach((audit: any) => {
+        if (audit.findings && audit.findings.length > 0) {
+          audit.findings.forEach((f: any) => {
+            findingsFromAudits.push({
+              id: f.id,
+              number: f.reportNumber || `${getAuditNumber(audit)}-F${findingsFromAudits.length + 1}`,
+              auditId: audit.id,
+              auditNumber: getAuditNumber(audit),
+              titleAr: f.finding,
+              titleEn: f.finding,
+              descriptionAr: f.evidence || '',
+              descriptionEn: f.evidence || '',
+              severity: f.categoryB === 'major_nc' ? 'major' : f.categoryB === 'minor_nc' ? 'minor' : f.categoryB === 'observation' ? 'observation' : 'minor',
+              status: f.status === 'closed' ? 'closed' : f.status === 'in_progress' ? 'in_progress' : f.status === 'pending_verification' ? 'verified' : 'open',
+              clause: f.clause || '',
+              departmentId: f.departmentId,
+              sectionId: f.sectionId,
+              responsibleAr: getDepartmentName(f.departmentId, 'ar'),
+              responsibleEn: getDepartmentName(f.departmentId, 'en'),
+              dueDate: f.estimatedClosingDate,
+              closedAt: f.closedAt,
+              createdAt: f.createdAt,
+              rootCause: f.rootCause,
+              correctiveAction: f.correctiveAction,
+              evidence: f.evidence,
+              attachments: f.attachments,
+              departmentResponse: f.departmentResponse,
             });
-          }
-        });
+          });
+        }
+      });
 
-        setAllFindings(findingsFromAudits);
+      setAllFindings(findingsFromAudits);
+      setAuditsList(audits);
+      setLoading(false);
     });
 
     return () => unsubscribe();
   }, []);
+
+  // The title/evidence actually persisted - falls back to the other language when the field
+  // matching the UI language is empty, so whatever the auditor typed is what gets stored
+  const getFindingTitle = () => language === 'ar'
+    ? (newFindingData.titleAr || newFindingData.titleEn)
+    : (newFindingData.titleEn || newFindingData.titleAr);
+
+  const getFindingEvidence = () => language === 'ar'
+    ? (newFindingData.descriptionAr || newFindingData.descriptionEn)
+    : (newFindingData.descriptionEn || newFindingData.descriptionAr);
+
+  // Merge newly picked files into the current list - the OneDrive picker returns every ticked
+  // file, so re-picking an already-attached file must not add a second entry with the same id
+  const mergeAttachments = (existing: OneDriveFile[], incoming: OneDriveFile[]) => {
+    const merged = [...existing];
+    incoming.forEach((file) => {
+      const index = file.id ? merged.findIndex(f => f.id === file.id) : -1;
+      if (index >= 0) {
+        merged[index] = file;
+      } else {
+        merged.push(file);
+      }
+    });
+    // Cap only after the dedupe - re-ticking already-attached files takes no new slot, so
+    // trimming against the pre-merge count would drop genuinely new files for no reason
+    return merged.slice(0, MAX_ATTACHMENTS);
+  };
+
+  // Handle Create Finding
+  const handleCreateFinding = async () => {
+    if (isCreating) return;
+    if (!selectedAuditId || !getFindingTitle() || !newFindingData.categoryB || !newFindingData.estimatedClosingDate) return;
+
+    // Never bail out silently - the form stays open with what the auditor typed
+    const targetAudit = auditsList.find(a => a.id === selectedAuditId);
+    if (!targetAudit) {
+      setCreateError(language === 'ar'
+        ? 'تعذر تحميل بيانات المراجعة. تحقق من الاتصال وأعد تحميل الصفحة قبل الحفظ.'
+        : 'Could not load the audit data. Check your connection and reload the page before saving.');
+      return;
+    }
+
+    // The audit's status can change while the modal is open - its option then disappears from
+    // the select but the stale id is still in state, so re-validate it before writing
+    if (!isAuditOpenForFindings(targetAudit)) {
+      setCreateError(language === 'ar'
+        ? 'لم تعد المراجعة المختارة قيد التنفيذ. اختر مراجعة أخرى - لن تفقد ما أدخلته.'
+        : 'The selected audit is no longer in execution. Pick another audit - what you entered is kept.');
+      setSelectedAuditId('');
+      return;
+    }
+
+    const newFindingObj = {
+      id: `finding-${Date.now()}`,
+      reportNumber: `${getAuditNumber(targetAudit)}-F${(targetAudit.findings?.length || 0) + 1}`,
+      departmentId: newFindingData.departmentId || targetAudit.departmentId,
+      sectionId: newFindingData.sectionId || targetAudit.sectionId,
+      clause: newFindingData.clause,
+      finding: getFindingTitle(), // For compatibility
+      evidence: getFindingEvidence(),
+      categoryA: 'quality', // Default
+      categoryB: newFindingData.categoryB,
+      estimatedClosingDate: newFindingData.estimatedClosingDate,
+      status: 'open',
+      createdAt: new Date().toISOString(),
+      attachments: newFindingData.attachments.map(file => ({
+        type: 'onedrive',
+        name: file.name,
+        size: file.size,
+        webUrl: file.webUrl,
+        id: file.id,
+      })),
+    };
+
+    const updatedFindings = [...(targetAudit.findings || []), newFindingObj];
+
+    setIsCreating(true);
+
+    try {
+      // Update audit in Firestore - keep the form open if the write failed or stalled
+      const result = await saveWithTimeout(selectedAuditId, updatedFindings);
+
+      if (result === 'timeout') {
+        setCreateError(language === 'ar'
+          ? 'استغرق الحفظ وقتاً طويلاً ولم يكتمل. تحقق من الاتصال ثم اضغط "إنشاء الملاحظة" مرة أخرى.'
+          : 'Saving took too long and did not complete. Check your connection, then press "Create Finding" again.');
+        return;
+      }
+
+      if (result === 'failed') {
+        setCreateError(language === 'ar'
+          ? 'فشل حفظ الملاحظة. يرجى المحاولة مرة أخرى.'
+          : 'Failed to save the finding. Please try again.');
+        return;
+      }
+
+      // Reset and close
+      setCreateError('');
+      setShowCreateModal(false);
+      setSelectedAuditId('');
+      setNewFindingData({
+        titleAr: '', titleEn: '', descriptionAr: '', descriptionEn: '',
+        categoryB: '', clause: '', departmentId: '', sectionId: '',
+        estimatedClosingDate: '', attachments: []
+      });
+    } finally {
+      setIsCreating(false);
+    }
+  };
 
   // Helper function to get department name
   const getDepartmentName = (deptId: string, lang: 'ar' | 'en') => {
@@ -158,16 +325,14 @@ export default function FindingsPage() {
 
   // Helper functions to determine user's role in each finding
   const isUserAuditor = (finding: Finding) => {
-    // Get the audit to check if user is the lead auditor or in auditor team
-    const storedAudits = localStorage.getItem('qms_audits');
-    if (storedAudits && finding.auditId) {
-      const audits = JSON.parse(storedAudits);
-      const audit = audits.find((a: any) => a.id === finding.auditId);
-      if (audit) {
-        return audit.leadAuditorId === currentUser?.id ||
-               audit.auditorIds?.includes(currentUser?.id || '') ||
-               audit.createdBy === currentUser?.id;
-      }
+    // Get the audit from Firestore data to check if user is the lead auditor or in auditor team
+    if (!finding.auditId) return false;
+    const audit = auditsList.find((a: any) => a.id === finding.auditId);
+    if (audit) {
+      return audit.leadAuditorId === currentUser?.id ||
+        audit.teamMemberIds?.includes(currentUser?.id || '') ||
+        audit.auditorIds?.includes(currentUser?.id || '') ||
+        audit.createdBy === currentUser?.id;
     }
     return false;
   };
@@ -268,60 +433,93 @@ export default function FindingsPage() {
       correctiveAction: finding.correctiveAction || '',
       comment: finding.departmentResponse?.comment || '',
       closingDate: finding.departmentResponse?.closingDate || finding.dueDate,
-      attachments: [],
+      // Rehydrate already-attached evidence so saving keeps it instead of wiping it.
+      // Older records were stored without an id - give those a stable synthetic one, otherwise
+      // they all share the empty string and removing one would delete every id-less attachment
+      attachments: (finding.departmentResponse?.attachments || []).map((a, index) => ({
+        id: a.id || `stored-${finding.id}-${index}`,
+        name: a.name,
+        size: a.size || 0,
+        webUrl: a.webUrl || '',
+      })) as OneDriveFile[],
     });
+    setEditError('');
     setShowEditModal(true);
   };
 
   // Save finding changes
-  const handleSaveFinding = () => {
+  const handleSaveFinding = async () => {
+    if (isSaving) return;
     if (!selectedFinding) return;
 
-    // Update in localStorage
-    const storedAudits = localStorage.getItem('qms_audits');
-    if (storedAudits && selectedFinding.auditId) {
-      const audits = JSON.parse(storedAudits);
-      const updatedAudits = audits.map((audit: any) => {
-        if (audit.id === selectedFinding.auditId) {
-          return {
-            ...audit,
-            findings: audit.findings.map((f: any) =>
-              f.id === selectedFinding.id
-                ? {
-                    ...f,
-                    rootCause: editForm.rootCause,
-                    correctiveAction: editForm.correctiveAction,
-                    status: editForm.correctiveAction ? 'in_progress' : f.status,
-                    departmentResponse: {
-                      approvedBy: currentUser?.id || '',
-                      approvedAt: new Date().toISOString(),
-                      closingDate: editForm.closingDate,
-                      comment: editForm.comment,
-                      attachments: editForm.attachments.map(file => ({
-                        type: 'onedrive',
-                        name: file.name,
-                        size: file.size,
-                        webUrl: file.webUrl,
-                        id: file.id,
-                      })),
-                    },
-                  }
-                : f
-            ),
-          };
-        }
-        return audit;
-      });
-
-      localStorage.setItem('qms_audits', JSON.stringify(updatedAudits));
-
-      // Reload findings
-      window.dispatchEvent(new Event('storage'));
+    // Never bail out silently - the form stays open with what the user typed
+    if (!selectedFinding.auditId) {
+      setEditError(language === 'ar'
+        ? 'تعذر تحديد المراجعة المرتبطة بهذه الملاحظة. يرجى إعادة تحميل الصفحة والمحاولة مرة أخرى.'
+        : 'Could not identify the audit for this finding. Please reload the page and try again.');
+      return;
     }
 
-    setShowEditModal(false);
-    setSelectedFinding(null);
-    setEditForm({ rootCause: '', correctiveAction: '', comment: '', closingDate: '', attachments: [] });
+    const targetAudit = auditsList.find(a => a.id === selectedFinding.auditId);
+    if (!targetAudit) {
+      setEditError(language === 'ar'
+        ? 'تعذر تحميل بيانات المراجعة. تحقق من الاتصال وأعد تحميل الصفحة قبل الحفظ.'
+        : 'Could not load the audit data. Check your connection and reload the page before saving.');
+      return;
+    }
+
+    const updatedFindings = (targetAudit.findings || []).map((f: any) =>
+      f.id === selectedFinding.id
+        ? {
+          ...f,
+          rootCause: editForm.rootCause,
+          correctiveAction: editForm.correctiveAction,
+          // Status only moves forward from 'open' - never downgrade a closed/verified finding
+          status: editForm.correctiveAction && (!f.status || f.status === 'open') ? 'in_progress' : f.status,
+          departmentResponse: {
+            approvedBy: currentUser?.id || '',
+            approvedAt: new Date().toISOString(),
+            closingDate: editForm.closingDate,
+            comment: editForm.comment,
+            attachments: editForm.attachments.map(file => ({
+              type: 'onedrive',
+              name: file.name,
+              size: file.size,
+              webUrl: file.webUrl,
+              id: file.id,
+            })),
+          },
+        }
+        : f
+    );
+
+    setIsSaving(true);
+
+    try {
+      // Update audit in Firestore - keep the form open if the write failed or stalled
+      const result = await saveWithTimeout(selectedFinding.auditId, updatedFindings);
+
+      if (result === 'timeout') {
+        setEditError(language === 'ar'
+          ? 'استغرق الحفظ وقتاً طويلاً ولم يكتمل. تحقق من الاتصال ثم اضغط "حفظ التغييرات" مرة أخرى.'
+          : 'Saving took too long and did not complete. Check your connection, then press "Save Changes" again.');
+        return;
+      }
+
+      if (result === 'failed') {
+        setEditError(language === 'ar'
+          ? 'فشل حفظ التغييرات. يرجى المحاولة مرة أخرى.'
+          : 'Failed to save changes. Please try again.');
+        return;
+      }
+
+      setEditError('');
+      setShowEditModal(false);
+      setSelectedFinding(null);
+      setEditForm({ rootCause: '', correctiveAction: '', comment: '', closingDate: '', attachments: [] });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -337,321 +535,356 @@ export default function FindingsPage() {
               {language === 'ar' ? 'متابعة ملاحظات التدقيق والإجراءات التصحيحية' : 'Track audit findings and corrective actions'}
             </p>
           </div>
-          <Button leftIcon={<Plus className="h-4 w-4" />}>
+          <Button leftIcon={<Plus className="h-4 w-4" />} onClick={() => { setCreateError(''); setShowCreateModal(true); }}>
             {t('findings.newFinding')}
           </Button>
         </div>
 
-        {/* Alert for findings needing action */}
-        {findingsNeedingAction.length > 0 && (
-          <div className="p-4 rounded-lg bg-gradient-to-r from-orange-50 to-red-50 dark:from-orange-900/20 dark:to-red-900/20 border border-orange-200 dark:border-orange-800 animate-pulse">
-            <div className="flex items-start gap-3">
-              <div className="p-2 rounded-full bg-orange-100 dark:bg-orange-800 animate-bounce">
-                <AlertTriangle className="h-6 w-6 text-orange-600 dark:text-orange-400" />
+        {/* Loading Skeleton */}
+        {loading ? (
+          <div className="space-y-6">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {[1, 2, 3, 4].map((i) => (
+                <Card key={i} className="p-4">
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="h-10 w-10 rounded-lg" />
+                    <div className="space-y-2">
+                      <Skeleton className="h-6 w-12" />
+                      <Skeleton className="h-4 w-20" />
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+
+            <Card>
+              <div className="p-4 space-y-4">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="flex items-center justify-between">
+                    <div className="space-y-2">
+                      <Skeleton className="h-4 w-32" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
+                    <Skeleton className="h-6 w-20 rounded-full" />
+                    <Skeleton className="h-6 w-24 rounded-full" />
+                    <Skeleton className="h-8 w-8 rounded-full" />
+                  </div>
+                ))}
               </div>
-              <div className="flex-1">
-                <h3 className="font-semibold text-orange-800 dark:text-orange-200 mb-1">
-                  {language === 'ar'
-                    ? `لديك ${findingsNeedingAction.length} ملاحظة تحتاج إجراء!`
-                    : `You have ${findingsNeedingAction.length} finding(s) requiring action!`}
-                </h3>
-                <p className="text-sm text-orange-700 dark:text-orange-300 mb-3">
-                  {language === 'ar'
-                    ? 'يرجى تحديد تاريخ الإغلاق والرد على الملاحظات التالية:'
-                    : 'Please set closing date and respond to the following findings:'}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {findingsNeedingAction.slice(0, 5).map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => handleEditFinding(f)}
-                      className="px-3 py-1 rounded-full text-xs font-medium bg-orange-200 dark:bg-orange-800 text-orange-800 dark:text-orange-200 hover:bg-orange-300 dark:hover:bg-orange-700 transition-colors"
-                    >
-                      {f.number}
-                    </button>
-                  ))}
-                  {findingsNeedingAction.length > 5 && (
-                    <span className="px-3 py-1 text-xs text-orange-600 dark:text-orange-400">
-                      +{findingsNeedingAction.length - 5} {language === 'ar' ? 'المزيد' : 'more'}
-                    </span>
-                  )}
+            </Card>
+          </div>
+        ) : (
+          <>
+            {/* Alert for findings needing action */}
+            {findingsNeedingAction.length > 0 && (
+              <div className="p-4 rounded-lg bg-gradient-to-r from-orange-50 to-red-50 dark:from-orange-900/20 dark:to-red-900/20 border border-orange-200 dark:border-orange-800 animate-pulse">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-full bg-orange-100 dark:bg-orange-800 animate-bounce">
+                    <AlertTriangle className="h-6 w-6 text-orange-600 dark:text-orange-400" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-orange-800 dark:text-orange-200 mb-1">
+                      {language === 'ar'
+                        ? `لديك ${findingsNeedingAction.length} ملاحظة تحتاج إجراء!`
+                        : `You have ${findingsNeedingAction.length} finding(s) requiring action!`}
+                    </h3>
+                    <p className="text-sm text-orange-700 dark:text-orange-300 mb-3">
+                      {language === 'ar'
+                        ? 'يرجى تحديد تاريخ الإغلاق والرد على الملاحظات التالية:'
+                        : 'Please set closing date and respond to the following findings:'}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {findingsNeedingAction.slice(0, 5).map((f) => (
+                        <button
+                          key={f.id}
+                          onClick={() => handleEditFinding(f)}
+                          className="px-3 py-1 rounded-full text-xs font-medium bg-orange-200 dark:bg-orange-800 text-orange-800 dark:text-orange-200 hover:bg-orange-300 dark:hover:bg-orange-700 transition-colors"
+                        >
+                          {f.number}
+                        </button>
+                      ))}
+                      {findingsNeedingAction.length > 5 && (
+                        <span className="px-3 py-1 text-xs text-orange-600 dark:text-orange-400">
+                          +{findingsNeedingAction.length - 5} {language === 'ar' ? 'المزيد' : 'more'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* Stats Cards */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Card className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--status-warning-bg)]">
-                <AlertCircle className="h-5 w-5 text-[var(--status-warning)]" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-[var(--foreground)]">{openCount}</p>
-                <p className="text-sm text-[var(--foreground-secondary)]">
-                  {language === 'ar' ? 'مفتوحة' : 'Open'}
-                </p>
-              </div>
-            </div>
-          </Card>
-          <Card className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--status-info-bg)]">
-                <Clock className="h-5 w-5 text-[var(--status-info)]" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-[var(--foreground)]">{inProgressCount}</p>
-                <p className="text-sm text-[var(--foreground-secondary)]">
-                  {language === 'ar' ? 'قيد المعالجة' : 'In Progress'}
-                </p>
-              </div>
-            </div>
-          </Card>
-          <Card className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--status-success-bg)]">
-                <CheckCircle className="h-5 w-5 text-[var(--status-success)]" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-[var(--foreground)]">{closedCount}</p>
-                <p className="text-sm text-[var(--foreground-secondary)]">
-                  {language === 'ar' ? 'مغلقة' : 'Closed'}
-                </p>
-              </div>
-            </div>
-          </Card>
-          <Card className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--risk-critical-bg)]">
-                <AlertTriangle className="h-5 w-5 text-[var(--risk-critical)]" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-[var(--foreground)]">{criticalCount}</p>
-                <p className="text-sm text-[var(--foreground-secondary)]">
-                  {language === 'ar' ? 'حرجة مفتوحة' : 'Critical Open'}
-                </p>
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        {/* Role Tabs */}
-        <div className="flex flex-wrap gap-2 p-1 bg-[var(--background-secondary)] rounded-lg w-fit">
-          <button
-            onClick={() => setViewMode('all')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              viewMode === 'all'
-                ? 'bg-[var(--background)] text-[var(--foreground)] shadow-sm'
-                : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            <FileText className="h-4 w-4" />
-            {language === 'ar' ? 'كل الملاحظات' : 'All Findings'}
-            <span className="px-1.5 py-0.5 text-xs rounded-full bg-[var(--foreground-muted)]/20">
-              {combinedFindings.length}
-            </span>
-          </button>
-          <button
-            onClick={() => setViewMode('as_auditor')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              viewMode === 'as_auditor'
-                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-sm'
-                : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            <ClipboardCheck className="h-4 w-4" />
-            {language === 'ar' ? 'كمراجع' : 'As Auditor'}
-            {auditorFindingsCount > 0 && (
-              <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-200 dark:bg-blue-800 text-blue-700 dark:text-blue-300">
-                {auditorFindingsCount}
-              </span>
             )}
-          </button>
-          <button
-            onClick={() => setViewMode('as_auditee')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              viewMode === 'as_auditee'
-                ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 shadow-sm'
-                : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            <UserCheck className="h-4 w-4" />
-            {language === 'ar' ? 'كمراجع عليه' : 'As Auditee'}
-            {auditeeFindingsCount > 0 && (
-              <span className="px-1.5 py-0.5 text-xs rounded-full bg-orange-200 dark:bg-orange-800 text-orange-700 dark:text-orange-300">
-                {auditeeFindingsCount}
-              </span>
-            )}
-          </button>
-        </div>
 
-        {/* Role Description Banner */}
-        {viewMode !== 'all' && (
-          <div className={`p-3 rounded-lg ${
-            viewMode === 'as_auditor'
-              ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800'
-              : 'bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800'
-          }`}>
-            <p className={`text-sm ${
-              viewMode === 'as_auditor'
-                ? 'text-blue-700 dark:text-blue-300'
-                : 'text-orange-700 dark:text-orange-300'
-            }`}>
-              {viewMode === 'as_auditor'
-                ? (language === 'ar'
-                    ? 'عرض الملاحظات التي قمت بتسجيلها كمراجع - يمكنك متابعة حالة الإجراءات التصحيحية'
-                    : 'Showing findings you recorded as an auditor - you can track corrective action status')
-                : (language === 'ar'
-                    ? 'عرض الملاحظات المسجلة على إدارتك - يتطلب منك اتخاذ إجراءات تصحيحية'
-                    : 'Showing findings recorded against your department - corrective actions required from you')
-              }
-            </p>
-          </div>
-        )}
-
-        {/* Filters */}
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
-              {/* Search */}
-              <div className="relative flex-1">
-                <Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--foreground-muted)]" />
-                <input
-                  type="text"
-                  placeholder={language === 'ar' ? 'بحث في الملاحظات...' : 'Search findings...'}
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] py-2 ps-10 pe-4 text-sm text-[var(--foreground)] placeholder:text-[var(--foreground-muted)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
-                />
-              </div>
-
-              {/* Severity Filter */}
-              <select
-                value={selectedSeverity}
-                onChange={(e) => setSelectedSeverity(e.target.value)}
-                className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
-              >
-                {severities.map(sev => (
-                  <option key={sev.value} value={sev.value}>
-                    {language === 'ar' ? sev.labelAr : sev.labelEn}
-                  </option>
-                ))}
-              </select>
-
-              {/* Status Filter */}
-              <select
-                value={selectedStatus}
-                onChange={(e) => setSelectedStatus(e.target.value)}
-                className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
-              >
-                {statuses.map(status => (
-                  <option key={status.value} value={status.value}>
-                    {language === 'ar' ? status.labelAr : status.labelEn}
-                  </option>
-                ))}
-              </select>
+            {/* Stats Cards */}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <Card className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--status-warning-bg)]">
+                    <AlertCircle className="h-5 w-5 text-[var(--status-warning)]" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-[var(--foreground)]">{openCount}</p>
+                    <p className="text-sm text-[var(--foreground-secondary)]">
+                      {language === 'ar' ? 'مفتوحة' : 'Open'}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+              <Card className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--status-info-bg)]">
+                    <Clock className="h-5 w-5 text-[var(--status-info)]" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-[var(--foreground)]">{inProgressCount}</p>
+                    <p className="text-sm text-[var(--foreground-secondary)]">
+                      {language === 'ar' ? 'قيد المعالجة' : 'In Progress'}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+              <Card className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--status-success-bg)]">
+                    <CheckCircle className="h-5 w-5 text-[var(--status-success)]" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-[var(--foreground)]">{closedCount}</p>
+                    <p className="text-sm text-[var(--foreground-secondary)]">
+                      {language === 'ar' ? 'مغلقة' : 'Closed'}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+              <Card className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--risk-critical-bg)]">
+                    <AlertTriangle className="h-5 w-5 text-[var(--risk-critical)]" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-[var(--foreground)]">{criticalCount}</p>
+                    <p className="text-sm text-[var(--foreground-secondary)]">
+                      {language === 'ar' ? 'حرجة مفتوحة' : 'Critical Open'}
+                    </p>
+                  </div>
+                </div>
+              </Card>
             </div>
-          </CardContent>
-        </Card>
 
-        {/* Findings Table */}
-        <Card>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('findings.findingNumber')}</TableHead>
-                <TableHead>{t('findings.findingTitle')}</TableHead>
-                <TableHead>{language === 'ar' ? 'دورك' : 'Your Role'}</TableHead>
-                <TableHead>{t('findings.severity')}</TableHead>
-                <TableHead>{t('common.status')}</TableHead>
-                <TableHead>{t('findings.clause')}</TableHead>
-                <TableHead>{t('findings.responsible')}</TableHead>
-                <TableHead>{t('findings.dueDate')}</TableHead>
-                <TableHead className="text-center">{t('common.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredFindings.map((finding) => {
-                const userRole = getUserRoleInFinding(finding as Finding);
-                return (
-                <TableRow key={finding.id}>
-                  <TableCell className="font-mono text-sm">{finding.number}</TableCell>
-                  <TableCell>
-                    <div>
-                      <p className="font-medium">{language === 'ar' ? finding.titleAr : finding.titleEn}</p>
-                      <p className="text-xs text-[var(--foreground-muted)]">{finding.auditNumber}</p>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {(userRole === 'auditor' || userRole === 'both') && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
-                          <ClipboardCheck className="h-3 w-3" />
-                          {language === 'ar' ? 'مراجع' : 'Auditor'}
-                        </span>
-                      )}
-                      {(userRole === 'auditee' || userRole === 'both') && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300">
-                          <UserCheck className="h-3 w-3" />
-                          {language === 'ar' ? 'مراجع عليه' : 'Auditee'}
-                        </span>
-                      )}
-                      {userRole === 'none' && (
-                        <span className="text-xs text-[var(--foreground-muted)]">-</span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>{getSeverityBadge(finding.severity)}</TableCell>
-                  <TableCell>{getStatusBadge(finding.status)}</TableCell>
-                  <TableCell className="font-mono text-sm text-[var(--foreground-secondary)]">
-                    {finding.clause}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--primary-light)] text-xs font-medium text-[var(--primary)]">
-                        {(language === 'ar' ? finding.responsibleAr : finding.responsibleEn).charAt(0)}
-                      </div>
-                      <span className="text-sm">{language === 'ar' ? finding.responsibleAr : finding.responsibleEn}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="text-sm">
-                      {new Date(finding.dueDate).toLocaleDateString(language === 'ar' ? 'ar-SA' : 'en-US')}
-                      {new Date(finding.dueDate) < new Date() && finding.status !== 'closed' && finding.status !== 'verified' && (
-                        <span className="ms-2 text-xs text-[var(--status-error)]">
-                          {language === 'ar' ? '(متأخر)' : '(Overdue)'}
-                        </span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        title={t('common.view')}
-                        onClick={() => handleViewFinding(finding as Finding)}
-                      >
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        title={t('common.edit')}
-                        onClick={() => handleEditFinding(finding as Finding)}
-                      >
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </Card>
+            {/* Role Tabs */}
+            <div className="flex flex-wrap gap-2 p-1 bg-[var(--background-secondary)] rounded-lg w-fit">
+              <button
+                onClick={() => setViewMode('all')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${viewMode === 'all'
+                  ? 'bg-[var(--background)] text-[var(--foreground)] shadow-sm'
+                  : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
+                  }`}
+              >
+                <FileText className="h-4 w-4" />
+                {language === 'ar' ? 'كل الملاحظات' : 'All Findings'}
+                <span className="px-1.5 py-0.5 text-xs rounded-full bg-[var(--foreground-muted)]/20">
+                  {combinedFindings.length}
+                </span>
+              </button>
+              <button
+                onClick={() => setViewMode('as_auditor')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${viewMode === 'as_auditor'
+                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-sm'
+                  : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
+                  }`}
+              >
+                <ClipboardCheck className="h-4 w-4" />
+                {language === 'ar' ? 'كمراجع' : 'As Auditor'}
+                {auditorFindingsCount > 0 && (
+                  <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-200 dark:bg-blue-800 text-blue-700 dark:text-blue-300">
+                    {auditorFindingsCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setViewMode('as_auditee')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${viewMode === 'as_auditee'
+                  ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 shadow-sm'
+                  : 'text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
+                  }`}
+              >
+                <UserCheck className="h-4 w-4" />
+                {language === 'ar' ? 'كمراجع عليه' : 'As Auditee'}
+                {auditeeFindingsCount > 0 && (
+                  <span className="px-1.5 py-0.5 text-xs rounded-full bg-orange-200 dark:bg-orange-800 text-orange-700 dark:text-orange-300">
+                    {auditeeFindingsCount}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* Role Description Banner */}
+            {viewMode !== 'all' && (
+              <div className={`p-3 rounded-lg ${viewMode === 'as_auditor'
+                ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800'
+                : 'bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800'
+                }`}>
+                <p className={`text-sm ${viewMode === 'as_auditor'
+                  ? 'text-blue-700 dark:text-blue-300'
+                  : 'text-orange-700 dark:text-orange-300'
+                  }`}>
+                  {viewMode === 'as_auditor'
+                    ? (language === 'ar'
+                      ? 'عرض الملاحظات التي قمت بتسجيلها كمراجع - يمكنك متابعة حالة الإجراءات التصحيحية'
+                      : 'Showing findings you recorded as an auditor - you can track corrective action status')
+                    : (language === 'ar'
+                      ? 'عرض الملاحظات المسجلة على إدارتك - يتطلب منك اتخاذ إجراءات تصحيحية'
+                      : 'Showing findings recorded against your department - corrective actions required from you')
+                  }
+                </p>
+              </div>
+            )}
+
+            {/* Filters */}
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+                  {/* Search */}
+                  <div className="relative flex-1">
+                    <Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--foreground-muted)]" />
+                    <input
+                      type="text"
+                      placeholder={language === 'ar' ? 'بحث في الملاحظات...' : 'Search findings...'}
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] py-2 ps-10 pe-4 text-sm text-[var(--foreground)] placeholder:text-[var(--foreground-muted)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                    />
+                  </div>
+
+                  {/* Severity Filter */}
+                  <select
+                    value={selectedSeverity}
+                    onChange={(e) => setSelectedSeverity(e.target.value)}
+                    className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                  >
+                    {severities.map(sev => (
+                      <option key={sev.value} value={sev.value}>
+                        {language === 'ar' ? sev.labelAr : sev.labelEn}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Status Filter */}
+                  <select
+                    value={selectedStatus}
+                    onChange={(e) => setSelectedStatus(e.target.value)}
+                    className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                  >
+                    {statuses.map(status => (
+                      <option key={status.value} value={status.value}>
+                        {language === 'ar' ? status.labelAr : status.labelEn}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Findings Table */}
+            <Card>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t('findings.findingNumber')}</TableHead>
+                    <TableHead>{t('findings.findingTitle')}</TableHead>
+                    <TableHead>{language === 'ar' ? 'دورك' : 'Your Role'}</TableHead>
+                    <TableHead>{t('findings.severity')}</TableHead>
+                    <TableHead>{t('common.status')}</TableHead>
+                    <TableHead>{t('findings.clause')}</TableHead>
+                    <TableHead>{t('findings.responsible')}</TableHead>
+                    <TableHead>{t('findings.dueDate')}</TableHead>
+                    <TableHead className="text-center">{t('common.actions')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredFindings.map((finding) => {
+                    const userRole = getUserRoleInFinding(finding as Finding);
+                    return (
+                      <TableRow key={finding.id}>
+                        <TableCell className="font-mono text-sm">{finding.number}</TableCell>
+                        <TableCell>
+                          <div>
+                            <p className="font-medium">{language === 'ar' ? finding.titleAr : finding.titleEn}</p>
+                            <p className="text-xs text-[var(--foreground-muted)]">{finding.auditNumber}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {(userRole === 'auditor' || userRole === 'both') && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                                <ClipboardCheck className="h-3 w-3" />
+                                {language === 'ar' ? 'مراجع' : 'Auditor'}
+                              </span>
+                            )}
+                            {(userRole === 'auditee' || userRole === 'both') && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300">
+                                <UserCheck className="h-3 w-3" />
+                                {language === 'ar' ? 'مراجع عليه' : 'Auditee'}
+                              </span>
+                            )}
+                            {userRole === 'none' && (
+                              <span className="text-xs text-[var(--foreground-muted)]">-</span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>{getSeverityBadge(finding.severity)}</TableCell>
+                        <TableCell>{getStatusBadge(finding.status)}</TableCell>
+                        <TableCell className="font-mono text-sm text-[var(--foreground-secondary)]">
+                          {finding.clause}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--primary-light)] text-xs font-medium text-[var(--primary)]">
+                              {(language === 'ar' ? finding.responsibleAr : finding.responsibleEn).charAt(0)}
+                            </div>
+                            <span className="text-sm">{language === 'ar' ? finding.responsibleAr : finding.responsibleEn}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-sm">
+                            {new Date(finding.dueDate).toLocaleDateString(language === 'ar' ? 'ar-SA' : 'en-US')}
+                            {new Date(finding.dueDate) < new Date() && finding.status !== 'closed' && finding.status !== 'verified' && (
+                              <span className="ms-2 text-xs text-[var(--status-error)]">
+                                {language === 'ar' ? '(متأخر)' : '(Overdue)'}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center justify-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              title={t('common.view')}
+                              onClick={() => handleViewFinding(finding as Finding)}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                            {/* Completed findings are read-only - no editing after closing/verification */}
+                            {finding.status !== 'closed' && finding.status !== 'verified' && (
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                title={t('common.edit')}
+                                onClick={() => handleEditFinding(finding as Finding)}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </Card>
+          </>
+        )}
 
         {/* View Finding Modal */}
         {showViewModal && selectedFinding && (
@@ -756,7 +989,9 @@ export default function FindingsPage() {
         {/* Edit Finding Modal */}
         {showEditModal && selectedFinding && (
           <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowEditModal(false)} />
+            {/* Dismissal is blocked while the write is in flight - closing now would unmount
+                the modal and swallow the failure message the save is about to show */}
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => { if (!isSaving) setShowEditModal(false); }} />
             <div className="relative z-50 w-full max-w-2xl rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4 max-h-[90vh] overflow-y-auto">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -765,7 +1000,7 @@ export default function FindingsPage() {
                   </h2>
                   <p className="text-sm text-[var(--foreground-secondary)]">{selectedFinding.number}</p>
                 </div>
-                <Button variant="ghost" size="icon-sm" onClick={() => setShowEditModal(false)}>
+                <Button variant="ghost" size="icon-sm" onClick={() => setShowEditModal(false)} disabled={isSaving}>
                   <X className="h-4 w-4" />
                 </Button>
               </div>
@@ -840,29 +1075,227 @@ export default function FindingsPage() {
                   <OneDrivePicker
                     onFilesSelected={(files) => setEditForm({
                       ...editForm,
-                      attachments: [...editForm.attachments, ...files],
+                      attachments: mergeAttachments(editForm.attachments, files),
                     })}
                     selectedFiles={editForm.attachments}
                     onRemoveFile={(fileId) => setEditForm({
                       ...editForm,
                       attachments: editForm.attachments.filter(f => f.id !== fileId),
                     })}
-                    maxFiles={5}
+                    maxFiles={MAX_ATTACHMENTS}
                     language={language}
                   />
                 </div>
               </div>
 
+              {/* Error message */}
+              {editError && (
+                <div className="mt-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-3 rounded-lg flex items-center gap-2 text-sm">
+                  <AlertCircle className="h-4 w-4" />
+                  {editError}
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 mt-6">
-                <Button variant="outline" onClick={() => {
+                <Button variant="outline" disabled={isSaving} onClick={() => {
                   setShowEditModal(false);
+                  setEditError('');
                   setEditForm({ rootCause: '', correctiveAction: '', comment: '', closingDate: '', attachments: [] });
                 }}>
                   {language === 'ar' ? 'إلغاء' : 'Cancel'}
                 </Button>
-                <Button onClick={handleSaveFinding}>
+                <Button onClick={handleSaveFinding} disabled={isSaving}>
                   <Send className="h-4 w-4 mx-1" />
-                  {language === 'ar' ? 'حفظ التغييرات' : 'Save Changes'}
+                  {isSaving
+                    ? (language === 'ar' ? 'جارٍ الحفظ...' : 'Saving...')
+                    : (language === 'ar' ? 'حفظ التغييرات' : 'Save Changes')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Create Finding Modal */}
+        {showCreateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            {/* Same guard as the edit modal - no dismissal while the create write is in flight */}
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => { if (!isCreating) setShowCreateModal(false); }} />
+            <div className="relative z-50 w-full max-w-2xl rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold">
+                  {language === 'ar' ? 'إضافة ملاحظة جديدة' : 'Add New Finding'}
+                </h2>
+                <Button variant="ghost" size="icon-sm" onClick={() => setShowCreateModal(false)} disabled={isCreating}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="space-y-4">
+                {/* Step 1: Select Audit */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    {language === 'ar' ? 'المراجعة المرتبطة *' : 'Related Audit *'}
+                  </label>
+                  <select
+                    value={selectedAuditId}
+                    onChange={(e) => {
+                      setSelectedAuditId(e.target.value);
+                      // Auto-fill dep/sec from audit
+                      const audit = auditsList.find(a => a.id === e.target.value);
+                      if (audit) {
+                        setNewFindingData(prev => ({
+                          ...prev,
+                          departmentId: audit.departmentId,
+                          sectionId: audit.sectionId || ''
+                        }));
+                      }
+                    }}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                  >
+                    <option value="">{language === 'ar' ? 'اختر المراجعة...' : 'Select Audit...'}</option>
+                    {auditsList.filter(isAuditOpenForFindings).map(audit => (
+                      <option key={audit.id} value={audit.id}>
+                        {getAuditNumber(audit)} - {language === 'ar' ? audit.titleAr : audit.titleEn}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-[var(--foreground-secondary)] mt-1">
+                    {language === 'ar' ? 'فقط المراجعات قيد التنفيذ تظهر هنا' : 'Only audits in execution phase appear here'}
+                  </p>
+                </div>
+
+                {selectedAuditId && (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Title Ar */}
+                      <div>
+                        <label className="block text-sm font-medium mb-1">
+                          {language === 'ar' ? 'عنوان الملاحظة (عربي) *' : 'Finding Title (Arabic)'}
+                        </label>
+                        <input
+                          type="text"
+                          value={newFindingData.titleAr}
+                          onChange={(e) => setNewFindingData({ ...newFindingData, titleAr: e.target.value })}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                        />
+                      </div>
+                      {/* Title En */}
+                      <div>
+                        <label className="block text-sm font-medium mb-1">
+                          {language === 'ar' ? 'عنوان الملاحظة (إنجليزي)' : 'Finding Title (English) *'}
+                        </label>
+                        <input
+                          type="text"
+                          value={newFindingData.titleEn}
+                          onChange={(e) => setNewFindingData({ ...newFindingData, titleEn: e.target.value })}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Evidence / Description needed */}
+                    <div>
+                      <label className="block text-sm font-medium mb-1">
+                        {language === 'ar' ? 'الدليل / الوصف (عربي)' : 'Evidence / Description (Arabic)'}
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={newFindingData.descriptionAr}
+                        onChange={(e) => setNewFindingData({ ...newFindingData, descriptionAr: e.target.value })}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Severity */}
+                      <div>
+                        <label className="block text-sm font-medium mb-1">
+                          {language === 'ar' ? 'التصنيف *' : 'Severity *'}
+                        </label>
+                        <select
+                          value={newFindingData.categoryB}
+                          onChange={(e) => setNewFindingData({ ...newFindingData, categoryB: e.target.value })}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                        >
+                          <option value="">{language === 'ar' ? 'اختر...' : 'Select...'}</option>
+                          <option value="major_nc">{language === 'ar' ? 'عدم مطابقة رئيسي' : 'Major NC'}</option>
+                          <option value="minor_nc">{language === 'ar' ? 'عدم مطابقة ثانوي' : 'Minor NC'}</option>
+                          <option value="observation">{language === 'ar' ? 'ملاحظة' : 'Observation'}</option>
+                        </select>
+                      </div>
+
+                      {/* Due Date */}
+                      <div>
+                        <label className="block text-sm font-medium mb-1">
+                          {language === 'ar' ? 'تاريخ الإغلاق المتوقع *' : 'Estimated Closing Date *'}
+                        </label>
+                        <input
+                          type="date"
+                          value={newFindingData.estimatedClosingDate}
+                          onChange={(e) => setNewFindingData({ ...newFindingData, estimatedClosingDate: e.target.value })}
+                          min={new Date().toISOString().split('T')[0]}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                        />
+                      </div>
+
+                      {/* Clause */}
+                      <div>
+                        <label className="block text-sm font-medium mb-1">
+                          {language === 'ar' ? 'البند (المواصفة)' : 'Clause'}
+                        </label>
+                        <input
+                          type="text"
+                          value={newFindingData.clause}
+                          onChange={(e) => setNewFindingData({ ...newFindingData, clause: e.target.value })}
+                          placeholder="e.g. ISO 9001:2015 8.5.1"
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Attachments */}
+                    <div>
+                      <label className="block text-sm font-medium mb-2">
+                        {language === 'ar' ? 'المرفقات' : 'Attachments'}
+                      </label>
+                      <OneDrivePicker
+                        onFilesSelected={(files) => setNewFindingData({
+                          ...newFindingData,
+                          attachments: mergeAttachments(newFindingData.attachments, files),
+                        })}
+                        selectedFiles={newFindingData.attachments}
+                        onRemoveFile={(fileId) => setNewFindingData({
+                          ...newFindingData,
+                          attachments: newFindingData.attachments.filter(f => f.id !== fileId),
+                        })}
+                        maxFiles={MAX_ATTACHMENTS}
+                        language={language}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Error message */}
+              {createError && (
+                <div className="mt-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-3 rounded-lg flex items-center gap-2 text-sm">
+                  <AlertCircle className="h-4 w-4" />
+                  {createError}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 mt-6 border-t pt-4">
+                <Button variant="outline" disabled={isCreating} onClick={() => { setShowCreateModal(false); setCreateError(''); }}>
+                  {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                </Button>
+                <Button
+                  onClick={handleCreateFinding}
+                  disabled={isCreating || !selectedAuditId || !getFindingTitle() || !newFindingData.categoryB || !newFindingData.estimatedClosingDate}
+                >
+                  <Plus className="h-4 w-4 mx-1" />
+                  {isCreating
+                    ? (language === 'ar' ? 'جارٍ الإنشاء...' : 'Creating...')
+                    : (language === 'ar' ? 'إنشاء الملاحظة' : 'Create Finding')}
                 </Button>
               </div>
             </div>

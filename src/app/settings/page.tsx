@@ -7,7 +7,7 @@ import { Button } from '@/components/ui';
 import { useTranslation, useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from 'next-themes';
-import { getPassword, setPassword } from '@/lib/firestore';
+import { changeOwnPassword } from '@/lib/auth';
 import {
   User,
   Bell,
@@ -92,12 +92,6 @@ export default function SettingsPage() {
     setPasswordError('');
     setPasswordSuccess(false);
 
-    // التحقق من أن المستخدم ليس مدير النظام
-    if (currentUser?.role === 'system_admin') {
-      setPasswordError(language === 'ar' ? 'لا يمكن تغيير كلمة مرور مدير النظام' : 'Cannot change system admin password');
-      return;
-    }
-
     // التحقق من الحقول
     if (!currentPassword || !newPassword || !confirmPassword) {
       setPasswordError(language === 'ar' ? 'جميع الحقول مطلوبة' : 'All fields are required');
@@ -114,26 +108,47 @@ export default function SettingsPage() {
       return;
     }
 
-    // التحقق من كلمة المرور الحالية وحفظ الجديدة عبر Firestore
+    // تغيير كلمة المرور عبر Firebase Auth (إعادة مصادقة بكلمة المرور الحالية ثم تحديثها).
+    // مستند كلمة المرور القديم في `passwords` لا يُلمس - يبقى كسجل للتراجع.
     const verifyAndChangePassword = async () => {
       if (!currentUser) return;
 
-      const storedPassword = await getPassword(currentUser.id);
-      if (storedPassword !== currentPassword) {
-        setPasswordError(language === 'ar' ? 'كلمة المرور الحالية غير صحيحة' : 'Current password is incorrect');
-        return;
-      }
+      const result = await changeOwnPassword(currentPassword, newPassword);
 
-      // حفظ كلمة المرور الجديدة
-      const success = await setPassword(currentUser.id, newPassword);
-      if (success) {
+      if (result.ok) {
         setPasswordSuccess(true);
         setCurrentPassword('');
         setNewPassword('');
         setConfirmPassword('');
         setTimeout(() => setPasswordSuccess(false), 3000);
-      } else {
-        setPasswordError(language === 'ar' ? 'فشل في حفظ كلمة المرور' : 'Failed to save password');
+        return;
+      }
+
+      switch (result.reason) {
+        case 'invalid_credentials':
+          setPasswordError(language === 'ar' ? 'كلمة المرور الحالية غير صحيحة' : 'Current password is incorrect');
+          break;
+        // الجلسة أقدم من أن تسمح بتغيير بيانات الدخول - يلزم تسجيل دخول جديد
+        case 'requires_recent_login':
+          setPasswordError(language === 'ar'
+            ? 'مضى وقت طويل على تسجيل دخولك. سجّل الخروج ثم الدخول مرة أخرى وأعد المحاولة.'
+            : 'Your sign-in is too old. Please sign out and sign in again, then try once more.');
+          break;
+        case 'password_too_short':
+          setPasswordError(language === 'ar' ? 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' : 'Password must be at least 6 characters');
+          break;
+        case 'too_many_requests':
+          setPasswordError(language === 'ar'
+            ? 'محاولات كثيرة جداً. انتظر قليلاً ثم أعد المحاولة.'
+            : 'Too many attempts. Please wait a moment and try again.');
+          break;
+        case 'not_signed_in':
+          setPasswordError(language === 'ar'
+            ? 'يجب تسجيل الدخول لتغيير كلمة المرور'
+            : 'You must be signed in to change your password');
+          break;
+        default:
+          setPasswordError(language === 'ar' ? 'فشل في حفظ كلمة المرور' : 'Failed to save password');
       }
     };
 
@@ -388,78 +403,66 @@ export default function SettingsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {currentUser?.role === 'system_admin' ? (
-                <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4">
-                  <p className="text-sm text-amber-700 dark:text-amber-300">
-                    {language === 'ar'
-                      ? 'كلمة مرور مدير النظام ثابتة ولا يمكن تغييرها من هنا.'
-                      : 'System admin password is fixed and cannot be changed here.'}
-                  </p>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+                  {language === 'ar' ? 'كلمة المرور الحالية' : 'Current Password'}
+                </label>
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+                  {language === 'ar' ? 'كلمة المرور الجديدة' : 'New Password'}
+                </label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+                  {language === 'ar' ? 'تأكيد كلمة المرور' : 'Confirm Password'}
+                </label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
+                />
+              </div>
+
+              {passwordError && (
+                <div className="flex items-center gap-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
+                  <AlertCircle className="h-4 w-4 text-red-500" />
+                  <span className="text-sm text-red-600 dark:text-red-400">{passwordError}</span>
                 </div>
-              ) : (
-                <>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
-                      {language === 'ar' ? 'كلمة المرور الحالية' : 'Current Password'}
-                    </label>
-                    <input
-                      type="password"
-                      value={currentPassword}
-                      onChange={(e) => setCurrentPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
-                      {language === 'ar' ? 'كلمة المرور الجديدة' : 'New Password'}
-                    </label>
-                    <input
-                      type="password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
-                      {language === 'ar' ? 'تأكيد كلمة المرور' : 'Confirm Password'}
-                    </label>
-                    <input
-                      type="password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-opacity-20"
-                    />
-                  </div>
-
-                  {passwordError && (
-                    <div className="flex items-center gap-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
-                      <AlertCircle className="h-4 w-4 text-red-500" />
-                      <span className="text-sm text-red-600 dark:text-red-400">{passwordError}</span>
-                    </div>
-                  )}
-
-                  {passwordSuccess && (
-                    <div className="flex items-center gap-2 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-3">
-                      <Check className="h-4 w-4 text-green-500" />
-                      <span className="text-sm text-green-600 dark:text-green-400">
-                        {language === 'ar' ? 'تم تغيير كلمة المرور بنجاح' : 'Password changed successfully'}
-                      </span>
-                    </div>
-                  )}
-
-                  <Button
-                    onClick={handleChangePassword}
-                    variant="secondary"
-                    className="w-full"
-                  >
-                    {language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}
-                  </Button>
-                </>
               )}
+
+              {passwordSuccess && (
+                <div className="flex items-center gap-2 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-3">
+                  <Check className="h-4 w-4 text-green-500" />
+                  <span className="text-sm text-green-600 dark:text-green-400">
+                    {language === 'ar' ? 'تم تغيير كلمة المرور بنجاح' : 'Password changed successfully'}
+                  </span>
+                </div>
+              )}
+
+              <Button
+                onClick={handleChangePassword}
+                variant="secondary"
+                className="w-full"
+              >
+                {language === 'ar' ? 'تغيير كلمة المرور' : 'Change Password'}
+              </Button>
             </CardContent>
           </Card>
         </div>

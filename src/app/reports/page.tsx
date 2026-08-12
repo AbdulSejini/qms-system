@@ -87,7 +87,7 @@ export default function ReportsPage() {
             {t('navigation.reports')}
           </h1>
           <p className="mt-1 text-[var(--foreground-secondary)]">
-            {language === 'ar' ? 'إنشاء وتحميل تقارير نظام إدارة الجودة' : 'Generate and download QMS reports'}
+            {language === 'ar' ? 'إنشاء وتحميل تقارير المراجعة الداخلية للجودة' : 'Generate and download QMS audit reports'}
           </p>
         </div>
 

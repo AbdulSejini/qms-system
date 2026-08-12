@@ -1,0 +1,111 @@
+{
+  "description": "Saudi Cable organisational structure for audit scoping, transcribed from the QA department's 'List of Auditee with concerned Area' workbook. Each section carries the auditee recorded there, and the code that links it to the audit question bank.",
+  "source": "List of Auditee with concerened Area.xlsx",
+  "departments": [
+    {
+      "code": "OPS",
+      "nameEn": "Operations",
+      "nameAr": "العمليات",
+      "sections": [
+        { "code": "OPS-PROD-LV", "nameEn": "Production / Low Voltage", "nameAr": "الإنتاج / الجهد المنخفض", "auditee": "Khalid Boqasim", "departmentHead": "Asim Qari" },
+        { "code": "OPS-PROD-MVHV", "nameEn": "Production / MV & HV", "nameAr": "الإنتاج / الجهد المتوسط والعالي", "auditee": "M. K. Ashram", "departmentHead": "Asim Qari" },
+        { "code": "OPS-PROD-DRSTR", "nameEn": "Production / Drawing & Stranding", "nameAr": "الإنتاج / السحب والجدل", "auditee": "Ajmal Khan", "departmentHead": "Asim Qari" },
+        { "code": "OPS-PROD-PVC", "nameEn": "Production / PVC", "nameAr": "الإنتاج / البي في سي", "auditee": "Moayad Ahmadi", "departmentHead": "Asim Qari" },
+        { "code": "OPS-PROD-REEL", "nameEn": "Production / Reel Plant", "nameAr": "الإنتاج / مصنع البكرات", "auditee": "Moayad Ahmadi", "departmentHead": "Asim Qari" },
+        { "code": "OPS-PROD-LAGGING", "nameEn": "Production / Lagging", "nameAr": "الإنتاج / التغليف العازل", "auditee": "", "departmentHead": "Asim Qari" },
+        { "code": "OPS-MNT-MECH", "nameEn": "Maintenance & Projects / Mechanical Maintenance & Workshop", "nameAr": "الصيانة والمشاريع / الصيانة الميكانيكية والورش", "auditee": "Tariq Balbaid", "departmentHead": "Khalid Zainulabdeen" },
+        { "code": "OPS-MNT-WORKSHOP", "nameEn": "Maintenance & Projects / Workshops", "nameAr": "الصيانة والمشاريع / الورش", "auditee": "Abdulaziz Alfarsi", "departmentHead": "Khalid Zainulabdeen" },
+        { "code": "OPS-MNT-ELEC", "nameEn": "Maintenance & Projects / Electrical & Electronics Maintenance", "nameAr": "الصيانة والمشاريع / الصيانة الكهربائية والإلكترونية", "auditee": "Mohamed Salem", "departmentHead": "Khalid Zainulabdeen" },
+        { "code": "OPS-MNT-PREV", "nameEn": "Maintenance & Projects / Preventive Maintenance & Utilities", "nameAr": "الصيانة والمشاريع / الصيانة الوقائية والمرافق", "auditee": "Tariq Balbaid", "departmentHead": "Khalid Zainulabdeen" },
+        { "code": "OPS-MNT-FACILITY", "nameEn": "Maintenance & Projects / Facility Maintenance & Projects", "nameAr": "الصيانة والمشاريع / صيانة المرافق والمشاريع", "auditee": "Amro Khayat", "departmentHead": "Khalid Zainulabdeen" },
+        { "code": "OPS-MNT-HSE", "nameEn": "Maintenance & Projects / ISO 45001 (HSE)", "nameAr": "الصيانة والمشاريع / أيزو 45001 (السلامة)", "auditee": "Mohammed Baharithah", "departmentHead": "Khalid Zainulabdeen" }
+      ]
+    },
+    {
+      "code": "SCM",
+      "nameEn": "Supply Chain",
+      "nameAr": "سلسلة الإمداد",
+      "head": "Ahmed Saleh",
+      "sections": [
+        { "code": "SCM-LOG-WH", "nameEn": "Logistics / Warehouse", "nameAr": "اللوجستيات / المستودعات", "auditee": "Sultan Akbar" },
+        { "code": "SCM-LOG-SCRAP", "nameEn": "Logistics / Scrap", "nameAr": "اللوجستيات / الخردة", "auditee": "Sultan Akbar" },
+        { "code": "SCM-LOG-SHIP", "nameEn": "Logistics / Shipping, Receiving & Transfer", "nameAr": "اللوجستيات / الشحن والاستلام والنقل", "auditee": "Majed Owaydhi" },
+        { "code": "SCM-LOG-CUSTOMS", "nameEn": "Logistics / Customs Clearance", "nameAr": "اللوجستيات / التخليص الجمركي", "auditee": "M. Hadouk" },
+        { "code": "SCM-PLANNING", "nameEn": "Production Planning", "nameAr": "تخطيط الإنتاج", "auditee": "Turki Abotaleb" },
+        { "code": "SCM-PROC", "nameEn": "Procurement & Contracts", "nameAr": "المشتريات والعقود", "auditee": "Naif Al Asmari" }
+      ]
+    },
+    {
+      "code": "SM",
+      "nameEn": "Sales & Marketing",
+      "nameAr": "المبيعات والتسويق",
+      "head": "Hathal Bahha",
+      "sections": [
+        { "code": "SM-SALES", "nameEn": "Sales", "nameAr": "المبيعات", "auditee": "Omar K. Ali" },
+        { "code": "SM-SALES-SUP", "nameEn": "Sales / Sales Support", "nameAr": "المبيعات / دعم المبيعات", "auditee": "M. Shafiuddin" },
+        { "code": "SM-MKT", "nameEn": "Marketing", "nameAr": "التسويق", "auditee": "Mohammed Saban" }
+      ]
+    },
+    {
+      "code": "HR",
+      "nameEn": "Human Resources & Shared Services",
+      "nameAr": "الموارد البشرية والخدمات المشتركة",
+      "head": "Lowi Bukhsh",
+      "sections": [
+        { "code": "HR-REC", "nameEn": "Recruitment", "nameAr": "التوظيف", "auditee": "Hossam Al-Malki" },
+        { "code": "HR-TRN", "nameEn": "Training & Development", "nameAr": "التدريب والتطوير", "auditee": "Tala Helmi" },
+        { "code": "HR-SEC", "nameEn": "Security, Housing & Transportation", "nameAr": "الأمن والإسكان والنقل", "auditee": "Adel Al-Jedani" }
+      ]
+    },
+    {
+      "code": "STF",
+      "nameEn": "Staffing Management",
+      "nameAr": "الإدارة المساندة",
+      "head": "Lowi Bukhsh",
+      "sections": [
+        { "code": "STF-TA-INCOMING", "nameEn": "Technical Assurance / Incoming Material", "nameAr": "التوكيد الفني / المواد الواردة", "auditee": "Adel Rose / Moayad" },
+        { "code": "STF-TA-LVCAGE", "nameEn": "Technical Assurance / Low Voltage Test Cage", "nameAr": "التوكيد الفني / قفص اختبار الجهد المنخفض", "auditee": "Hatim Zuhair" },
+        { "code": "STF-TA-MVHVCAGE", "nameEn": "Technical Assurance / MV-HV Test Cage", "nameAr": "التوكيد الفني / قفص اختبار الجهد المتوسط والعالي", "auditee": "Hatim Zuhair" },
+        { "code": "STF-TA-LAB", "nameEn": "Technical Assurance / Non-Electrical Test (Lab)", "nameAr": "التوكيد الفني / الاختبارات غير الكهربائية (المختبر)", "auditee": "Adel Rose" },
+        { "code": "STF-TA-PROCENG", "nameEn": "Technical Assurance / Process & Cost Engineering", "nameAr": "التوكيد الفني / هندسة العمليات والتكاليف", "auditee": "Bassam Subhi" },
+        { "code": "STF-TA-CALIB", "nameEn": "Technical Assurance / Calibration", "nameAr": "التوكيد الفني / المعايرة", "auditee": "Vergel Caba" },
+        { "code": "STF-TA-PVCQC", "nameEn": "Technical Assurance / PVC QC", "nameAr": "التوكيد الفني / مراقبة جودة البي في سي", "auditee": "Moayad Asghar" },
+        { "code": "STF-TA-DESIGN", "nameEn": "Technical Assurance / Design & Specification", "nameAr": "التوكيد الفني / التصميم والمواصفات", "auditee": "Abdullah Mahmood Bukhari" },
+        { "code": "STF-TA-SAFETY", "nameEn": "Technical Assurance / Safety", "nameAr": "التوكيد الفني / السلامة", "auditee": "Faisal Zagheebi" },
+        { "code": "STF-QA-QMS", "nameEn": "Quality Assurance / QMS", "nameAr": "توكيد الجودة / نظام إدارة الجودة", "auditee": "Mohammed Bahwairith" },
+        { "code": "STF-QA-PERF", "nameEn": "Quality Assurance / Internal Policies & Company Performance", "nameAr": "توكيد الجودة / السياسات الداخلية وأداء الشركة", "auditee": "Mohammad Pacadlack" },
+        { "code": "STF-BD", "nameEn": "Business Development", "nameAr": "تطوير الأعمال", "auditee": "Samy Alshaabani" },
+        { "code": "STF-RND", "nameEn": "Research & Development", "nameAr": "البحث والتطوير", "auditee": "Sony Mathews" }
+      ]
+    },
+    {
+      "code": "PS",
+      "nameEn": "Professional Services",
+      "nameAr": "الخدمات المهنية",
+      "head": "Huda Al Safi",
+      "sections": [
+        { "code": "PS-ERP", "nameEn": "Enterprise Solutions", "nameAr": "حلول المؤسسات", "auditee": "Akram Zuhair" },
+        { "code": "PS-IT", "nameEn": "Information Technology", "nameAr": "تقنية المعلومات", "auditee": "Sudhir V. K." },
+        { "code": "PS-TECHDATA", "nameEn": "Technical Data", "nameAr": "البيانات الفنية", "auditee": "Abdul Rahman Mahboob" }
+      ]
+    },
+    {
+      "code": "MPB",
+      "nameEn": "Mass Project Bahrain",
+      "nameAr": "مشروع ماس البحرين",
+      "head": "Mohammad Bagasi",
+      "sections": [
+        { "code": "MPB-MAIN", "nameEn": "Mass Project Bahrain", "nameAr": "مشروع ماس البحرين", "auditee": "Jinto Devassy" }
+      ]
+    },
+    {
+      "code": "GRC",
+      "nameEn": "Governance, Risk & Compliance",
+      "nameAr": "الحوكمة والمخاطر والالتزام",
+      "head": "Abdulelah Sejini",
+      "sections": [
+        { "code": "GRC-RISK", "nameEn": "Risk Management", "nameAr": "إدارة المخاطر", "auditee": "Abdulelah Sejini" }
+      ]
+    }
+  ]
+}

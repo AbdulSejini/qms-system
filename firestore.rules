@@ -1,0 +1,904 @@
+rules_version = '2';
+
+// =============================================================================
+// QMS - Firestore Security Rules
+// =============================================================================
+//
+// This ruleset replaces the expired test-mode rule
+//   allow read, write: if request.time < timestamp.date(2026, 3, 3);
+// which took the whole system down on 3 March 2026. Firebase Authentication
+// (Email/Password) is enabled and the application signs in through it, so
+// `request.auth` is a real thing and authorization is enforced here instead of
+// only in React components.
+//
+// THE SECURITY MODEL - read this before changing any rule below
+//   Having a Firebase Auth account grants NOTHING on its own. Self-signup is
+//   enabled in the project (the Users page needs it to create accounts from the
+//   browser, via a secondary Firebase app instance), so anyone on the internet
+//   can obtain an Auth account with any email they like - Firebase never
+//   verifies that they own it. Every rule below therefore ignores the Auth
+//   account itself, including request.auth.token.email, and reads authorization
+//   out of one mapping document:
+//
+//       authUsers/{authUid} = { userId, role, isActive }
+//
+//   That document CANNOT be created or modified by the person it describes.
+//   Only an already-authenticated system_admin may write it - with ONE exception,
+//   the one-time bootstrap described below, which is how the very first mapping
+//   comes into existence without any Firebase Console work, and which closes
+//   itself permanently the moment it is used. A stranger who signs up lands with
+//   no mapping, and every rule below denies them - including the read of the
+//   `users` directory.
+//
+//   An older revision of this file let a caller create their own mapping
+//   whenever it matched request.auth.token.email. Employee emails are readable
+//   from `users`, and the email on an Auth token is whatever the signer-up
+//   typed, so that rule handed the system_admin role to anyone who signed up as
+//   abdul.sejini@gmail.com - permanently, and as often as they liked. That rule
+//   is gone. What replaces it is not "a smaller version of the same idea": the
+//   bootstrap below ignores the token email entirely, writes one fixed payload
+//   onto one fixed user id, and can fire exactly once in the lifetime of the
+//   database.
+//
+// HOW A CALLER IS IDENTIFIED
+//   Firestore user documents keep their historical ids ('system-admin-root',
+//   'user-1739...') because leadAuditorId, teamMemberIds, responsibleId,
+//   createdBy, approverId, recipientId and senderId all reference them. They are
+//   NOT renumbered to Auth uids; the mapping joins the two worlds. isActive()
+//   below resolves the caller and is the single gate every other rule is built
+//   on. It is deliberately strict, because it is also how access is REVOKED:
+//     - no mapping                       -> denied (stranger, or not yet linked)
+//     - mapping.isActive != true         -> denied (the mapping's own flag)
+//     - users/{mapping.userId} missing   -> denied (deleted employee, even if
+//                                          the mapping and the Auth account
+//                                          survive)
+//     - users/{mapping.userId}.isActive  -> denied. This one is read DIRECTLY
+//       == false                            from the user document and is not a
+//                                          duplicate of the flag above: saveUser
+//                                          mirrors isActive onto the mapping
+//                                          only when the user document already
+//                                          carries an authUid, so a user
+//                                          deactivated from the Users page while
+//                                          that pointer is missing kept a
+//                                          mapping saying isActive: true - and
+//                                          with it full access. The user
+//                                          document is the record the Users page
+//                                          always writes, so it is the one the
+//                                          gate reads. Absent or null counts as
+//                                          active, matching isUserActive() in
+//                                          src/lib/auth.ts (`isActive !== false`).
+//   A missing or malformed mapping yields '' from appRole()/appUserId() rather
+//   than an evaluation error, because an erroring rule denies and a half-written
+//   mapping would otherwise turn into an outage.
+//
+// =========================================================================
+// THE ONE-TIME BOOTSTRAP WINDOW - READ THIS BEFORE DEPLOYING
+// =========================================================================
+//   There is no Admin SDK, no service account and no Cloud Function in this
+//   project (Spark plan, client SDK only). Somebody therefore has to create the
+//   FIRST authUsers mapping, and rules that admit no self-claim at all can only
+//   be bootstrapped from the Firebase Console. This ruleset instead opens a
+//   single, self-closing window so the owner can do it from /login:
+//
+//     (a) an UNAUTHENTICATED `get` on the one document users/system-admin-root -
+//         not `list`, not any other id, nothing else in the collection. It is
+//         what the first-run panel in src/app/login/page.tsx reads to decide
+//         whether to offer setup at all;
+//     (b) a `create` (never an update) of authUsers/{uid} by the caller itself,
+//         and only when the document being written is exactly
+//         { userId: 'system-admin-root', role: 'system_admin', isActive: true };
+//     (c) the matching `update` on users/system-admin-root that writes the
+//         caller's own uid into `authUid`.
+//
+//   ALL THREE are gated on users/system-admin-root NOT yet carrying an
+//   `authUid`. Step (c) writes that field, so the act of completing setup is
+//   the act of closing the window: from then on (a) denies the anonymous read,
+//   (b) denies every further self-claim, and (c) has nothing left to write.
+//   The window cannot be reopened from the application - only an operator with
+//   Console or Admin SDK access can clear the field, and rules do not apply to
+//   either of those.
+//
+//   WHAT IT EXPOSES WHILE OPEN: one document - the system administrator's
+//   directory entry (name in both languages, email, employee number, job title,
+//   phone, role). Not the directory, not any other employee, nothing writable.
+//   That is the minimum price of a cold start with no server-side component.
+//
+//   THE REAL RISK, PLAINLY: between the moment these rules go live and the
+//   moment the owner finishes the setup form, WHOEVER REACHES /login FIRST can
+//   claim the system administrator account - they create a Firebase Auth
+//   account for the administrator's email address (self-signup is on, and the
+//   address is in the shipped bundle as SYSTEM_ADMIN_EMAIL) and step (b) then
+//   lets them mint their own mapping. The window is therefore not "safe"; it is
+//   SHORT, and it is the operator's job to keep it short. Deploy the rules and
+//   complete the setup in the same sitting, and verify afterwards that
+//   users/system-admin-root carries an authUid. SECURITY.md section 5.0 is the
+//   operator procedure and states the same obligation.
+//
+//   If the window is found already closed and nobody on the team performed the
+//   setup, treat it as a compromise: the mapping was minted by someone else.
+//   Delete the stray authUsers document and the stray Auth account from the
+//   Console, clear `authUid` on users/system-admin-root, and start again.
+//
+// NO OTHER UNAUTHENTICATED ACCESS
+//   Apart from clause (a) above, no `allow` in this file can be satisfied
+//   without request.auth: each is either `false` outright or resolves through
+//   isSignedIn(), isActive(), isAdmin(), isQualityStaff() or isSelf(), and all
+//   of those bottom out in `request.auth != null`.
+//
+//   The legacy first-sign-in path used to need a far wider one. It ran before
+//   any Auth account existed and wanted an anonymous read of `users` by email
+//   plus an anonymous read of one `passwords` document, and a rule cannot
+//   inspect a query's where-clause: permitting the by-email lookup necessarily
+//   permits listing the entire directory, and the `passwords` document id IS
+//   the user document id, so "get by known id" meant every bcrypt hash in the
+//   company was one loop away from being harvested by an anonymous caller.
+//
+//   That path is gone from src/lib/auth.ts. An existing employee is onboarded
+//   by an administrator who is ALREADY SIGNED IN, from the Users page: the Auth
+//   account is created on a secondary Firebase app instance with a throwaway
+//   password nobody ever sees, the authUsers mapping and the users/{id}.authUid
+//   pointer are written by that administrator, and the employee receives a
+//   Firebase password-reset email and chooses their own password. No anonymous
+//   step anywhere in it. The `passwords` collection is consequently dead weight
+//   and is closed outright below. SECURITY.md sections 4 and 5 carry the
+//   operator steps.
+//
+// WHAT THESE RULES DO NOT DO
+//   Audit documents are readable by every active employee, and writable by them
+//   too. The set of people entitled to act on an audit (lead auditor, team
+//   members, the audited department, the person responsible for a finding)
+//   lives inside the document's own arrays and objects, and a rule cannot
+//   evaluate that without guessing at a workflow that is still changing. Those
+//   checks stay in the application layer, as they are today.
+//
+//   Annual plans are readable by every active employee, but their lifecycle is
+//   NOT left to the application: who may edit a plan, who may approve it, and
+//   which status transitions exist are all enforced below, because "the author
+//   must not approve their own plan" is the entire point of having an approval
+//   step. Deleting an audit, and every change to users, departments, sections,
+//   credentials and mappings, is enforced here too.
+//
+//   One plan per year is the one stated rule that is NOT enforced here. It
+//   needs a query - "is there another document with this year?" - and rules can
+//   only get() a known path. See the annualPlans block and SECURITY.md 3.2.
+//
+// DEPLOY
+//   firebase-tools is not installed on this machine and this repo has no
+//   .firebaserc (only .firebaserc.example), so `firebase deploy` on its own
+//   fails with "No currently active project":
+//     npm install -g firebase-tools                                   # once
+//     firebase login                                                  # once
+//     firebase deploy --only firestore:rules --project <projectId>
+//   <projectId> is NEXT_PUBLIC_FIREBASE_PROJECT_ID from .env.local. Running
+//   `firebase use --add` once writes .firebaserc and lets you drop --project.
+// =============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // The mapping document. Written by linkAuthUser (src/lib/auth.ts) and kept
+    // in step by saveUser (src/lib/firestore.ts:272-291) - both of which only
+    // ever succeed when an administrator is the caller.
+    function mappingPath() {
+      return /databases/$(database)/documents/authUsers/$(request.auth.uid);
+    }
+
+    function mapping() {
+      return get(mappingPath()).data;
+    }
+
+    function userPath(userId) {
+      return /databases/$(database)/documents/users/$(userId);
+    }
+
+    // The employee directory document behind the caller. Only ever reached after
+    // exists(userPath(...)) has passed, so it is never a get() on nothing.
+    function callerUserDoc() {
+      return get(userPath(mapping().get('userId', ''))).data;
+    }
+
+    // The system administrator's user document - SYSTEM_ADMIN_ID in
+    // src/lib/firestore.ts. Hard-coded here because the bootstrap window below
+    // is deliberately about this one document and no other.
+    function systemAdminUserPath() {
+      return /databases/$(database)/documents/users/system-admin-root;
+    }
+
+    // The one gate. Everything else in this file is expressed in terms of it.
+    // Ordered so that a shorter path is never built from an empty id: && is
+    // short-circuiting, so exists(userPath(...)) is only reached once userId is
+    // known to be a non-empty string.
+    //
+    // The last clause reads isActive off the USER DOCUMENT, not off the mapping:
+    // saveUser (src/lib/firestore.ts) only mirrors the flag onto the mapping when
+    // the user document carries an authUid, so the mapping alone is not a
+    // trustworthy answer to "is this employee still with us". Absent or null
+    // counts as active, which is what isUserActive() in src/lib/auth.ts means by
+    // `user.isActive !== false`.
+    function isActive() {
+      return isSignedIn()
+             && exists(mappingPath())
+             && mapping().get('isActive', false) == true
+             && mapping().get('userId', '') is string
+             && mapping().get('userId', '') != ''
+             && exists(userPath(mapping().get('userId', '')))
+             && callerUserDoc().get('isActive', true) != false;
+    }
+
+    // '' for anyone who is not an active, mapped employee.
+    function appRole() {
+      return isActive() ? mapping().get('role', '') : '';
+    }
+
+    // The Firestore user document id behind the caller - the id that every
+    // audit, plan, notification and session document actually references.
+    function appUserId() {
+      return isActive() ? mapping().get('userId', '') : '';
+    }
+
+    function isAdmin() {
+      return appRole() == 'system_admin';
+    }
+
+    // system_admin + quality_manager: the two roles DEFAULT_PERMISSIONS
+    // (src/types/index.ts:30-50) grants canManageDepartments, canDeleteAudits
+    // and canApproveAudits to.
+    function isQualityStaff() {
+      return appRole() in ['system_admin', 'quality_manager'];
+    }
+
+    // appUserId() is '' for an unauthorized caller and a document id is never
+    // '', so this cannot accidentally match.
+    function isSelf(userId) {
+      return appUserId() != '' && appUserId() == userId;
+    }
+
+    // -------------------------------------------------------------------
+    // users - employee directory. No credentials live here.
+    // -------------------------------------------------------------------
+    match /users/{userId} {
+
+      // --- BOOTSTRAP (a) --------------------------------------------------
+      // The only unauthenticated read in this file. It matches ONE document id,
+      // it is a `get` and never a `list`, and it stops matching for good as soon
+      // as that document carries an authUid - which bootstrap (c) below writes at
+      // the end of the setup the first-run panel performs.
+      // resource is null when the document does not exist (an installation whose
+      // users/system-admin-root was never created), and a null guard is cheaper
+      // than an evaluation error.
+      function bootstrapReadIsOpen() {
+        return userId == 'system-admin-root'
+               && resource != null
+               && resource.data.get('authUid', '') == '';
+      }
+
+      // --- BOOTSTRAP (c) --------------------------------------------------
+      // The step that closes the window. The account that has just minted its own
+      // mapping through bootstrap (b) writes its uid back onto the administrator's
+      // user document (linkAuthUser, src/lib/auth.ts). Everything about it is
+      // pinned: this one document id, a caller whose own mapping already points at
+      // system-admin-root, a field that is not set yet, that field alone, and the
+      // caller's own uid as its value. It can succeed exactly once.
+      function bootstrapLinkBack() {
+        return userId == 'system-admin-root'
+               && isSignedIn()
+               && exists(mappingPath())
+               && mapping().get('userId', '') == 'system-admin-root'
+               && resource.data.get('authUid', '') == ''
+               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['authUid'])
+               && request.resource.data.get('authUid', '') == request.auth.uid;
+      }
+
+      // get:  getUserById (also used by resolveAppUser and initializeSystemAdmin)
+      // list: getAllUsers / getVisibleUsers (AuthContext.loadData), and
+      //       getUserByEmail (where email == ...), which the whole directory has
+      //       to be listable for - a rule cannot see a where-clause.
+      // Nothing here is public except the single bootstrap document, and only
+      // until setup completes: an Auth account with no active mapping reads
+      // nothing, which is what keeps a stranger who signed up from harvesting
+      // employee names, emails and phone numbers.
+      allow get: if isActive() || bootstrapReadIsOpen();
+      allow list: if isActive();
+
+      // create: saveUser for a new user (Users page), initializeSystemAdmin.
+      // update: saveUser for an existing user, and the { authUid } merge that
+      //         linkAuthUser writes back onto the user document.
+      // delete: deleteUser (Users page).
+      // All administrator-only, because the role and isActive fields on this
+      // document are what an administrator later mirrors onto the mapping.
+      // NOTE: the Users page currently shows the add/edit/delete controls to a
+      // quality_manager as well (its `hasAccess` check in
+      // src/app/users/page.tsx admits both roles), but
+      // DEFAULT_PERMISSIONS grants canManageUsers to system_admin only, so those
+      // writes are refused here. The page is what needs correcting, not this
+      // rule - a quality_manager who could edit users could promote themselves.
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || bootstrapLinkBack();
+    }
+
+    // -------------------------------------------------------------------
+    // authUsers/{authUid} = { userId, role, isActive }
+    // The mapping every other rule is keyed on, so writing it is THE privilege
+    // operation in this system. Administrator-only: a caller may read their own
+    // mapping (sign-in needs that) and nothing more. The single exception is
+    // bootstrap (b) below - the one-time creation of the FIRST mapping, for the
+    // system administrator account only, which stops being possible the moment
+    // it succeeds. See the BOOTSTRAP WINDOW block in the header and SECURITY.md
+    // section 5.0.
+    // -------------------------------------------------------------------
+    match /authUsers/{authUid} {
+
+      function claimedUserPath() {
+        return /databases/$(database)/documents/users/$(request.resource.data.userId);
+      }
+
+      // linkAuthUser and saveUser both write exactly these three fields, with
+      // merge, so the merged result still has exactly these three.
+      function claimIsWellFormed() {
+        return request.resource.data.keys().hasOnly(['userId', 'role', 'isActive'])
+               && request.resource.data.keys().hasAll(['userId', 'role', 'isActive'])
+               && request.resource.data.userId is string
+               && request.resource.data.userId.size() > 0
+               && request.resource.data.isActive is bool
+               && request.resource.data.role in [
+                    'system_admin', 'quality_manager', 'auditor',
+                    'department_manager', 'section_head', 'employee'
+                  ];
+      }
+
+      // The mapping may not invent a user or a role: the user document has to
+      // exist and to carry the same role. saveUser writes the user document
+      // first and the mapping second (src/lib/firestore.ts:264-283), so the two
+      // already agree by the time this is evaluated. This is what keeps the
+      // directory an honest record of who holds which role.
+      function claimMatchesUserDocument() {
+        return exists(claimedUserPath())
+               && get(claimedUserPath()).data.get('role', '') == request.resource.data.role;
+      }
+
+      // --- BOOTSTRAP (b) --------------------------------------------------
+      // THE ONE SELF-CLAIM IN THIS FILE, and the only reason the system can be
+      // brought up without touching the Firebase Console. See the BOOTSTRAP
+      // WINDOW block in the header for what it costs while it is open.
+      //
+      // It is a `create` and never an `update`, so it cannot rewrite an existing
+      // mapping, and Firestore only treats a write as a create when the document
+      // is absent (the explicit !exists() below says so out loud rather than
+      // relying on that). The payload is pinned to the three exact fields with
+      // the three exact values - no other userId, no other role, no fourth
+      // field - so it grants the administrator account and nothing else.
+      //
+      // The last clause is the self-closing one: once users/system-admin-root
+      // carries an authUid, no further claim can ever be made. Bootstrap (c)
+      // writes that field immediately after this rule fires, from the same
+      // linkAuthUser call.
+      function bootstrapMappingClaim() {
+        return isSignedIn()
+               && authUid == request.auth.uid
+               && !exists(mappingPath())
+               && request.resource.data.keys().hasOnly(['userId', 'role', 'isActive'])
+               && request.resource.data.keys().hasAll(['userId', 'role', 'isActive'])
+               && request.resource.data.userId == 'system-admin-root'
+               && request.resource.data.role == 'system_admin'
+               && request.resource.data.isActive == true
+               && exists(systemAdminUserPath())
+               && get(systemAdminUserPath()).data.get('authUid', '') == '';
+      }
+
+      // get: resolveAppUser and confirmAuthMapping (src/lib/auth.ts), on the
+      //      caller's own mapping. Readable by its subject so that sign-in can
+      //      resolve the application user, and by an administrator.
+      allow get: if isSignedIn() && (authUid == request.auth.uid || isAdmin());
+
+      // list: only the operator reports enumerate this collection
+      //       (scripts/check-auth-migration.mjs:73, and the COLLECTIONS list in
+      //       scripts/backup-firestore.mjs), both signed in as an administrator.
+      allow list: if isAdmin();
+
+      // create/update: linkAuthUser, called from the Users page while an
+      //       administrator is signed in - the employee's account is created on
+      //       a secondary Firebase app instance, so request.auth on this
+      //       connection is still the administrator's.
+      //       The second create branch is the one-time bootstrap, which is the
+      //       only path in this file that does not require an administrator, and
+      //       which permanently closes itself. There is deliberately no such
+      //       branch on update: a mapping that exists is only an administrator's
+      //       to change.
+      allow create: if (isAdmin()
+                        && claimIsWellFormed()
+                        && claimMatchesUserDocument())
+                       || bootstrapMappingClaim();
+
+      allow update: if isAdmin()
+                    && claimIsWellFormed()
+                    && claimMatchesUserDocument();
+
+      // delete: unlinking an account. deleteUser does NOT do this today, which
+      //         is why isActive() also checks that the user document still
+      //         exists - see the header. An administrator can clean the orphan
+      //         up from the app or the console.
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------
+    // passwords/{userId} - THE DEAD LEGACY CREDENTIAL STORE, doc id == user id.
+    //
+    // Nothing in the application reads or writes this collection any more. The
+    // lazy legacy-migration sign-in path that was its last live caller is gone
+    // from src/lib/auth.ts, and an existing employee is now given a sign-in
+    // account by an administrator on the Users page instead: the account is
+    // created on a secondary Firebase app instance, the authUsers mapping is
+    // written, and the employee sets their own password from a Firebase reset
+    // email. Nobody, at any point, needs the old hash.
+    //
+    // So it is not "administrator-only" any more, it is CLOSED. The contents
+    // are bcrypt hashes of passwords people reuse elsewhere, and some of them
+    // are not hashes at all: verifyPassword accepted legacy plaintext values by
+    // direct comparison. An administrator account that is phished or left open
+    // on a shared machine should not be able to read them out of the browser,
+    // and no live code path is lost by refusing.
+    //
+    // The functions that used to reach this collection are all fail-closed:
+    // getPassword returns null, hasPassword returns 'unknown' (which its
+    // callers already treat as "do not act"), verifyPassword returns false,
+    // setPassword / resetPassword return false. See SECURITY.md section 4.
+    // -------------------------------------------------------------------
+    match /passwords/{userId} {
+      // No read of any kind, for anybody. This also means the collection can no
+      // longer be exported by scripts/backup-firestore.mjs, which runs on the
+      // client SDK under these very rules - deliberately, and written down in
+      // SECURITY.md section 4.4 along with what the operator does instead.
+      allow read: if false;
+
+      // Nothing writes a new legacy credential. setPassword is dead code.
+      allow create, update: if false;
+
+      // The single operation that survives, and only because deleteUser deletes
+      // users/{id} and then passwords/{id} in one call: denying this would make
+      // every user deletion report failure after having already deleted the
+      // user. It destroys a hash, it never exposes one, and it is the same
+      // administrator-only gate as the user document itself.
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------
+    // departments
+    // -------------------------------------------------------------------
+    match /departments/{departmentId} {
+      // get: getDepartmentById / list: getAllDepartments (AuthContext.loadData)
+      allow get, list: if isActive();
+      // create/update: saveDepartment, delete: deleteDepartment - the
+      // Departments page is gated on canManageDepartments (system_admin +
+      // quality_manager).
+      allow create, update, delete: if isQualityStaff();
+    }
+
+    // -------------------------------------------------------------------
+    // sections
+    // -------------------------------------------------------------------
+    match /sections/{sectionId} {
+      // list: getAllSections, getSectionsByDepartment (where departmentId == ...)
+      // get:  no dedicated function today; implied by list access.
+      allow get, list: if isActive();
+      // create/update: saveSection, delete: deleteSection - same page, same gate.
+      // Deleting a department also deletes its sections.
+      allow create, update, delete: if isQualityStaff();
+    }
+
+    // -------------------------------------------------------------------
+    // audits - findings, questions and the activity log live inside the audit
+    // document itself; there are no subcollections.
+    // -------------------------------------------------------------------
+    match /audits/{auditId} {
+      // get:  getAuditById
+      // list: getAllAudits, subscribeToAudits (dashboard, findings, follow-up,
+      //       calendar, performance, audits list), getAuditsByDepartment,
+      //       getAuditsByLeadAuditor.
+      //       subscribeToAudits listens to the entire collection, so any rule
+      //       that depended on the document's contents would fail the whole
+      //       listener. Every active employee may therefore read every audit;
+      //       which ones they are shown is decided in the pages.
+      allow get, list: if isActive();
+
+      // create: createAudit (New Audit page), whose call passes
+      //         createdBy: currentUser?.id || '', so the author field can at
+      //         least be held honest.
+      allow create: if isActive()
+                    && request.resource.data.createdBy == appUserId();
+
+      // update: updateAudit - answers, findings, corrective actions, QMS
+      //         approval, postponement, stage changes. The participants of an
+      //         audit are stored inside the document (leadAuditorId,
+      //         teamMemberIds, findings[].responsibleId), which a rule cannot
+      //         check reliably, so this stays at "any active employee" and the
+      //         workflow gates stay in the app.
+      allow update: if isActive();
+
+      // delete: deleteAudit, gated in the UI on canDeleteAudits, which only
+      //         system_admin and quality_manager have.
+      allow delete: if isQualityStaff();
+    }
+
+    // -------------------------------------------------------------------
+    // annualPlans - the annual internal audit plan (one per year).
+    // The quality manager builds the plan and submits it to an approver they
+    // choose per plan (approverId, never a fixed person). Shape: AnnualPlan in
+    // src/types/index.ts; data layer: the Annual Audit Plan section of
+    // src/lib/firestore.ts; the only writer is src/app/plans/page.tsx.
+    //
+    // THE LIFECYCLE IS THE RULE. A plan moves
+    //     draft     --submit--> pending_approval --decide--> approved
+    //     rejected  --submit--> pending_approval --decide--> rejected
+    //     pending_approval --recall--> draft   (the AUTHOR withdraws it)
+    //     and never any other way. 'rejected' goes back to its author, who edits
+    //     and submits it again. 'approved' is terminal except for one field:
+    //     items[].auditId, written back when an audit is created from a planned
+    //     line (branch (5) below).
+    // Every branch below names the status it is legal FROM, because a rule with
+    // no precondition on resource.data.status is not an approval step at all:
+    // it lets a decision be rewritten afterwards, or a plan be edited after it
+    // was approved. Three separate defects lived in the previous revision:
+    //   1. any quality_manager could update any plan, so the author approved
+    //      their own submission and the approval step was decoration;
+    //   2. the approver branch had no precondition on the current status, so
+    //      the named approver could flip a decision at any later time;
+    //   3. an approved plan stayed writable, i.e. it was read-only in the UI
+    //      and mutable in the database.
+    // An approved plan is otherwise terminal HERE: apart from the auditId
+    // write-back, no update and no delete matches it, for anybody, including a
+    // system_admin. Correcting one is a deliberate act in the Firebase Console -
+    // see SECURITY.md section 3.1.
+    //
+    // TWO MOVES THIS REVISION ADDS, both of which were dead ends before:
+    //   - RECALL. 'pending_approval' had exactly one exit, the named approver's
+    //     decision. If that person was on leave, or was the wrong person, or the
+    //     author simply spotted a mistake, the plan could not be edited, could
+    //     not be deleted, its approver could not be changed and its year stayed
+    //     taken. Branch (4) lets the AUTHOR (or a system_admin) pull it back to
+    //     'draft', clearing the approver assignment or leaving it standing as the
+    //     default for the next submission - but never switching it to somebody
+    //     else without going through a submission.
+    //   - THE auditId WRITE-BACK. Creating an audit from a planned line writes
+    //     that audit's id onto the line, and nothing else in the system moves
+    //     plan progress off zero. Branch (5) permits that one change on an
+    //     approved plan.
+    //
+    // ONE PLAN PER YEAR IS NOT ENFORCED HERE and cannot be: answering "does a
+    // plan for this year already exist?" needs a query, and rules only ever
+    // get() a document at a known path. `year` is range-checked on create and
+    // frozen afterwards, which is the part that IS enforceable. See SECURITY.md
+    // section 3.2 for what that leaves open and how to close it properly.
+    // -------------------------------------------------------------------
+    match /annualPlans/{planId} {
+
+      // Everything the approver's decision consists of: the status, the four
+      // decision stamps, the rejection reason, the approver's comment - and
+      // updatedAt, which updateAnnualPlan always adds. Nothing else may move on
+      // that path: not items, not year, not approverId, not createdBy.
+      function decisionFields() {
+        return ['status', 'approvedBy', 'approvedAt', 'rejectedBy', 'rejectedAt',
+                'rejectionReason', 'approverComment', 'updatedAt'];
+      }
+
+      // The stamps that are the approver's alone. An author may never WRITE one -
+      // otherwise "approved by" is a field the author fills in - but may CLEAR
+      // one, which is a different act with a different consequence; see
+      // stampNotForged() below.
+      function decisionStamps() {
+        return ['approvedBy', 'approvedAt', 'rejectedBy', 'rejectedAt',
+                'rejectionReason', 'approverComment'];
+      }
+
+      // What the author is allowed to touch on the way back to 'pending_approval'
+      // or back to 'draft': the submission fields, plus the stamps - which
+      // stampNotForged() then restricts to being cleared, never set.
+      function authorFields() {
+        return ['status', 'approverId', 'submittedAt', 'updatedAt',
+                'approvedBy', 'approvedAt', 'rejectedBy', 'rejectedAt',
+                'rejectionReason', 'approverComment'];
+      }
+
+      function changedKeys() {
+        return request.resource.data.diff(resource.data).affectedKeys();
+      }
+
+      function currentStatus() { return resource.data.get('status', ''); }
+      function nextStatus()    { return request.resource.data.get('status', ''); }
+
+      function author()   { return resource.data.get('createdBy', ''); }
+      function approver() { return resource.data.get('approverId', ''); }
+
+      // Who the plan belongs to and which year it covers are settled at
+      // creation. Freezing `year` is also what keeps an update from turning
+      // this year's plan into a second copy of another year's.
+      function identityUnchanged() {
+        return request.resource.data.get('createdBy', '') == author()
+               && request.resource.data.get('year', -1) == resource.data.get('year', -1);
+      }
+
+      // A field that ends up absent, empty or null. get(field, '') returns the
+      // stored null when the key is present and null, so both comparisons are
+      // needed and neither can raise.
+      function isClearedValue(field) {
+        return request.resource.data.get(field, '') == ''
+               || request.resource.data.get(field, '') == null;
+      }
+
+      // The author's half of the decision-stamp rule: leave the stamp exactly as
+      // it was, or wipe it. Never write a value into it.
+      //
+      // Clearing has to be permitted, and it is not a loophole - it is a defect
+      // fix. A rejected plan carries rejectedBy/rejectedAt/rejectionReason; it is
+      // edited, resubmitted and approved, and with the stamps frozen the result
+      // is a document that says it was approved by one person and rejected by
+      // another, with no way for anyone to reconcile it. The only thing an author
+      // gains by clearing a stamp is the erasure of a rejection of their own
+      // plan, on a plan they are about to resubmit anyway; forging an approval
+      // stays impossible, which is the property that matters.
+      function stampNotForged(field) {
+        return !changedKeys().hasAny([field]) || isClearedValue(field);
+      }
+
+      function stampsNotForged() {
+        return stampNotForged('approvedBy')
+               && stampNotForged('approvedAt')
+               && stampNotForged('rejectedBy')
+               && stampNotForged('rejectedAt')
+               && stampNotForged('rejectionReason')
+               && stampNotForged('approverComment');
+      }
+
+      // (1) The author works on the plan - items, titles, anything but the
+      //     decision stamps. Only while it is a draft or has come back
+      //     rejected: the content is frozen from the moment it is submitted,
+      //     so what the approver decides on is what they were shown.
+      //     Matches canEditPlan on the plans page (author or system_admin,
+      //     status draft or rejected).
+      function authorEditsContent() {
+        return isQualityStaff()
+               && (isSelf(author()) || isAdmin())
+               && currentStatus() in ['draft', 'rejected']
+               && nextStatus() == currentStatus()
+               && stampsNotForged()
+               && identityUnchanged();
+      }
+
+      // (2) The author submits it to the approver they picked
+      //     (handleSubmitForApproval writes status, approverId and submittedAt;
+      //     the stamps are in authorFields() only so that a plan coming back from
+      //     'rejected' can have its rejection stamps CLEARED as it is resubmitted -
+      //     stampsNotForged() is what keeps that to clearing).
+      //     The approver must be SOMEBODY ELSE: neither the plan's author nor
+      //     whoever is submitting it. A plan whose approver is its own author
+      //     has no approval step, which is the defect this rule exists for -
+      //     and the check has to live here, because the plans page excludes
+      //     only the submitter from the approver list, not the author.
+      function authorSubmits() {
+        return isQualityStaff()
+               && (isSelf(author()) || isAdmin())
+               && currentStatus() in ['draft', 'rejected']
+               && nextStatus() == 'pending_approval'
+               && changedKeys().hasOnly(authorFields())
+               && stampsNotForged()
+               && request.resource.data.get('approverId', '') != ''
+               && request.resource.data.get('approverId', '') != author()
+               && request.resource.data.get('approverId', '') != appUserId();
+      }
+
+      // (3) The approver NAMED ON THIS PLAN records the decision, once, and
+      //     only out of 'pending_approval'. Not the quality manager, not an
+      //     administrator, not the author - the one person in approverId, who
+      //     the rule above guaranteed is not the author. The stamp has to carry
+      //     their own id, so the record of who decided cannot be forged.
+      //     `appUserId() != author()` repeats the guarantee at decision time,
+      //     because plans written before these rules were deployed may already
+      //     name their own author as approver.
+      function approverDecides() {
+        return isActive()
+               && approver() != ''
+               && approver() == appUserId()
+               && appUserId() != author()
+               && currentStatus() == 'pending_approval'
+               && changedKeys().hasOnly(decisionFields())
+               && ((nextStatus() == 'approved'
+                    && request.resource.data.get('approvedBy', '') == appUserId())
+                   || (nextStatus() == 'rejected'
+                       && request.resource.data.get('rejectedBy', '') == appUserId()));
+      }
+
+      // (4) The author WITHDRAWS a submission and the plan goes back to 'draft'.
+      //     Without this branch a submitted plan is a permanent dead end: the
+      //     content is frozen, the approver cannot be changed, the plan cannot be
+      //     deleted and its year is spoken for, so a plan sent to the wrong
+      //     person - or to someone who has left - can never be rescued.
+      //     Only the author (or a system_admin), and only out of
+      //     'pending_approval'. The approver assignment may be CLEARED on the way
+      //     out but may not be switched to a different person: reassigning is
+      //     what a submission does, and authorSubmits() is where the author/
+      //     approver separation is checked. handleRecallPlan in
+      //     src/app/plans/page.tsx writes { status: 'draft' } (+ updatedAt) and
+      //     leaves approverId standing so the next submission can default to it;
+      //     both shapes are accepted here.
+      //     The role is not re-checked: this is about being the plan's author,
+      //     and an author who has since changed roles must still be able to take
+      //     their own request back. The approver has no branch here - a decision
+      //     is theirs to record, not to duck.
+      function authorRecalls() {
+        return (isSelf(author()) || isAdmin())
+               && currentStatus() == 'pending_approval'
+               && nextStatus() == 'draft'
+               && changedKeys().hasOnly(authorFields())
+               && (request.resource.data.get('approverId', '') == ''
+                   || request.resource.data.get('approverId', '') == approver())
+               && stampsNotForged();
+      }
+
+      // (5) An audit was created from a planned line, and its id is written back
+      //     onto that line (linkAuditToPlanItem in src/app/audits/new/page.tsx).
+      //     This is the ONLY change permitted on an approved plan, and it is
+      //     nailed down element by element:
+      //       - only `items` and `updatedAt` move at the top level;
+      //       - the item count is unchanged;
+      //       - exactly one element of the list differs, in both directions
+      //         (removeAll of one list against the other leaves one element on
+      //         each side - the line before and the line after);
+      //       - and comparing those two maps, the ONLY key that differs is
+      //         auditId, which was empty before and is a non-empty string now.
+      //     So no line can be added, removed, reordered into a different value,
+      //     re-departmented, re-scheduled or re-linked to a different audit;
+      //     a blank line gains an audit id, once, and nothing else happens.
+      //     The gate is isActive() rather than isQualityStaff() because this is
+      //     the same permission as creating the audit itself, and the write is a
+      //     consequence of that act. (Plan items carry unique ids, so two
+      //     elements are never structurally identical and removeAll cannot
+      //     collapse them.)
+      function planItemsAdded() {
+        return request.resource.data.items.removeAll(resource.data.items);
+      }
+
+      function planItemsRemoved() {
+        return resource.data.items.removeAll(request.resource.data.items);
+      }
+
+      function linksCreatedAuditToItem() {
+        return isActive()
+               && currentStatus() == 'approved'
+               && nextStatus() == 'approved'
+               && changedKeys().hasOnly(['items', 'updatedAt'])
+               && changedKeys().hasAny(['items'])
+               && 'items' in resource.data
+               && 'items' in request.resource.data
+               && resource.data.items is list
+               && request.resource.data.items is list
+               && request.resource.data.items.size() == resource.data.items.size()
+               && planItemsAdded().size() == 1
+               && planItemsRemoved().size() == 1
+               && planItemsAdded()[0].diff(planItemsRemoved()[0]).affectedKeys().hasOnly(['auditId'])
+               && planItemsRemoved()[0].get('auditId', '') == ''
+               && planItemsAdded()[0].get('auditId', '') is string
+               && planItemsAdded()[0].get('auditId', '') != '';
+      }
+
+      // get:  getAnnualPlanById, getAnnualPlanByYear (where year == ...)
+      // list: getAllAnnualPlans, subscribeToAnnualPlans - a collection-wide
+      //       listener, so the rule cannot depend on document contents.
+      //       Everyone signed in and active may read the plan; the dashboard
+      //       widgets and the audit pages need it.
+      allow get, list: if isActive();
+
+      // create: createAnnualPlan, from the quality manager's plan page, which
+      //         always starts a plan as a draft with createdBy = the signed-in
+      //         user. A plan may not be born approved, and the year has to be a
+      //         number in a sane range - the page checks 2000-2100 and this is
+      //         the same check where it counts.
+      //         The decision stamps must be ABSENT: without that clause a plan
+      //         can be born already carrying approvedBy/approvedAt, i.e. an
+      //         approval that no approver ever gave, on a document whose approval
+      //         step is the whole point. createAnnualPlan
+      //         (src/lib/firestore.ts) writes none of them.
+      allow create: if isQualityStaff()
+                    && request.resource.data.get('createdBy', '') == appUserId()
+                    && request.resource.data.get('status', '') == 'draft'
+                    && !request.resource.data.keys().hasAny(decisionStamps())
+                    && request.resource.data.get('year', 0) is number
+                    && request.resource.data.get('year', 0) >= 2000
+                    && request.resource.data.get('year', 0) <= 2100;
+
+      // update: exactly the five legal moves, and nothing else. Note what still
+      //         has no branch: editing the CONTENT of a pending_approval plan,
+      //         editing or re-deciding an approved one beyond the auditId
+      //         write-back, anyone but the author returning a plan to 'draft',
+      //         and anyone but the named approver deciding.
+      allow update: if authorEditsContent()
+                    || authorSubmits()
+                    || authorRecalls()
+                    || approverDecides()
+                    || linksCreatedAuditToItem();
+
+      // delete: deleteAnnualPlan. The plans page offers it under the same
+      //         condition as editing (author or system_admin, draft or
+      //         rejected), and it is gated on the status here too: a plan that
+      //         has been submitted or approved cannot be made to disappear and
+      //         reappear with different contents.
+      allow delete: if isQualityStaff()
+                    && (isSelf(author()) || isAdmin())
+                    && currentStatus() in ['draft', 'rejected'];
+    }
+
+    // -------------------------------------------------------------------
+    // activeSessions/{userId} - doc id == user id (the Firestore user id).
+    // -------------------------------------------------------------------
+    match /activeSessions/{userId} {
+      // list: getActiveSessions, subscribeToActiveSessions, cleanupStaleSessions -
+      //       the Sidebar effect that uses them returns early for anyone who is
+      //       not a system_admin (src/components/layout/Sidebar.tsx:126-130).
+      // get:  no caller today; permitted for the owner because a user reading
+      //       their own session row learns nothing new.
+      allow get: if isAdmin() || isSelf(userId);
+      allow list: if isAdmin();
+
+      // create/update: addActiveSession at login and the once-a-minute
+      //       heartbeat updateSessionActivity, both always on the caller's own id.
+      allow create, update: if isSelf(userId);
+
+      // delete: removeActiveSession at logout (own row) and cleanupStaleSessions,
+      //         which deletes other people's stale rows and only ever runs from
+      //         the system_admin-only Sidebar effect.
+      allow delete: if isAdmin() || isSelf(userId);
+    }
+
+    // -------------------------------------------------------------------
+    // notifications
+    // -------------------------------------------------------------------
+    match /notifications/{notificationId} {
+      // list: getNotificationsForUser, subscribeToNotifications and
+      //       markAllNotificationsAsRead all query where recipientId == <own id>,
+      //       so the recipient clause is always satisfied by the query itself.
+      //       The admin clause is document-independent and lets the backup
+      //       script export the collection.
+      // get:  no dedicated function today; implied by list access.
+      allow get, list: if isAdmin()
+                       || (isActive() && resource.data.recipientId == appUserId());
+
+      // create: addNotification - one user notifying another (approval
+      //         requests, decisions, team assignments), so the recipient is
+      //         somebody else and cannot be constrained. senderId is optional on
+      //         the Notification type, but every call site passes the signed-in
+      //         user's id, so when it is present it must be the caller's own -
+      //         nobody gets to send a notification under someone else's name.
+      allow create: if isActive()
+                    && (!('senderId' in request.resource.data)
+                        || request.resource.data.senderId == appUserId());
+
+      // update: markNotificationAsRead / markAllNotificationsAsRead. Both write
+      //         exactly { read: true } on a notification addressed to the caller,
+      //         and nothing else in the application updates a notification.
+      allow update: if isActive()
+                    && resource.data.recipientId == appUserId()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+
+      // delete: deleteNotification, from the recipient's own notification list
+      //         in the Header.
+      allow delete: if isAdmin()
+                    || (isActive() && resource.data.recipientId == appUserId());
+    }
+
+    // -------------------------------------------------------------------
+    // Catch-all: any collection or document not listed above is denied. The
+    // application touches Firestore only through src/lib/firestore.ts and
+    // src/lib/auth.ts, and between them they use exactly the nine collections
+    // matched above.
+    // -------------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -27,11 +27,15 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
-    const savedLanguage = localStorage.getItem('language') as Language | null;
-    if (savedLanguage && (savedLanguage === 'ar' || savedLanguage === 'en')) {
-      setLanguageState(savedLanguage);
-    }
+    const timer = setTimeout(() => {
+      setMounted(true);
+      const savedLanguage = localStorage.getItem('language') as Language | null;
+      if (savedLanguage && (savedLanguage === 'ar' || savedLanguage === 'en')) {
+        setLanguageState(savedLanguage);
+      }
+    }, 0);
+
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {

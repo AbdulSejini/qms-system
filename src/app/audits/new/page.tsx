@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
@@ -27,9 +27,20 @@ import {
   Plus,
   Trash2,
   Edit3,
+  BookOpen,
+  CheckSquare,
+  Square,
+  CalendarRange,
 } from 'lucide-react';
+import { getSuggestedQuestions, type BankQuestion } from '@/lib/question-bank';
 import { useAuth } from '@/contexts/AuthContext';
-import { createAudit, addNotification, getAllUsers } from '@/lib/firestore';
+import {
+  createAudit,
+  addNotification,
+  getAllUsers,
+  getAnnualPlanById,
+  updateAnnualPlan,
+} from '@/lib/firestore';
 
 // ===========================================
 // صفحة إنشاء مراجعة جديدة
@@ -76,6 +87,7 @@ export default function NewAuditPage() {
 
   // Confirmation modal state
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Question interface
   interface AuditQuestion {
@@ -124,6 +136,93 @@ export default function NewAuditPage() {
 
   // Validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // ===========================================
+  // Link to a line of the annual audit plan
+  // ===========================================
+  // AnnualPlanItem.auditId was never written by anything, so the plan page's
+  // progress bar and the dashboard's Annual Audit Progress widget were stuck at
+  // zero for good. The link is made explicitly: the quality manager presses
+  // "create an audit" on a planned line, the plan page opens this form with that
+  // line's department, section, month, type and lead auditor in the URL, and once
+  // the audit is saved its id is written back onto that exact line. Nothing is
+  // guessed from titles, and one line can only ever point at one audit.
+  interface PlanLink {
+    planId: string;
+    planItemId: string;
+    year: number;
+  }
+  const [planLink, setPlanLink] = useState<PlanLink | null>(null);
+
+  // The audit was created but its id could not be written onto the plan line.
+  // Kept on screen with a retry so the operator is never left believing the plan
+  // was updated - and so they cannot press "create" again and get a duplicate.
+  const [linkFailure, setLinkFailure] = useState<{ auditId: string } | null>(null);
+  const [isRetryingLink, setIsRetryingLink] = useState(false);
+
+  // The parameters are read from window after mount rather than through
+  // useSearchParams, which would force this page behind a Suspense boundary.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const planId = params.get('planId');
+    const planItemId = params.get('planItemId');
+    if (!planId || !planItemId) return;
+
+    const year = Number(params.get('year'));
+    const month = Number(params.get('month'));
+    const departmentId = params.get('departmentId') || '';
+    const sectionId = params.get('sectionId') || '';
+    const leadAuditorId = params.get('leadAuditorId') || '';
+    const type = params.get('type');
+
+    setPlanLink({ planId, planItemId, year: Number.isFinite(year) ? year : 0 });
+
+    setFormData(prev => {
+      const next = { ...prev };
+      if (departmentId) next.departmentId = departmentId;
+      if (sectionId) next.sectionId = sectionId;
+      if (leadAuditorId) next.leadAuditorId = leadAuditorId;
+      if (type && auditTypes.some(auditType => auditType.value === type)) {
+        next.type = type as typeof prev.type;
+      }
+      // The planned month becomes the start date - the first of that month in the
+      // plan's own year, keeping the same-day default for the end date.
+      if (year >= 2000 && year <= 2100 && month >= 1 && month <= 12) {
+        const plannedStart = `${year}-${String(month).padStart(2, '0')}-01`;
+        next.startDate = plannedStart;
+        next.endDate = plannedStart;
+      }
+      return next;
+    });
+  }, []);
+
+  // Write the new audit's id onto the planned line it came from.
+  // Returns true when the line now carries this audit id.
+  const linkAuditToPlanItem = async (auditId: string): Promise<boolean> => {
+    if (!planLink) return true;
+    try {
+      const plan = await getAnnualPlanById(planLink.planId);
+      if (!plan) return false;
+
+      const items = plan.items || [];
+      const target = items.find(item => item.id === planLink.planItemId);
+      if (!target) return false;
+
+      // Someone linked this line already - leave their audit in place rather than
+      // overwriting it, and treat it as done.
+      if (target.auditId) return true;
+
+      return await updateAnnualPlan(plan.id, {
+        items: items.map(item =>
+          item.id === planLink.planItemId ? { ...item, auditId } : item
+        ),
+      });
+    } catch (error) {
+      console.error('Error linking audit to annual plan item:', error);
+      return false;
+    }
+  };
 
   // Helper functions
   const getDepartment = (id: string) => allDepartments.find(d => d.id === id);
@@ -181,6 +280,69 @@ export default function NewAuditPage() {
       setFormData({ ...formData, questions: [...formData.questions, question] });
     }
     setNewQuestion({ questionAr: '', questionEn: '', clause: '' });
+  };
+
+  // Questions the QA department's checklist defines for the selected scope.
+  // Matched on the department/section codes, falling back to their names.
+  const suggestedQuestions = useMemo<BankQuestion[]>(() => {
+    if (!formData.departmentId) return [];
+    const department = getDepartment(formData.departmentId);
+    const section = formData.sectionId ? getSection(formData.sectionId) : undefined;
+    return getSuggestedQuestions({
+      departmentCode: department?.code,
+      departmentNameEn: department?.nameEn,
+      departmentNameAr: department?.nameAr,
+      sectionCode: section?.code,
+      sectionNameEn: section?.nameEn,
+      sectionNameAr: section?.nameAr,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.departmentId, formData.sectionId, allDepartments, allSections]);
+
+  // Compare on text so a suggestion already added is shown as added, whether it
+  // arrived from the checklist or was typed by hand.
+  const addedQuestionTexts = useMemo(
+    () => new Set(formData.questions.map(q => (q.questionEn || q.questionAr).trim().toLowerCase())),
+    [formData.questions]
+  );
+
+  const isSuggestionAdded = (question: BankQuestion) =>
+    addedQuestionTexts.has(question.text.trim().toLowerCase());
+
+  // Add one checklist question. The checklists are written in English, so the
+  // English field carries the text and the Arabic field is left for the auditor
+  // to fill in if they want it bilingual.
+  const addSuggestedQuestion = (question: BankQuestion) => {
+    if (isSuggestionAdded(question)) return;
+    setFormData(prev => ({
+      ...prev,
+      questions: [
+        ...prev.questions,
+        {
+          id: `q-${Date.now()}-${prev.questions.length}`,
+          questionAr: '',
+          questionEn: question.text,
+          clause: '',
+        },
+      ],
+    }));
+  };
+
+  const addAllSuggestedQuestions = () => {
+    const pending = suggestedQuestions.filter(q => !isSuggestionAdded(q));
+    if (pending.length === 0) return;
+    setFormData(prev => ({
+      ...prev,
+      questions: [
+        ...prev.questions,
+        ...pending.map((question, index) => ({
+          id: `q-${Date.now()}-${prev.questions.length + index}`,
+          questionAr: '',
+          questionEn: question.text,
+          clause: '',
+        })),
+      ],
+    }));
   };
 
   // Edit question
@@ -297,138 +459,179 @@ export default function NewAuditPage() {
 
   // Handle save
   const handleSave = async (continueToDetails: boolean = false) => {
+    if (isSubmitting) return;
     if (!validateStep(currentStep)) return;
 
-    // Determine initial status - quality manager doesn't need approval for their own audits
-    const initialStatus = isQualityManager ? 'planning' : 'pending_approval';
+    setIsSubmitting(true);
 
-    // Create audit object with questions formatted for audit detail page
-    const questionsFormatted = formData.questions.map(q => ({
-      ...q,
-      status: 'pending' as const,
-      answer: '',
-      notes: '',
-    }));
+    try {
+      // Determine initial status - quality manager doesn't need approval for their own audits
+      const initialStatus = isQualityManager ? 'planning' : 'pending_approval';
 
-    const audit = {
-      id: `${Date.now()}`,
-      number: `AUD-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 9999)).padStart(4, '0')}`,
-      titleAr: formData.titleAr,
-      titleEn: formData.titleEn,
-      type: formData.type,
-      departmentId: formData.departmentId,
-      sectionId: formData.sectionId || undefined,
-      leadAuditorId: formData.leadAuditorId,
-      scope: formData.scope,
-      objective: formData.objective,
-      status: initialStatus,
-      currentStage: 0,
-      auditorIds: [formData.leadAuditorId, ...formData.auditorIds.filter(id => id !== formData.leadAuditorId)],
-      startDate: formData.startDate || new Date().toISOString().split('T')[0],
-      endDate: formData.endDate,
-      questions: questionsFormatted,
-      findings: [],
-      createdAt: new Date().toISOString(),
-      createdBy: currentUser?.id,
+      // Create audit object with questions formatted for audit detail page
+      const questionsFormatted = formData.questions.map(q => ({
+        ...q,
+        status: 'pending' as const,
+        answer: '',
+        notes: '',
+      }));
+
+      const audit = {
+        id: `${Date.now()}`,
+        number: `AUD-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 9999)).padStart(4, '0')}`,
+        titleAr: formData.titleAr,
+        titleEn: formData.titleEn,
+        type: formData.type,
+        departmentId: formData.departmentId,
+        sectionId: formData.sectionId || undefined,
+        leadAuditorId: formData.leadAuditorId,
+        scope: formData.scope,
+        objective: formData.objective,
+        status: initialStatus,
+        currentStage: 0,
+        auditorIds: [formData.leadAuditorId, ...formData.auditorIds.filter(id => id !== formData.leadAuditorId)],
+        startDate: formData.startDate || new Date().toISOString().split('T')[0],
+        endDate: formData.endDate,
+        questions: questionsFormatted,
+        findings: [],
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser?.id,
+        // Add notification for quality manager if not self-created
+        needsApproval: !isQualityManager,
+        // Activity log - سجل النشاطات
+        activityLog: [{
+          id: `activity-${Date.now()}`,
+          type: 'audit_created',
+          userId: currentUser?.id || '',
+          timestamp: new Date().toISOString(),
+          details: {
+            description: `تم إنشاء المراجعة "${formData.titleAr}"`,
+          },
+        }],
+      };
+
+      // Save to Firestore.
+      // number, questions, currentStage and activityLog used to be built above
+      // and then dropped here, so the checklist an auditor filled in during
+      // creation was silently discarded and findings ended up numbered
+      // "undefined-F1". They are all persisted now.
+      const auditId = await createAudit({
+        number: audit.number,
+        titleAr: audit.titleAr,
+        titleEn: audit.titleEn,
+        type: audit.type,
+        status: initialStatus as any,
+        currentStage: audit.currentStage,
+        departmentId: audit.departmentId,
+        sectionId: audit.sectionId,
+        leadAuditorId: audit.leadAuditorId,
+        teamMemberIds: audit.auditorIds,
+        startDate: audit.startDate,
+        endDate: audit.endDate,
+        objectives: audit.objective,
+        scope: audit.scope,
+        criteria: '',
+        questions: questionsFormatted,
+        findings: [],
+        activityLog: audit.activityLog,
+        createdBy: currentUser?.id || '',
+      });
+
+      if (!auditId) {
+        console.error('Failed to create audit');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Update the local audit id
+      audit.id = auditId;
+
       // Add notification for quality manager if not self-created
-      needsApproval: !isQualityManager,
-      // Activity log - سجل النشاطات
-      activityLog: [{
-        id: `activity-${Date.now()}`,
-        type: 'audit_created',
-        userId: currentUser?.id || '',
-        timestamp: new Date().toISOString(),
-        details: {
-          description: `تم إنشاء المراجعة "${formData.titleAr}"`,
-        },
-      }],
-    };
+      console.log('Current user role:', currentUser?.role, 'isQualityManager:', isQualityManager);
 
-    // Save to Firestore
-    const auditId = await createAudit({
-      titleAr: audit.titleAr,
-      titleEn: audit.titleEn,
-      type: audit.type,
-      status: initialStatus as any,
-      departmentId: audit.departmentId,
-      sectionId: audit.sectionId,
-      leadAuditorId: audit.leadAuditorId,
-      teamMemberIds: audit.auditorIds,
-      startDate: audit.startDate,
-      endDate: audit.endDate,
-      objectives: audit.objective,
-      scope: audit.scope,
-      criteria: '',
-      findings: [],
-      createdBy: currentUser?.id || '',
-    });
+      if (!isQualityManager) {
+        // Find all quality managers to notify
+        const allUsersData = await getAllUsers();
+        console.log('All users loaded:', allUsersData.length);
+        const qualityManagers = allUsersData.filter(u => u.role === 'quality_manager' && u.isActive);
+        console.log('Quality managers found:', qualityManagers.length, qualityManagers.map(q => ({ id: q.id, name: q.fullNameEn })));
 
-    if (!auditId) {
-      console.error('Failed to create audit');
-      return;
-    }
-
-    // Update the local audit id
-    audit.id = auditId;
-
-    // Add notification for quality manager if not self-created
-    console.log('Current user role:', currentUser?.role, 'isQualityManager:', isQualityManager);
-
-    if (!isQualityManager) {
-      // Find all quality managers to notify
-      const allUsersData = await getAllUsers();
-      console.log('All users loaded:', allUsersData.length);
-      const qualityManagers = allUsersData.filter(u => u.role === 'quality_manager' && u.isActive);
-      console.log('Quality managers found:', qualityManagers.length, qualityManagers.map(q => ({ id: q.id, name: q.fullNameEn })));
-
-      for (const qm of qualityManagers) {
-        console.log('Sending notification to quality manager:', qm.id, qm.fullNameEn);
-        const notifId = await addNotification({
-          type: 'audit_approval_request',
-          title: language === 'ar' ? 'طلب موافقة على مراجعة جديدة' : 'New Audit Approval Request',
-          message: language === 'ar'
-            ? `طلب موافقة على مراجعة: ${formData.titleAr}`
-            : `Approval request for audit: ${formData.titleEn}`,
-          recipientId: qm.id,
-          senderId: currentUser?.id,
-          auditId: auditId,
-        });
-        console.log('Notification result:', notifId ? 'Success' : 'Failed');
+        for (const qm of qualityManagers) {
+          console.log('Sending notification to quality manager:', qm.id, qm.fullNameEn);
+          const notifId = await addNotification({
+            type: 'audit_approval_request',
+            title: language === 'ar' ? 'طلب موافقة على مراجعة جديدة' : 'New Audit Approval Request',
+            message: language === 'ar'
+              ? `طلب موافقة على مراجعة: ${formData.titleAr}`
+              : `Approval request for audit: ${formData.titleEn}`,
+            recipientId: qm.id,
+            senderId: currentUser?.id,
+            auditId: auditId,
+          });
+          console.log('Notification result:', notifId ? 'Success' : 'Failed');
+        }
+      } else {
+        console.log('Skipping notification - user is quality manager');
       }
-    } else {
-      console.log('Skipping notification - user is quality manager');
-    }
 
-    // Add notifications for team members (excluding the creator)
-    const teamMemberIds = formData.auditorIds.filter(id => id !== currentUser?.id);
+      // Add notifications for team members (excluding the creator)
+      const teamMemberIds = formData.auditorIds.filter(id => id !== currentUser?.id);
 
-    // Also notify lead auditor if they're not the creator
-    if (formData.leadAuditorId !== currentUser?.id && !teamMemberIds.includes(formData.leadAuditorId)) {
-      teamMemberIds.push(formData.leadAuditorId);
-    }
-
-    for (const memberId of teamMemberIds) {
-      const member = getUser(memberId);
-      if (member) {
-        await addNotification({
-          type: 'audit_team_assignment',
-          title: language === 'ar' ? 'تم إضافتك لفريق مراجعة' : 'Added to Audit Team',
-          message: language === 'ar'
-            ? `تم إضافتك كعضو في فريق المراجعة: ${formData.titleAr}`
-            : `You have been added as a team member in audit: ${formData.titleEn}`,
-          recipientId: memberId,
-          senderId: currentUser?.id,
-          auditId: auditId,
-        });
+      // Also notify lead auditor if they're not the creator
+      if (formData.leadAuditorId !== currentUser?.id && !teamMemberIds.includes(formData.leadAuditorId)) {
+        teamMemberIds.push(formData.leadAuditorId);
       }
+
+      for (const memberId of teamMemberIds) {
+        const member = getUser(memberId);
+        if (member) {
+          await addNotification({
+            type: 'audit_team_assignment',
+            title: language === 'ar' ? 'تم إضافتك لفريق مراجعة' : 'Added to Audit Team',
+            message: language === 'ar'
+              ? `تم إضافتك كعضو في فريق المراجعة: ${formData.titleAr}`
+              : `You have been added as a team member in audit: ${formData.titleEn}`,
+            recipientId: memberId,
+            senderId: currentUser?.id,
+            auditId: auditId,
+          });
+        }
+      }
+
+      setShowConfirmModal(false);
+
+      // Close the loop with the annual plan before leaving the page: the planned
+      // line now points at this audit, which is what the plan progress bar and the
+      // dashboard's Annual Audit Progress widget count.
+      const linked = await linkAuditToPlanItem(auditId);
+      if (!linked) {
+        // The audit exists; only the plan link failed. Stop here with a retry so
+        // the operator does not resubmit the form and create a second audit.
+        setIsSubmitting(false);
+        setLinkFailure({ auditId });
+        return;
+      }
+
+      if (continueToDetails) {
+        router.push(`/audits/${audit.id}`);
+      } else {
+        router.push('/audits');
+      }
+    } catch (error) {
+      console.error('Error creating audit:', error);
+      setIsSubmitting(false);
     }
+  };
 
-    setShowConfirmModal(false);
-
-    if (continueToDetails) {
-      router.push(`/audits/${audit.id}`);
-    } else {
-      router.push('/audits');
+  // Retry writing the audit id onto the planned line after a failed attempt
+  const handleRetryPlanLink = async () => {
+    if (!linkFailure || isRetryingLink) return;
+    setIsRetryingLink(true);
+    const linked = await linkAuditToPlanItem(linkFailure.auditId);
+    setIsRetryingLink(false);
+    if (linked) {
+      setLinkFailure(null);
+      router.push(`/audits/${linkFailure.auditId}`);
     }
   };
 
@@ -509,25 +712,48 @@ export default function NewAuditPage() {
           </Button>
         </div>
 
+        {/* Created from a line of the annual plan */}
+        {planLink && (
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex-shrink-0 p-2 rounded-full bg-[var(--primary)]/10">
+                  <CalendarRange className="h-5 w-5 text-[var(--primary)]" />
+                </div>
+                <div className="text-sm">
+                  <p className="font-medium">
+                    {language === 'ar'
+                      ? `مراجعة من الخطة السنوية ${planLink.year || ''}`
+                      : `Audit from the ${planLink.year || ''} annual plan`}
+                  </p>
+                  <p className="text-[var(--foreground-secondary)] mt-0.5">
+                    {language === 'ar'
+                      ? 'الإدارة والقسم والتاريخ ورئيس الفريق مُعبّأة من بند الخطة ويمكن تعديلها. عند الحفظ يُسجَّل رقم هذه المراجعة على البند فتتحدث نسبة إنجاز الخطة.'
+                      : 'The department, section, dates and lead auditor are pre-filled from the planned line and can still be changed. On save, this audit is recorded on that line and the plan progress updates.'}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Progress Steps */}
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center justify-between mb-8">
               {[1, 2, 3, 4, 5].map((step) => (
                 <div key={step} className="flex items-center flex-1">
-                  <div className={`flex items-center justify-center w-10 h-10 rounded-full text-sm font-semibold transition-colors ${
-                    step < currentStep
-                      ? 'bg-green-500 text-white'
-                      : step === currentStep
-                        ? 'bg-[var(--primary)] text-white'
-                        : 'bg-[var(--background-secondary)] text-[var(--foreground-secondary)]'
-                  }`}>
+                  <div className={`flex items-center justify-center w-10 h-10 rounded-full text-sm font-semibold transition-colors ${step < currentStep
+                    ? 'bg-green-500 text-white'
+                    : step === currentStep
+                      ? 'bg-[var(--primary)] text-white'
+                      : 'bg-[var(--background-secondary)] text-[var(--foreground-secondary)]'
+                    }`}>
                     {step < currentStep ? <CheckCircle className="h-5 w-5" /> : step}
                   </div>
                   <div className={`mx-3 flex-1 ${step < 5 ? 'block' : 'hidden'}`}>
-                    <div className={`h-1 rounded-full transition-colors ${
-                      step < currentStep ? 'bg-green-500' : 'bg-[var(--background-secondary)]'
-                    }`} />
+                    <div className={`h-1 rounded-full transition-colors ${step < currentStep ? 'bg-green-500' : 'bg-[var(--background-secondary)]'
+                      }`} />
                   </div>
                 </div>
               ))}
@@ -580,9 +806,8 @@ export default function NewAuditPage() {
                       value={formData.titleAr}
                       onChange={(e) => setFormData({ ...formData, titleAr: e.target.value })}
                       placeholder={language === 'ar' ? 'مثال: مراجعة قسم الإنتاج' : 'Example: Production Department Audit'}
-                      className={`w-full rounded-lg border px-4 py-3 text-sm ${
-                        errors.titleAr ? 'border-red-500' : 'border-[var(--border)]'
-                      } bg-[var(--background)]`}
+                      className={`w-full rounded-lg border px-4 py-3 text-sm ${errors.titleAr ? 'border-red-500' : 'border-[var(--border)]'
+                        } bg-[var(--background)]`}
                     />
                     {errors.titleAr && (
                       <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
@@ -600,9 +825,8 @@ export default function NewAuditPage() {
                       value={formData.titleEn}
                       onChange={(e) => setFormData({ ...formData, titleEn: e.target.value })}
                       placeholder={language === 'ar' ? 'مثال: Production Department Audit' : 'Example: Production Department Audit'}
-                      className={`w-full rounded-lg border px-4 py-3 text-sm ${
-                        errors.titleEn ? 'border-red-500' : 'border-[var(--border)]'
-                      } bg-[var(--background)]`}
+                      className={`w-full rounded-lg border px-4 py-3 text-sm ${errors.titleEn ? 'border-red-500' : 'border-[var(--border)]'
+                        } bg-[var(--background)]`}
                     />
                     {errors.titleEn && (
                       <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
@@ -622,18 +846,16 @@ export default function NewAuditPage() {
                       <div
                         key={type.value}
                         onClick={() => setFormData({ ...formData, type: type.value as typeof formData.type })}
-                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                          formData.type === type.value
-                            ? 'border-[var(--primary)] bg-[var(--primary)]/5'
-                            : 'border-[var(--border)] hover:border-[var(--primary)]/50'
-                        }`}
+                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${formData.type === type.value
+                          ? 'border-[var(--primary)] bg-[var(--primary)]/5'
+                          : 'border-[var(--border)] hover:border-[var(--primary)]/50'
+                          }`}
                       >
                         <div className="flex items-center gap-3">
-                          <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                            formData.type === type.value
-                              ? 'border-[var(--primary)]'
-                              : 'border-[var(--border)]'
-                          }`}>
+                          <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${formData.type === type.value
+                            ? 'border-[var(--primary)]'
+                            : 'border-[var(--border)]'
+                            }`}>
                             {formData.type === type.value && (
                               <div className="w-2 h-2 rounded-full bg-[var(--primary)]" />
                             )}
@@ -663,9 +885,8 @@ export default function NewAuditPage() {
                     <select
                       value={formData.departmentId}
                       onChange={(e) => setFormData({ ...formData, departmentId: e.target.value, sectionId: '' })}
-                      className={`w-full rounded-lg border px-4 py-3 text-sm ${
-                        errors.departmentId ? 'border-red-500' : 'border-[var(--border)]'
-                      } bg-[var(--background)]`}
+                      className={`w-full rounded-lg border px-4 py-3 text-sm ${errors.departmentId ? 'border-red-500' : 'border-[var(--border)]'
+                        } bg-[var(--background)]`}
                     >
                       <option value="">{language === 'ar' ? '-- اختر الإدارة --' : '-- Select Department --'}</option>
                       {allDepartments.filter(d => d.isActive).map(dept => (
@@ -717,9 +938,8 @@ export default function NewAuditPage() {
                       <select
                         value={formData.leadAuditorId}
                         onChange={(e) => setFormData({ ...formData, leadAuditorId: e.target.value })}
-                        className={`w-full rounded-lg border px-4 py-3 text-sm ${
-                          errors.leadAuditorId ? 'border-red-500' : 'border-[var(--border)]'
-                        } bg-[var(--background)]`}
+                        className={`w-full rounded-lg border px-4 py-3 text-sm ${errors.leadAuditorId ? 'border-red-500' : 'border-[var(--border)]'
+                          } bg-[var(--background)]`}
                       >
                         <option value="">{language === 'ar' ? '-- اختر رئيس الفريق --' : '-- Select Lead Auditor --'}</option>
                         {auditors.map(auditor => (
@@ -827,9 +1047,8 @@ export default function NewAuditPage() {
                       type="date"
                       value={formData.startDate}
                       onChange={(e) => handleStartDateChange(e.target.value)}
-                      className={`w-full rounded-lg border px-4 py-3 text-sm ${
-                        errors.startDate ? 'border-red-500' : 'border-[var(--border)]'
-                      } bg-[var(--background)]`}
+                      className={`w-full rounded-lg border px-4 py-3 text-sm ${errors.startDate ? 'border-red-500' : 'border-[var(--border)]'
+                        } bg-[var(--background)]`}
                     />
                     {errors.startDate && (
                       <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
@@ -940,6 +1159,76 @@ export default function NewAuditPage() {
             {/* Step 5: Questions */}
             {currentStep === 5 && (
               <div className="space-y-6">
+                {/* Checklist questions for the selected department/section */}
+                {suggestedQuestions.length > 0 && (
+                  <div className="rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+                      <div>
+                        <h4 className="font-medium flex items-center gap-2">
+                          <BookOpen className="h-5 w-5 text-[var(--primary)]" />
+                          {language === 'ar' ? 'أسئلة القائمة المعتمدة' : 'Approved Checklist Questions'}
+                        </h4>
+                        <p className="text-xs text-[var(--foreground-secondary)] mt-1">
+                          {language === 'ar'
+                            ? `${suggestedQuestions.length} سؤالاً من قائمة المراجعة المعتمدة لهذا النطاق. يمكنك إضافتها كلها أو اختيار ما يناسب، وتعديل أي سؤال بعد إضافته.`
+                            : `${suggestedQuestions.length} questions from the approved checklist for this scope. Add them all or pick what fits - every added question stays editable.`}
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={addAllSuggestedQuestions}
+                        disabled={suggestedQuestions.every(isSuggestionAdded)}
+                      >
+                        <Plus className="h-4 w-4 mx-1" />
+                        {language === 'ar' ? 'إضافة الكل' : 'Add All'}
+                      </Button>
+                    </div>
+
+                    <div className="max-h-72 overflow-y-auto space-y-1 pe-1">
+                      {suggestedQuestions.map((question, index) => {
+                        const added = isSuggestionAdded(question);
+                        return (
+                          <button
+                            key={`${question.area}-${index}`}
+                            type="button"
+                            onClick={() => addSuggestedQuestion(question)}
+                            disabled={added}
+                            className={`w-full flex items-start gap-2 rounded-md px-3 py-2 text-start text-sm transition-colors ${
+                              added
+                                ? 'text-[var(--foreground-muted)] cursor-default'
+                                : 'hover:bg-[var(--background-tertiary)]'
+                            }`}
+                          >
+                            {added ? (
+                              <CheckSquare className="h-4 w-4 mt-0.5 shrink-0 text-[var(--status-success)]" />
+                            ) : (
+                              <Square className="h-4 w-4 mt-0.5 shrink-0 text-[var(--foreground-muted)]" />
+                            )}
+                            <span className={added ? 'line-through' : ''}>{question.text}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <p className="text-xs text-[var(--foreground-muted)] mt-3">
+                      {language === 'ar'
+                        ? `المصدر: ${suggestedQuestions[0].area} — ${suggestedQuestions[0].standard}`
+                        : `Source: ${suggestedQuestions[0].area} - ${suggestedQuestions[0].standard}`}
+                    </p>
+                  </div>
+                )}
+
+                {formData.departmentId && suggestedQuestions.length === 0 && (
+                  <div className="rounded-lg border border-[var(--border)] bg-[var(--background-secondary)] p-4">
+                    <p className="text-sm text-[var(--foreground-secondary)] flex items-center gap-2">
+                      <Info className="h-4 w-4 shrink-0" />
+                      {language === 'ar'
+                        ? 'لا توجد قائمة مراجعة معتمدة لهذا النطاق بعد. أضف الأسئلة يدوياً أدناه.'
+                        : 'No approved checklist exists for this scope yet. Add questions manually below.'}
+                    </p>
+                  </div>
+                )}
+
                 {/* Question Form */}
                 <div className="bg-[var(--background-secondary)] rounded-lg p-4 border border-[var(--border)]">
                   <h4 className="font-medium mb-4 flex items-center gap-2">
@@ -1282,11 +1571,81 @@ export default function NewAuditPage() {
                   <Button
                     onClick={() => handleSave(false)}
                     className="flex-1"
+                    disabled={isSubmitting}
                   >
-                    <CheckCircle className="h-4 w-4 mx-2" />
-                    {isQualityManager
-                      ? (language === 'ar' ? 'إنشاء المراجعة' : 'Create Audit')
-                      : (language === 'ar' ? 'إرسال للموافقة' : 'Send for Approval')}
+                    {isSubmitting ? (
+                      <span className="flex items-center gap-2">
+                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        {language === 'ar' ? 'جارٍ الإرسال...' : 'Sending...'}
+                      </span>
+                    ) : (
+                      <>
+                        <CheckCircle className="h-4 w-4 mx-2" />
+                        {isQualityManager
+                          ? (language === 'ar' ? 'إنشاء المراجعة' : 'Create Audit')
+                          : (language === 'ar' ? 'إرسال للموافقة' : 'Send for Approval')}
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* The audit was saved but the plan line could not be updated */}
+        {linkFailure && (
+          <>
+            <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="w-full max-w-lg rounded-2xl bg-[var(--card)] p-6 shadow-xl">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+                    <AlertCircle className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-[var(--foreground)]">
+                      {language === 'ar' ? 'المراجعة أُنشئت، والربط بالخطة لم يكتمل' : 'Audit created, plan link incomplete'}
+                    </h2>
+                    <p className="text-sm text-[var(--foreground-secondary)]">
+                      {language === 'ar'
+                        ? 'لا تُعِد إنشاء المراجعة - سيُنشئ ذلك مراجعة مكررة.'
+                        : 'Do not create the audit again - that would duplicate it.'}
+                    </p>
+                  </div>
+                </div>
+
+                <p className="text-sm text-[var(--foreground-secondary)] mb-6">
+                  {language === 'ar'
+                    ? 'حُفظت المراجعة بنجاح، لكن تسجيل رقمها على بند الخطة السنوية فشل، فستظل نسبة إنجاز الخطة دون هذه المراجعة. أعد المحاولة، أو افتح المراجعة الآن وأعد الربط لاحقاً من صفحة الخطط.'
+                    : 'The audit was saved, but recording it on the annual plan line failed, so the plan progress will not count it yet. Retry the link, or open the audit now and link it later from the plans page.'}
+                </p>
+
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => {
+                      const auditId = linkFailure.auditId;
+                      setLinkFailure(null);
+                      router.push(`/audits/${auditId}`);
+                    }}
+                  >
+                    {language === 'ar' ? 'فتح المراجعة' : 'Open the audit'}
+                  </Button>
+                  <Button
+                    className="flex-1"
+                    onClick={handleRetryPlanLink}
+                    disabled={isRetryingLink}
+                  >
+                    {isRetryingLink ? (
+                      <span className="flex items-center gap-2">
+                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        {language === 'ar' ? 'جارٍ المحاولة...' : 'Retrying...'}
+                      </span>
+                    ) : (
+                      language === 'ar' ? 'إعادة محاولة الربط' : 'Retry the link'
+                    )}
                   </Button>
                 </div>
               </div>

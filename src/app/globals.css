@@ -135,11 +135,17 @@
   --font-mono: var(--font-geist-mono);
 }
 
-/* Base Styles */
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
+/* Base Styles
+   This MUST stay inside @layer base. Tailwind v4 puts its utilities in a
+   cascade layer, and unlayered rules beat layered ones no matter how low their
+   specificity - so an unlayered `* { padding: 0; margin: 0 }` silently cancels
+   every p-*, m-* and space-* utility in the entire application. */
+@layer base {
+  * {
+    box-sizing: border-box;
+    padding: 0;
+    margin: 0;
+  }
 }
 
 html {
@@ -286,4 +292,80 @@ table {
 .badge {
   font-weight: 500;
   letter-spacing: 0.01em;
+}
+
+/* ===========================================
+   Sign-in screen
+   A cable cross-section is the brand motif: concentric conductor, insulation
+   and sheath rings, with a current pulse travelling around the armour. All of
+   it is decorative, so it collapses to a static image under reduced motion.
+   =========================================== */
+
+@keyframes qms-current-flow {
+  to { stroke-dashoffset: -1000; }
+}
+
+@keyframes qms-strand-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes qms-core-glow {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.06); }
+}
+
+@keyframes qms-rise-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes qms-sheen {
+  0%   { transform: translateX(-120%) skewX(-18deg); }
+  60%, 100% { transform: translateX(220%) skewX(-18deg); }
+}
+
+.qms-current  { stroke-dasharray: 26 340; animation: qms-current-flow 7s linear infinite; }
+.qms-strands  { transform-origin: center; animation: qms-strand-spin 46s linear infinite; }
+.qms-core     { transform-origin: center; animation: qms-core-glow 4.5s ease-in-out infinite; }
+
+/* Staged entrance - each step is one beat later than the one above it */
+.qms-rise     { animation: qms-rise-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.qms-rise-1   { animation-delay: 0.05s; }
+.qms-rise-2   { animation-delay: 0.13s; }
+.qms-rise-3   { animation-delay: 0.21s; }
+.qms-rise-4   { animation-delay: 0.29s; }
+
+/* Light sweep across the submit button on hover */
+.qms-sheen::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+  pointer-events: none;
+  opacity: 0;
+}
+.qms-sheen:hover:not(:disabled)::after {
+  opacity: 1;
+  animation: qms-sheen 0.9s ease-out;
+}
+
+/* The brand panel keeps its dark ground in both themes - it is a lit surface,
+   not a page background, so inverting it would break the glow. */
+.qms-brand-panel {
+  background:
+    radial-gradient(120% 90% at 15% 10%, #3A1D05 0%, transparent 60%),
+    radial-gradient(90% 70% at 85% 90%, #4A2606 0%, transparent 55%),
+    linear-gradient(160deg, #1B0F05 0%, #2A1708 55%, #160C04 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qms-current,
+  .qms-strands,
+  .qms-core,
+  .qms-rise,
+  .qms-sheen:hover:not(:disabled)::after {
+    animation: none;
+  }
+  .qms-rise { opacity: 1; transform: none; }
 }

@@ -20,6 +20,7 @@ import {
   Users,
   Building2,
   Calendar,
+  CalendarRange,
   ListChecks,
   TrendingUp,
   Wifi,
@@ -50,6 +51,13 @@ const navItems: NavItem[] = [
     href: '/dashboard',
     labelKey: 'navigation.dashboard',
     icon: LayoutDashboard,
+  },
+  {
+    // الخطة السنوية للمراجعة - يبنيها مدير الجودة ويعتمدها المدير الذي يختاره
+    href: '/plans',
+    labelKey: 'navigation.plans',
+    icon: CalendarRange,
+    requiresRole: ['system_admin', 'quality_manager', 'auditor', 'department_manager', 'section_head'],
   },
   {
     href: '/audits',

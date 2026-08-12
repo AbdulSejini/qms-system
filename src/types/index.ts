@@ -310,6 +310,46 @@ export interface AuditFinding {
 }
 
 // ===========================================
+// Annual Audit Plan Types - خطة المراجعة الداخلية السنوية
+// ===========================================
+
+// حالة الخطة السنوية - يعتمدها المدير المختار من قِبل مدير الجودة
+export type AnnualPlanStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
+
+// بند واحد في الخطة السنوية - مراجعة مخططة لإدارة/قسم في شهر معين
+export interface AnnualPlanItem {
+  id: string;
+  departmentId: string;
+  sectionId?: string;
+  plannedMonth: number;        // 1-12
+  auditType: AuditType;
+  leadAuditorId?: string;
+  notes?: string;
+  auditId?: string;            // set once the scheduled audit is created from this line
+}
+
+// الخطة السنوية للمراجعة الداخلية
+export interface AnnualPlan {
+  id: string;
+  year: number;
+  titleAr: string;
+  titleEn: string;
+  status: AnnualPlanStatus;
+  items: AnnualPlanItem[];
+  approverId: string;          // chosen by the quality manager, never hardcoded
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  submittedAt?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
+  rejectionReason?: string;
+  approverComment?: string;
+}
+
+// ===========================================
 // Helper Types
 // ===========================================
 

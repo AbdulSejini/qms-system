@@ -1,0 +1,1385 @@
+{
+  "description": "Audit checklist question bank extracted from the QA department's ISO 9001 checklists. One entry per audit area.",
+  "extractedFrom": "Saudi Cable QA department checklists (46 Word documents)",
+  "areas": [
+    {
+      "area": "Bahrain Audits",
+      "sourceFile": "Bahrain Audits.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 38,
+      "questions": [
+        "How is the “the annual+ Monthly Plan generated and been handled?",
+        "Periodic reports?",
+        "How is “Delivery Schedule” obtained and released to ensure on time due date?",
+        "How “Product Planning” handled ?",
+        "How is “Non-Conformance Reports and Reworks” handled?",
+        "Are products and services inspected before delivery or installation?",
+        "Are QC results recorded and reviewed regularly?",
+        "Is there a quality plan and sampling plan in place?",
+        "Is external calibration conducted for calibration standards?",
+        "Are calibration logs maintained and reviewed periodically?",
+        "Are purchase request procedures documented and followed?",
+        "Is there Pre-Qualification Certification from vendors?",
+        "Is there evidence of a competitive procurement process for materials and services?",
+        "Are vendor evaluations and contracts maintained for purchases?",
+        "Are any contract amendments or variations documented?",
+        "How does the company monitor and improve customer satisfaction?",
+        "Are customer complaints logged, tracked, and resolved? (Check if closed or pending)",
+        "Are warranty records for products and services maintained?",
+        "Are warranty claims processed and monitored effectively?",
+        "Is the warehouse organized and clean?",
+        "Are there designated areas for different types of inventory (e.g., materials, tools, spare parts)?",
+        "Is inventory regularly checked, updated, and tracked?",
+        "Are there regular stock audits and reconciliations?",
+        "Are inventory levels adequate for project needs?",
+        "Are any issues or breakdowns reported and resolved?",
+        "Is safety equipment available and well-maintained",
+        "Are training logs maintained for employees?",
+        "Is there evidence of external calibration for calibration standards?",
+        "Are the departments ivestegate the missed KPI, if any with root cause analysis.",
+        "Equipment List: Is there a complete list of equipment?",
+        "Preventive Maintenance (PM) Plan: Is there a documented plan for equipment maintenance?",
+        "Are maintenance work orders generated and tracked?",
+        "Is the PM plan followed consistently?",
+        "Is there a maintenance schedule for equipment used in cable jointing projects?",
+        "Are tools and equipment regularly calibrated and maintained?",
+        "Are safety protocols followed on-site, especially during installation and handling of materials?",
+        "Are safety training records available and up-to-date?",
+        "Are safety signs clearly posted and visible?"
+      ],
+      "sectionCodes": [
+        "MPB-MAIN"
+      ],
+      "departmentCodes": [
+        "MPB"
+      ]
+    },
+    {
+      "area": "Calibration",
+      "sourceFile": "Calibration.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 12,
+      "questions": [
+        "Is “Calibration Plan or Schedule for the year” available?",
+        "Are calibration certificates available?",
+        "Are calibration standards, manuals and references available?",
+        "Is there a list of standard instruments used by calibration?",
+        "How is calibration from outside institution handled?",
+        "How do you control the calibration of production instruments?",
+        "How are non-conformances status of calibrated tools & instruments handled?",
+        "Are the people handling calibration have undergone competency training?",
+        "Do you have documents from external origin? How are they handled?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to calibration activities?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "STF-TA-CALIB"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Contracting",
+      "sourceFile": "Contracting.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 15,
+      "questions": [
+        "Is Contracting Policy available?",
+        "Are Objectives and Targets for the year available/updated?",
+        "Is your Organization Chart and List of Staff or Personnel available and updated?",
+        "Are Job Descriptions for staff/personnel available?",
+        "Is “Statistical Analysis” for measurements on “Objectives & Targets” available/updated?",
+        "Do you have “Work Instructions or Procedures” available on file? Are they updated?",
+        "What is the procedure for contracting and how do you follow?",
+        "Check contracts list? Check the almost expired contracts how they renew it?",
+        "Check the contracted employee and how they handle the time sheet and salary?",
+        "Check contracts if approvals along with Limit of  authority?",
+        "How do you make a complaint on the supplier/service provider?",
+        "Is “Form Registry File” available? Are they updated?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related your area activities?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "SCM-PROC"
+      ],
+      "departmentCodes": [
+        "SCM"
+      ]
+    },
+    {
+      "area": "Customs Clearence",
+      "sourceFile": "Customs Clearence.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 9,
+      "questions": [
+        "Are work instructions available and updated?",
+        "What are the activities involved in Custom Clearance Section?",
+        "How do Custom Duty Exemption activities carried out?",
+        "How do Custom Clearance activities carried out?",
+        "How do you maintain archiving system for in-active documents?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Custom Clearance activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are Job Descriptions for staff/personnel available?"
+      ],
+      "sectionCodes": [
+        "SCM-LOG-CUSTOMS"
+      ],
+      "departmentCodes": [
+        "SCM"
+      ]
+    },
+    {
+      "area": "Design and Specification",
+      "sourceFile": "Design and Specification.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 10,
+      "questions": [
+        "How is “Customer Inquiry from Sales Dept.” handled by Technical?",
+        "How is “Product Code Creation, Bill of Materials, Constructional Specification Sheet      and Product Manufacturing Plan” generated and what are the conditions needed?",
+        "How is “Trial Run” handled and monitored during process?",
+        "For the Control of Design and Development, How do you consider the following activities?",
+        "Does Design and Development related files/documents available?",
+        "Does related specifications and design references available and updated with its latest revision\\edition?",
+        "Does updated standards are available e.g. IEC, BS…etc.",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Technology activities?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "STF-TA-DESIGN"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Dieshop",
+      "sourceFile": "Dieshop.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 13,
+      "questions": [
+        "Is there any inventory schedule for tooling -tips and dies?",
+        "Are the related inventory documents available and updated?",
+        "What are the processes involve in checking/inspection of tooling -tips and dies?",
+        "How are “tooling -tips and dies” issued to production and returned from production monitored?",
+        "How are non-conforming “tooling -tips and dies” handled?",
+        "How are “tooling -tips and dies” prepared and maintained?",
+        "Are measuring tools or instruments used in Die shop regularly calibrated/validated for use?",
+        "Are “tooling -tips and dies” properly stored for easy issuance?",
+        "How do you maintain archiving system for in-active documents?",
+        "Is “Safety Awareness” properly implemented?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Die Shop activities?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "OPS-MNT-WORKSHOP"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "ERP & HRIS Support",
+      "sourceFile": "ERP & HRIS Support.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 12,
+      "questions": [
+        "Are ERP systems (SAP, Success Factors, ADVARIS) integrated to support business processes?",
+        "Are interfaces and data flows defined and controlled?",
+        "Are SAP system issues logged, tracked, and resolved?",
+        "Can open/unresolved requests be identified and monitored ?",
+        "Are (SAP, Success Factors) errors detected and corrected?",
+        "Are access controls defined and applied?",
+        "Are security incidents logged and addressed?",
+        "How you handle the cyber-attack?",
+        "How handle troubleshooting sap system",
+        "How do you monitor your KPI’s?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are job description available for all employees?"
+      ],
+      "sectionCodes": [
+        "PS-ERP"
+      ],
+      "departmentCodes": [
+        "PS"
+      ]
+    },
+    {
+      "area": "Electrical and electronics maint",
+      "sourceFile": "Electrical and electronics maint.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 23,
+      "questions": [
+        "Is there a documented procedure for generating standard forms for maintenance notifications?",
+        "Is there a process in place to record the receiving date, receiving time, and receiver's name on the notification?",
+        "Are records of receiving maintained systematically?",
+        "Is there a documented procedure for maintenance work?",
+        "Is there a procedure for prioritizing maintenance jobs?",
+        "Is the review of the problem conducted on-site?",
+        "Is there a protocol for switching on power/off power before/After conducting maintenance work?",
+        "Is power shut down according to safety regulations and procedures?",
+        "Is there a checklist for carrying necessary tools and equipment to the site?",
+        "Are tools and equipment maintained and calibrated regularly?",
+        "Is there a documented process for carrying out maintenance work?",
+        "Are drawings and technical documentation referenced as necessary during maintenance?",
+        "Are all values checked after power restoration?",
+        "Is there a checklist to ensure all safety measures are adhered to?",
+        "Is there a procedure for cleaning up the work area after maintenance?",
+        "Is there a process for obtaining the operator's signature on the notification form after completion of work?",
+        "Are completed notifications filed appropriately?",
+        "Is there a documented process for handling non-conformances?",
+        "Is there a plan for expecting Heavy rain that clearly define responsibilities and assigned tasks?",
+        "Are procedures followed when maintenance work is not satisfactory?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Scrap activities?",
+        "Are job description available?"
+      ],
+      "sectionCodes": [
+        "OPS-MNT-ELEC"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "It",
+      "sourceFile": "IT.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 9,
+      "questions": [
+        "Are work instructions available and updated?",
+        "Are IT resources (hardware, software, infrastructure) are sufficient and maintained?",
+        "Are all server working perfectly? How do you monitor them?",
+        "How IT handling Helpdesk requests?",
+        "What is the process for disposing ‘out of service’ IT assets?",
+        "How does It department track and manage assets assigned to employees (i.e. printers, laptops and IP phones...etc.)?",
+        "How do you monitor your KPI’s?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are job description available for all employees?"
+      ],
+      "sectionCodes": [
+        "PS-IT"
+      ],
+      "departmentCodes": [
+        "PS"
+      ]
+    },
+    {
+      "area": "Internal Audit Questions (HSE) ISO 45001 2018",
+      "sourceFile": "Internal Audit Questions (HSE) ISO 45001 2018.docx",
+      "standard": "ISO 45001:2018",
+      "questionCount": 15,
+      "questions": [
+        "Is a Toolbox Talk conducted and documented monthly?",
+        "Are attendance records complete (names, signatures, date)?",
+        "Are the TBT topics relevant to actual workplace hazards?",
+        "Are risk assessments available for all department employees?",
+        "Is weekly cleaning inspection conducted as per schedule?",
+        "Are ladders inspected regularly and before use?",
+        "Are damaged or unsafe ladders clearly tagged and removed from service?",
+        "Is the ISO 45001 file reviewed by management?",
+        "Are first aid boxes available at required locations? Are they recorded?",
+        "Do all forklift drivers complete daily inspection checklists?",
+        "Are forklift checklists signed and dated?",
+        "Are welding machines inspected periodically?",
+        "Is appropriate PPE available and used?",
+        "Are machines inspected and maintained regularly? (Copy of machine maintenance)",
+        "Are emergency stop functions operational?"
+      ],
+      "sectionCodes": [
+        "OPS-MNT-HSE"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Lagging",
+      "sourceFile": "Lagging.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 29,
+      "questions": [
+        "What are the activities involved in Transfer and lagging?",
+        "How material handling is carried out?",
+        "What are pre Shipment activities and how do you handle?",
+        "How Shipment Process is carried out?",
+        "Is each reel affixed with an \"Inspected OK\" tag upon release?",
+        "Are reel transfers arranged in accordance with guidelines?",
+        "Is any damage or problem noticed reported to QC immediately?",
+        "Are materials held back if issues are identified until resolved by QC?",
+        "Are transfer operations initiated for MV and HV cables based on email requests from the planning department?",
+        "Is the length of the cable verified against relevant documents (WIP tags, QC tags, or SAP Data)?",
+        "If material length is approved, is it transferred according to instructions, or if not approved, returned to Production awaiting management decision?",
+        "Does the Data Processing Operator/Transfer Coordinator generate a Transfer Report through SAP Transfer module (ZPPR_ZSTR)?",
+        "Is the Transfer Report sent by email to staff planning, Production (LV, MV/HV & TCP), Sales, Q.A., Management, and concerned parties upon request?",
+        "Are shipping tags printed and fixed on the reel after crosschecking against the aluminum tag number plate and QC checked OK tag?",
+        "Are shipping tags classified as per instructions?",
+        "Is transportation done in accordance with packaging requirements?",
+        "Are any reels returned to production through FGI upon receiving requests from customer services/shipping for X-Work order or defective/NCR cable?",
+        "Are all laggers wearing prescribed clothing and safety shoes while working in the lagging area?",
+        "Are fire extinguishers readily available in the area?",
+        "Is the workplace consistently kept clean, and are equipment and tools maintained in good condition?",
+        "Are tools stored in their designated places after use?",
+        "Have all Medium and High Voltage materials been appropriately lagged before shipment?",
+        "For LV cables, have inspected OK tags been marked with Letter “F,” “N,” or “P” to indicate the type of packing?",
+        "When checking shipping reels:",
+        "Is the reel quality physically inspected for damages, painted, and free from nails or bends that could damage the cable?",
+        "Are any observations or damages reported immediately to the Leader of Lagging?",
+        "Are cable ends properly capped with end seals?",
+        "Is the cable free from any damage caused by forklift movement during reel transportation?",
+        "Are all necessary tools available for the lagging process?"
+      ],
+      "sectionCodes": [
+        "OPS-PROD-LAGGING"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Maintenance",
+      "sourceFile": "MAINTENANCE.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 15,
+      "questions": [
+        "Is “Preventive Maintenance Plan” for this year available?",
+        "Is “Monthly Preventive Maintenance Schedule” available and updated?",
+        "Are machine breakdown reports and updated status available?",
+        "Do you have an overhauling plan?",
+        "How is “Jobs by Outside Contractor” handled?",
+        "How is spare parts obtained and controlled?",
+        "Are measuring tools or instruments used by Maintenance regularly calibrated?",
+        "What are the procedures involve in the in-house fabrication of parts and how to handle it?",
+        "What are the procedures involve in “Job Order” handling.",
+        "How are forklifts maintained and repaired?",
+        "Is “Safety Awareness” properly implemented?",
+        "How do you maintain archiving system for in-active documents?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Maintenance activities?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "OPS-MNT-PREV"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Marketing",
+      "sourceFile": "MARKETING Checklist.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 10,
+      "questions": [
+        "Are work instructions available and updated?",
+        "Is “Company’s Marketing and Sales Plan” available? How it is handled?",
+        "How does Marketing provide support activities to Sales?",
+        "How is “Customer Feedback” handled?",
+        "How is Customer Qualification handled?",
+        "How is “Annual Report” handled?",
+        "How is “Event Report” handled?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Marketing activities?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "SM-MKT"
+      ],
+      "departmentCodes": [
+        "SM"
+      ]
+    },
+    {
+      "area": "Mass Projects Bahrain",
+      "sourceFile": "MASS PROJECTS BAHRAIN.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 39,
+      "questions": [
+        "How is Tender Review and Preparation handled?",
+        "How is Post Bid Processing handled?",
+        "How is Pre-Qualification Documents reviewed and evaluated?",
+        "Is Project Quality Plan available?",
+        "Is planning and scheduling available?",
+        "Is Kick off Meeting done?",
+        "How are Project Activities monitored?",
+        "How is Material and Services Handling implemented?",
+        "Is a List of Special Processes available?",
+        "Is Site Visit Report available?",
+        "How is the Technical Approval handled?",
+        "How is Customer/Clients and Vendors Feedback handled?",
+        "Are criteria’s for Contract Closeout and Customer Satisfaction meet?",
+        "Are Site Test Reports available on file?",
+        "What activities are involve in the Material Requisition Process?",
+        "How is Procurement Processes handled?",
+        "Are “Vendor, Sub-contractor/Design Office Evaluation” available on file?",
+        "Is list for Approved Design Offices available?",
+        "Is list for Approved Vendors available?",
+        "Is Vendor Assessment Report available on file?",
+        "Is Organization Chart (On Site) and List of Personnel/Staff available?",
+        "Is Construction Schedule, Progress Report and Schedule of Activities available and updated on site?",
+        "Are files/documents archiving properly maintained?",
+        "Is housekeeping properly implemented in the area?",
+        "Is material storage capacity enough and secure?",
+        "Is “Safety” awareness properly implemented?",
+        "Are “SAFETY” signs and warnings available on site?",
+        "Are “Site Identifications” available?",
+        "How are Change Order/Amendments/Modification of projects handled?",
+        "How are Repair / Rework of projects handled?",
+        "How is Servicing during Maintenance Period/Warranty handled?",
+        "How is Jointing, Termination, Testing and Commissioning handled?",
+        "What Procedures and Test Methods used by Field Support?",
+        "How is Inspection and Testing handled?",
+        "How are ’s and Customer/Client/Vendors complaints handled?",
+        "How are Site Safety Awareness implemented and handled?",
+        "Are there Safety – accident reports available on file?",
+        "Is there any monitoring of Safety Practices Implementation on site?",
+        "Are Safety signs and warnings available on the construction site?"
+      ],
+      "sectionCodes": [
+        "MPB-MAIN"
+      ],
+      "departmentCodes": [
+        "MPB"
+      ]
+    },
+    {
+      "area": "Management Audit",
+      "sourceFile": "Management Audit.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 13,
+      "questions": [
+        "Are the Scope and the internal & external issue(challenges) identified and updated?",
+        "Is there a quality Manual (policy) in place? Is it aligned with the defined scope?",
+        "What kind of report should reports to The board? And how often you do these reports?",
+        "What kind of decisions require board approval?",
+        "Is there a newly hired Head of Department, and has the Board of Directors approved it?",
+        "How do you Measure customer satisfaction?",
+        "How you handle Customer Complaint?",
+        "Is there any internal investigation ran in 2025? What is the procedure?",
+        "Is there any internal complaint? What is your role on this process?",
+        "How does management handle findings from external audits?",
+        "Which certifications or authorizations are required for the company’s operations?",
+        "Is management actively involved in obtaining and maintaining these certifications (e.g., ISO 9001, ISO 45001, SASO, MODON in Saudi Arabia)?",
+        "Who is responsible for ensuring ongoing compliance and audits for each certification?"
+      ],
+      "sectionCodes": [
+        "STF-QA-QMS"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Mechanical Maintenance & Workshops",
+      "sourceFile": "Mechanical Maintenance & Workshops.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 34,
+      "questions": [
+        "What are activities involve in mechanical maintenance",
+        "how many notification on standard forms generated by the User Department or Leader appropriately documented and maintained?",
+        "Are receiving date, time of receipt, and received by details entered on the notification upon receipt?",
+        "Are tools and required equipment carried to the site as per the maintenance requirements are calibrated ?",
+        "show any example the Notification Form completed, including obtaining the signature of the Operator with time of completion and remarks (O.K. / Not O.K.)?",
+        "If the work is not satisfactory (Not OK), is the process followed as per Work Instruction provided?",
+        "Are Work Instructions followed up to the specified steps (Para 8, Page 1 of 2) if the maintenance is not satisfactory?",
+        "If the maintenance is satisfactory (OK), are Work Instructions 10 & 11 followed?",
+        "If the work is not completed, is it handed over to the next shift/General shift with a detailed description of the problem?",
+        "Is “SAFETY AWARENESS” properly implemented in the area?",
+        "How do you monitor your KPI’s?",
+        "How do you handle “Risk and Opportunities Management”",
+        "Are job description available?",
+        "Is “Preventive Maintenance Plan” for this year available?",
+        "Are machine breakdown reports and updated status available?",
+        "Do you have an overhauling plan?",
+        "How is “Jobs by Outside Contractor” handled?",
+        "How is spare parts obtained and controlled?",
+        "Are measuring tools or instruments used by Maintenance regularly calibrated?",
+        "What are the procedures involve in the in-house fabrication of parts and how to handle it?",
+        "What are the procedures involve in “Job Order” handling.",
+        "Is there any inventory schedule for tooling -tips and dies?",
+        "Are the related inventory documents available and updated?",
+        "What are the processes involve in checking/inspection of tooling -tips and dies?",
+        "How are “tooling -tips and dies” issued to production and returned from production monitored?",
+        "How are non-conforming “tooling -tips and dies” handled?",
+        "How are “tooling -tips and dies” prepared and maintained?",
+        "Are measuring tools or instruments used in Die shop regularly calibrated/validated for use?",
+        "Are “tooling -tips and dies” properly stored for easy issuance?",
+        "How do you maintain archiving system for in-active documents?",
+        "How are forklifts maintained and repaired?",
+        "Is “Preventive Maintenance Schedule” available and updated for forklifts?",
+        "Is there a list of available forklifts ?is it updated?",
+        "How do you maintain stock for spare parts?"
+      ],
+      "sectionCodes": [
+        "OPS-MNT-MECH"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Pvc Qc",
+      "sourceFile": "PVC QC.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 11,
+      "questions": [
+        "What are the activities involved?",
+        "Do you have a Quality Plan?",
+        "Do you have a Sampling Plan?",
+        "Do you have supplier test certificate of raw material?",
+        "Are the instruments has been properly maintained, calibrated and calibration still valid?",
+        "Is “SAFETY AWARENESS” implemented in the area?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to PVC Plant activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "How do you maintain archiving system for in-active documents?",
+        "Do you have approved Organization chart?"
+      ],
+      "sectionCodes": [
+        "STF-TA-PVCQC"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Performance Management",
+      "sourceFile": "Performance Management.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 9,
+      "questions": [
+        "Are work instructions available and updated?",
+        "Do you have any Appraisal forms?",
+        "Do you maintain database for Performance Aprraisal?",
+        "Do you receive all performance appraisals from all departments within the stipulated time?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related PM.",
+        "How do you handle “Risk and Opportunities Management”.",
+        "How do you maintain archiving system for in-active documents?",
+        "Are Job Descriptions for staff/personnel available?"
+      ],
+      "sectionCodes": [
+        "STF-QA-PERF"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Process Engineering",
+      "sourceFile": "Process Engineering.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 13,
+      "questions": [
+        "How is process input and output reported?",
+        "Is “Machine Job Sequence/Schedule” available?",
+        "Is “Process Engineering Specification” available?",
+        "Are “Process Run Sheets” for Drawing and Stranding available?",
+        "Is “Machine Capabilities” available and updated?",
+        "What is your role during and after installing new (telecable) machines??is there work instruction for this process?",
+        "Are “Training Certificates” available?",
+        "Are machine operators competent in handling measuring instruments?",
+        "How do you conduct a Trial runs?",
+        "How are “Non-Conformances” reports from production handled?",
+        "Are machines used for production properly maintained?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Production activities?"
+      ],
+      "sectionCodes": [
+        "STF-TA-PROCENG"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Procurement & Contracts",
+      "sourceFile": "Procurement & Contracts.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 18,
+      "questions": [
+        "How Scarp  handling from procurement side ?",
+        "Do you have alist of active contracts?",
+        "How bidding committee done?",
+        "How are Suppliers selected and approved?",
+        "Is “Vendor or Approved Suppliers List” available and updated?",
+        "Do you have a list of suppliers which are ISO certified?",
+        "Does Suppliers undergone Quality System Audits?",
+        "How are supplier’s performance evaluated and what are the conditions considered?",
+        "Do you have the statistical analysis of purchase orders made against non-compliance orders?",
+        "How are purchasing of materials, supplies and parts handled?",
+        "Does the regulatory and statutory requirement of materials properly implemented?",
+        "How is contracting been handled?",
+        "Check avl. of 2 forms for each contract: 151-FRM-CEA-REV00 &151-FRM-CAS-000",
+        "How do you maintain archiving system for in-active documents?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Purchasing activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are Job Descriptions for staff/personnel available?"
+      ],
+      "sectionCodes": [
+        "SCM-PROC"
+      ],
+      "departmentCodes": [
+        "SCM"
+      ]
+    },
+    {
+      "area": "Production DRSTR",
+      "sourceFile": "Production DRSTR.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 24,
+      "questions": [
+        "How is production input and output reported?",
+        "Is “Machine Job Sequence/Schedule” available?",
+        "Is “Production Shift Schedule” available?",
+        "Is there a list of production staff with corresponding category?",
+        "If operator is absent, how is reliever or replacement selected as operator?",
+        "Is “Machine Operating Manual” available on the machine?",
+        "Is “Machine Safety Check List and prestart check list available with machine”?",
+        "Are below work instructions available with machine operators/Machine whwrever applicable,",
+        "Is “Production Work Order” available?",
+        "Is “Machine Utilization Report” available?",
+        "Are “Training Certificates” available?",
+        "Are measuring instruments used during productions calibrated and still valid?",
+        "Are machine operators competent in handling measuring instruments?",
+        "Are machine operators aware of proper Safety and Housekeeping?",
+        "How is cable traceability from “Rewinding and Repair of Cables” maintained?",
+        "How is cable production traceability maintained?",
+        "How are “Non-Conformances” reports from production handled?",
+        "Is machine operator aware of QC testing?",
+        "Are machines used for production properly maintained?",
+        "How do you maintain archiving system for in-active documents?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Production activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are “Job Discription” available?"
+      ],
+      "sectionCodes": [
+        "OPS-PROD-DRSTR"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Production LV",
+      "sourceFile": "Production LV.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 22,
+      "questions": [
+        "How is production input and output reported?",
+        "Is “Machine Job Sequence/Schedule” available?",
+        "Is “Production Shift Schedule” available?",
+        "Is there a list of production staff with corresponding category?",
+        "If operator is absent, how is reliever or replacement selected as operator?",
+        "Is “Machine Operating Manual” available on the machine?",
+        "Is “Production Work Order” available?",
+        "Is “Machine Utilization Report” available?",
+        "Are “Training Certificates” available?",
+        "Are measuring instruments used during productions calibrated and still valid?",
+        "Are machine operators competent in handling measuring instruments?",
+        "Are machine operators aware of proper Safety and Housekeeping?",
+        "How is cable traceability from “Rewinding and Repair of Cables” maintained?",
+        "How is cable production traceability maintained?",
+        "How are “Non-Conformances” reports from production handled?",
+        "Is machine operator aware of QC testing?",
+        "Are machines used for production properly maintained?",
+        "How do you maintain archiving system for in-active documents?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Production activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are “Job Discription” available?"
+      ],
+      "sectionCodes": [
+        "OPS-PROD-LV"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Production MVHV",
+      "sourceFile": "Production MVHV.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 22,
+      "questions": [
+        "How is production input and output reported?",
+        "Is “Machine Job Sequence/Schedule” available?",
+        "Is “Production Shift Schedule” available?",
+        "Is there a list of production staff with corresponding category?",
+        "If operator is absent, how is reliever or replacement selected as operator?",
+        "Is “Machine Operating Manual” available on the machine?",
+        "Is “Production Work Order” available?",
+        "Is “Machine Utilization Report” available?",
+        "Are “Training Certificates” available?",
+        "Are measuring instruments used during productions calibrated and still valid?",
+        "Are machine operators competent in handling measuring instruments?",
+        "Are machine operators aware of proper Safety and Housekeeping?",
+        "How is cable traceability from “Rewinding and Repair of Cables” maintained?",
+        "How is cable production traceability maintained?",
+        "How are “Non-Conformances” reports from production handled?",
+        "Is machine operator aware of QC testing?",
+        "Are machines used for production properly maintained?",
+        "How do you maintain archiving system for in-active documents?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Production activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are “Job Discription” available?"
+      ],
+      "sectionCodes": [
+        "OPS-PROD-MVHV"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Production PVC",
+      "sourceFile": "Production PVC.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 10,
+      "questions": [
+        "How is the production of PVC Plant initiated?",
+        "What are the activities involved?",
+        "Do you have a Quality Plan?",
+        "Do you have the copies of the following reference documents?",
+        "Are the instruments used for the process has been properly maintained, calibrated and calibration still valid?",
+        "Is “SAFETY AWARENESS” implemented in the area?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to PVC Plant activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are Job description available"
+      ],
+      "sectionCodes": [
+        "OPS-PROD-PVC"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Quality Control Incoming Material",
+      "sourceFile": "QUALITY CONTROL INCOMING MATERIAL.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 14,
+      "questions": [
+        "Is “Quality Plan” available and updated?",
+        "Is “Sampling Plan” available and updated?",
+        "Are measuring instruments available and calibrated?",
+        "Are “Test Method Specifications” available?",
+        "Are Supplier certificates available?",
+        "How is Incoming Material Inspection and Testing handled?",
+        "How are inspected and tested Incoming Material released from Quality Control?",
+        "Are test data and reports available?",
+        "How do you maintain archiving system for in-active documents?",
+        "Is “SAFETY Awareness” and housekeeping properly implemented?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Quality Control activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are “Job Discription” available?"
+      ],
+      "sectionCodes": [
+        "STF-TA-INCOMING"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Quality Control Lv Test Cage",
+      "sourceFile": "QUALITY CONTROL LV TEST CAGE.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 14,
+      "questions": [
+        "Is “Quality Plan” available and updated?",
+        "Is “Sampling Plan” available and updated?",
+        "Are measuring instruments available and calibrated?",
+        "Are “Test Method Specifications” available?",
+        "How are Final Inspection and Testing Handled?",
+        "Are the needed Work Instructions, Specifications, Standards, Manuals and",
+        "other References available?",
+        "How are inspected and tested cables released from Quality Control?",
+        "Are test data and reports available?",
+        "Is “SAFETY Awareness” and housekeeping properly implemented?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Quality Control activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are “Job Discription” available?"
+      ],
+      "sectionCodes": [
+        "STF-TA-LVCAGE"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Quality Control Mvhv Test Cage",
+      "sourceFile": "QUALITY CONTROL MVHV TEST CAGE.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 13,
+      "questions": [
+        "Is “Quality Plan” available and updated?",
+        "Is “Sampling Plan” available and updated?",
+        "Are measuring instruments available and calibrated?",
+        "Are “Test Method Specifications” available?",
+        "How are Final Inspection and Testing Handled?",
+        "Are the needed Work Instructions, Specifications, Standards, Manuals and",
+        "other References available?",
+        "How are inspected and tested cables released from Quality Control?",
+        "Are test data and reports available?",
+        "Is “SAFETY Awareness” and housekeeping properly implemented?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Quality Control activities?",
+        "Are “Job Discription” available?"
+      ],
+      "sectionCodes": [
+        "STF-TA-MVHVCAGE"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "QUALITY CONTROL NON Electrical LAB",
+      "sourceFile": "QUALITY CONTROL NON Electrical LAB.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 14,
+      "questions": [
+        "Is “Quality Plan” available and updated?",
+        "Is “Sampling Plan” available and updated?",
+        "Are measuring instruments available and calibrated?",
+        "Are “Test Method Specifications” available?",
+        "How is In-Process Inspection and Testing handled?",
+        "How are Final Inspection and Testing Handled?",
+        "Are the needed Work Instructions, Specifications, Standards, Manuals and",
+        "other References available?",
+        "How are inspected and tested cables released from Quality Control?",
+        "Are test data and reports available?",
+        "How do you maintain archiving system for in-active documents?",
+        "Is “SAFETY Awareness” and housekeeping properly implemented?",
+        "How do you monitor your KPI’s?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "STF-TA-LAB"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Reel Plants",
+      "sourceFile": "REEL PLANTS.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 20,
+      "questions": [
+        "How is the production of reels initiated?",
+        "What are the activities involved in REEL Plant?",
+        "Do you have a Quality Plan?",
+        "Do you use REELS INSPECTION Form 134-FRM-RI-Rev.5? Are production and QC signing on this form?",
+        "Do you have the copies of the following reference documents?",
+        "Are the instruments used for the process of reels has been calibrated and calibration still valid?",
+        "Is “SAFETY AWARENESS” implemented in the area?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Reel Plant activities?",
+        "Are “Job Discription” available?",
+        "Are work instructions available and updated?",
+        "What are the activities involved in REEL RECOVERY?",
+        "What are the guidelines in accepting recovered and un-furbished reels?",
+        "Are records of recovered reels available on file?",
+        "Are the instruments used for the process of reel recovery has been calibrated?",
+        "How do you handle reels request from PCP and TCP?",
+        "How are your raw materials accepted?",
+        "Is “SAFETY Awareness” and housekeeping properly implemented?",
+        "Do you have any defined “Risk” related to Reel Recovery activities?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "OPS-PROD-REEL"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Reelrecovery",
+      "sourceFile": "REELRECOVERY.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 13,
+      "questions": [
+        "Are work instructions available and updated?",
+        "What are the activities involved in REEL RECOVERY?",
+        "Do you have a Quality Plan?",
+        "What are the guidelines in accepting recovered and un-furbished reels?",
+        "Are records of recovered reels available on file?",
+        "Are the instruments used for the process of reel recovery has been calibrated?",
+        "How do you handle reels request from PCP and TCP?",
+        "How are your raw materials accepted?",
+        "Is “SAFETY Awareness” and housekeeping properly implemented?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Reel Recovery activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are “Job Discription” available?"
+      ],
+      "sectionCodes": [
+        "OPS-PROD-REEL"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Recruitment",
+      "sourceFile": "Recruitment.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 15,
+      "questions": [
+        "Are Request for Manpower Recruitment (RMR) forms available and filled out appropriately?",
+        "Is there evidence of review against approved manpower budget and position requirements?",
+        "Are job descriptions available for new positions?",
+        "Is there documentation regarding the evaluation and approval process for new positions?",
+        "Is there evidence of sourcing candidates internally and externally?",
+        "Is there documentation of the testing process for technical positions?",
+        "Are successful candidates for technical positions interviewed by both the Recruiting Section and the requesting department?",
+        "Is there documented approval from Management for the compensation package offered to candidates?",
+        "Are compensation packages offered in accordance with SCC standard grade and salary structure?",
+        "Is there evidence of contracts being provided through the GOSI portal?",
+        "Are newly hired employees referred to the Training Department for orientation?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to HR activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are job description available for Staff/ personnel?"
+      ],
+      "sectionCodes": [
+        "HR-REC"
+      ],
+      "departmentCodes": [
+        "HR"
+      ]
+    },
+    {
+      "area": "Risk Managements",
+      "sourceFile": "Risk Managements.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 12,
+      "questions": [
+        "  Is there a documented method to identify, evaluate, treat, and review risks and opportunities?",
+        "  Are risks determined for each SCC Departments/process (not only a general list)?",
+        "  Is there a defined risk criteria (likelihood/impact scale, scoring method)?",
+        "  Are risk owners assigned with responsibilities, action plans, due dates, and status tracking?",
+        "  Are treatment/mitigation actions implemented, and is effectiveness evaluated?",
+        "  Are risks/opportunities reviewed during planned intervals and when changes occur (process, system, resources, suppliers, customer requirements)?",
+        "  How do you monitor your KPI’s?",
+        "  Do you have any defined “Risk” related to your activities?",
+        "   Are job description available for Staff/ personnel?",
+        "Is there evidence of risk review frequency (e.g., quarterly) and updates when changes occur?",
+        "Are opportunities captured as well (improvements, automation, succession planning, etc.)? Is there a defined competence framework for each role (skills/qualification/experience)?",
+        "Are training needs identified from risks, KPIs, incidents, changes, or audits?"
+      ],
+      "sectionCodes": [
+        "GRC-RISK"
+      ],
+      "departmentCodes": [
+        "GRC"
+      ]
+    },
+    {
+      "area": "Sales",
+      "sourceFile": "SALES.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 11,
+      "questions": [
+        "Are Sales work instruction documentations available and updated?",
+        "How are Customer Inquiries reviewed and handled?",
+        "What are the activities involve in the following;",
+        "Handling of Distributors and Souk Items?",
+        "Inquiry Handling for International Sales?",
+        "Inquiry and Order Handling for Metals & Plastics?",
+        "How are penalties reviewed and handled ?",
+        "Are inquiry files and documents for reviewed available?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Sales activities?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "SM-SALES"
+      ],
+      "departmentCodes": [
+        "SM"
+      ]
+    },
+    {
+      "area": "Safety",
+      "sourceFile": "Safety.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 18,
+      "questions": [
+        "Is “Safety Training” done or scheduled? When and Where?",
+        "Is “Safety Inspection” performed regularly and are reports available with corrective actions?",
+        "Is accident report from “SAFETY” available?",
+        "Are safety equipment and devices in good working conditions?",
+        "How is “Safety Awareness” implemented in the company?",
+        "Is there a safety violations reports on file?",
+        "What are the conditions for “Industrial Safety & Hygiene”? Is it implemented?",
+        "What Procedures or Work Instructions exist for SAFETY?",
+        "Is there a report of accidents/incidents for this year?",
+        "Is there inventory for PPE/ fire protection equipment?",
+        "How do you maintain and arrange the safety of visitors? How about contractors ?",
+        "How do you handle safety for workers on projects and sub-contractors?",
+        "IS ISO 45001 Certificate is valid? And mounted in safety offices?",
+        "Is Material safety data sheet maintained (MSDS) and updated?",
+        "How do you monitor your KPI’s?",
+        "How do you maintain archiving system for ISO 45001 documents?",
+        "Do you have any defined “Risk” related to Safety activities?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "STF-TA-SAFETY"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Sales Support",
+      "sourceFile": "Sales Support.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 17,
+      "questions": [
+        "Are work instructions available and updated?",
+        "How is quotations reviewed and handled?",
+        "For Statutory and Regulatory requirements, how is it handled?",
+        "How are “Sales Order” handled?",
+        "What are the activities involved in the Sales Order expediting processes?",
+        "How is “Change Sales Order” handled?",
+        "Are records of details of the metal booked for cancelled orders available?",
+        "How is the “Customer Inspection” handled?",
+        "How is “Customer Complaints” handled?",
+        "Show me the cost of complaints with evidence?",
+        "How is “Product Recall” handled?",
+        "How do “Order or Contract Closed-Out” considered as completed?",
+        "How is “Penalized Orders” handled?",
+        "How are “Shipping Release Activities” handled?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Sales Support activities?",
+        "Are Job Descriptions for staff/personnel available?"
+      ],
+      "sectionCodes": [
+        "SM-SALES-SUP"
+      ],
+      "departmentCodes": [
+        "SM"
+      ]
+    },
+    {
+      "area": "Scrap",
+      "sourceFile": "Scrap.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 10,
+      "questions": [
+        "Are work instructions available and updated?",
+        "Are the instruments used for weighing scrap materials regularly checked and calibrated?",
+        "How is scrap receiving and disposal handled?",
+        "How is non-recycled materials disposed and handled?",
+        "Is scrap reports available?",
+        "Is “SAFETY AWARENESS” properly implemented in the area?",
+        "Are machines used for scraping process properly maintained?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Scrap activities?",
+        "How do you handle “Risk and Opportunities Management”."
+      ],
+      "sectionCodes": [
+        "SCM-LOG-SCRAP"
+      ],
+      "departmentCodes": [
+        "SCM"
+      ]
+    },
+    {
+      "area": "Security",
+      "sourceFile": "Security.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 10,
+      "questions": [
+        "Are work instructions available and updated?",
+        "How effective the Security surveillance is?",
+        "Are security cameras in good working conditions?",
+        "How do you control the movements of materials coming in and out of the company premises?",
+        "How do you maintain and arrange the security of visitors? How about employees?",
+        "How do you arrange the security of project installation activities done inside the company?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Security activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are Job Descriptions for staff/personnel available?"
+      ],
+      "sectionCodes": [
+        "HR-SEC"
+      ],
+      "departmentCodes": [
+        "HR"
+      ]
+    },
+    {
+      "area": "Shipping Receiving and transfer",
+      "sourceFile": "Shipping Receiving and transfer.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 16,
+      "questions": [
+        "How material handling is carried out?",
+        "What are pre Shipment activities and how do you handle?",
+        "How Shipment Process is carried out?",
+        "Are lagging safety checklist available?",
+        "Are Pre-start Checklist Available?",
+        "Are FINAL CHECK LIST FOR HV SHIPPING REELS Form (153-FRM-CLSR-REV02) used ?",
+        "If there a deviation on Lagging material (between required and actual-i.e required full lagging and actual using wrapping plastic), is there any formal approvals? Emails?",
+        "Are Objectives and Targets for the year available/updated?",
+        "Is your Organization Chart and List of Staff or Personnel available and updated?",
+        "Are Job Descriptions for staff/personnel available?",
+        "Are files/documents archiving properly maintained?",
+        "Do you have “Work Instructions or Procedures” available on file? Are they updated?",
+        "Is housekeeping properly implemented in the area?",
+        "How do you monitor your KPI’s?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "How Pulling eye/ end cap Process is carried out?"
+      ],
+      "sectionCodes": [
+        "SCM-LOG-SHIP"
+      ],
+      "departmentCodes": [
+        "SCM"
+      ]
+    },
+    {
+      "area": "Strategic Initiatives & PMO",
+      "sourceFile": "Strategic Initiatives & PMO.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 9,
+      "questions": [
+        "are all your activities documented (Work instructions)?",
+        "Has policy and procedures for your department been approved?",
+        "Do you have initiatives reporting material?",
+        "Is there a tracking system for each initiatives?",
+        "Do you have evaluation reports done for the closed intiateves?",
+        "Are there any reports showing cost-saving or performance-enhancing solutions that have been developed?How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to your activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are Job Descriptions for staff/personnel available?"
+      ],
+      "sectionCodes": [
+        "STF-BD"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Technical data",
+      "sourceFile": "Technical data.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 9,
+      "questions": [
+        "How is “Product Code Creation, Bill of Materials, Constructional Specification Sheet      and Product Manufacturing Plan” generated and what are the conditions needed?",
+        "Does Technical data management related files/documents available?",
+        "Does updated organization chart is available?",
+        "Does related specifications and design references available and updated with its latest revision\\edition?",
+        "Does updated standards are available e.g. IEC, BS…etc.",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Technical Data management activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are Job description available?"
+      ],
+      "sectionCodes": [
+        "PS-TECHDATA"
+      ],
+      "departmentCodes": [
+        "PS"
+      ]
+    },
+    {
+      "area": "Training and Development",
+      "sourceFile": "Training and Development.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 21,
+      "questions": [
+        "Are work instructions available and updated?",
+        "Do you have an Orientation Training Registration File?",
+        "How do you define the topics for the Orientation Training?",
+        "How is Induction Program conducted?",
+        "How do you define the topics for the Induction Program?",
+        "How do you arrange the Induction Program scheduled in a certain department?",
+        "Do you conduct Induction Training assessment? How is it done and documented?",
+        "Is “Summer Training” Conducted? How is it arranged and documented?",
+        "How is “Staff Development Training” done? Are records available?",
+        "Does Quality related training for staff development takes approval from QA?",
+        "Are records for training request or needs available?",
+        "How is “Annual Training Plan” prepared?",
+        "How do you define the training resources?",
+        "Do you have registration records of trainees?",
+        "How is the assessment or evaluation of training made?",
+        "How do you conduct an “On-Job Training”?",
+        "Are records for “On-Job Training” available?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Training activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are job description available for all employees?"
+      ],
+      "sectionCodes": [
+        "HR-TRN"
+      ],
+      "departmentCodes": [
+        "HR"
+      ]
+    },
+    {
+      "area": "Facility Support And Proj",
+      "sourceFile": "facility support and proj checklist.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 14,
+      "questions": [
+        "Are SAP notifications received from requestors promptly?",
+        "Is Form 166-FRM-FSRQ-001 filled out accurately and completely for each transfer or creation of office space?",
+        "Are purchase requisitions for required parts appropriately approved and followed up until parts are obtained?",
+        "Is there a process in place for estimating material costs and adding them to the requestor's cost center?",
+        "Is the SAP notification closed promptly after work completion, with email notification sent to the requestor?",
+        "Are these records easily accessible for reference and traceability?",
+        "Are all required forms (e.g., for transfer, creation, or renewal of office space) signed as necessary?",
+        "Is there evidence of compliance with signature requirements for forms related to office management processes?",
+        "Are inventory forms (e.g., 166-FRM-FSINV-001) accurately completed, including any personal materials highlighted?",
+        "Is the Discharge Inventory form (166-FRM-FSDIN/V-001) used appropriately upon resignation or termination of personnel?",
+        "Are any deviations or non-conformities properly documented and addressed through corrective actions?",
+        "How do you monitor your KPI’s?",
+        "Are job description for staff available?",
+        "Do you have “Risk Register” related to your activities?"
+      ],
+      "sectionCodes": [
+        "OPS-MNT-FACILITY"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "low voltage Production",
+      "sourceFile": "low voltage Production.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 24,
+      "questions": [
+        "How is production input and output reported?",
+        "Is “Machine Job Sequence/Schedule” available?",
+        "Is “Production Shift Schedule” available?",
+        "Is there a list of production staff with corresponding category?",
+        "If operator is absent, how is reliever or replacement selected as operator?",
+        "Is “Machine Operating Manual” available on the machine?",
+        "Is “Machine Safety Check List and prestart check list available with machine”?",
+        "Are below work instructions available with machine operators/Machine whwrever applicable,",
+        "Is “Production Work Order” available?",
+        "Is “Machine Utilization Report” available?",
+        "Are “Training Certificates” available?",
+        "Are measuring instruments used during productions calibrated and still valid?",
+        "Are machine operators competent in handling measuring instruments?",
+        "Are machine operators aware of proper Safety and Housekeeping?",
+        "How is cable traceability from “Rewinding and Repair of Cables” maintained?",
+        "How is cable production traceability maintained?",
+        "How are “Non-Conformances” reports from production handled?",
+        "Is machine operator aware of QC testing?",
+        "Are machines used for production properly maintained?",
+        "How do you maintain archiving system for in-active documents?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Production activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are “Job Discription” available?"
+      ],
+      "sectionCodes": [
+        "OPS-PROD-LV"
+      ],
+      "departmentCodes": [
+        "OPS"
+      ]
+    },
+    {
+      "area": "Planning",
+      "sourceFile": "planning.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 13,
+      "questions": [
+        "How is the “Manufacturing Program/Plan generated and what are the conditions",
+        "How is “Delivery Schedule” obtained and released to ensure on time due date?",
+        "How “Material Planning” handled and what is are the conditions involved?",
+        "How is “Production Scheduling or Planning” handled and monitored?",
+        "How is “Production Work Order” generated and handled?",
+        "How is “Non-Conformance Reports and Reworks” handled?",
+        "How is “X-Work Order” handled?",
+        "How is “Trial Work Orders” handled?",
+        "Are work instructions available and updated?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Planning and Scheduling activities?",
+        "What are the activities involved in Transfer and lagging?",
+        "Are Pre-start Checklist Available?"
+      ],
+      "sectionCodes": [
+        "SCM-PLANNING"
+      ],
+      "departmentCodes": [
+        "SCM"
+      ]
+    },
+    {
+      "area": "research and Development",
+      "sourceFile": "research and Development.docx",
+      "standard": "ISO 9001:2015",
+      "questionCount": 6,
+      "questions": [
+        "Are work instructions available ?",
+        "Are objectives and target available?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to R&D activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are job description available for staff?"
+      ],
+      "sectionCodes": [
+        "STF-RND"
+      ],
+      "departmentCodes": [
+        "STF"
+      ]
+    },
+    {
+      "area": "Warehouse",
+      "sourceFile": "warehouse.doc",
+      "standard": "ISO 9001:2015",
+      "questionCount": 17,
+      "questions": [
+        "Are work instructions available and updated?",
+        "What are the activities involved in the receiving of materials?",
+        "What checks / inspection are done to monitor materials daily movements?",
+        "How do you control materials with respect to status, quantity, due date, etc?",
+        "How are damaged materials upon receipt or during storage handled?",
+        "Are there any items requiring special storage?",
+        "How are defective/expired items defined and handled?",
+        "How are stock levels checked and monitored?",
+        "Are stock materials clearly defined and identified?",
+        "How are materials to be used by production issued?",
+        "Are the materials statutory & regulatory requirements properly implemented?",
+        "Is “Safety Awareness” properly observed and implemented in the area?",
+        "Do “Material handlers/forklift operators” undergone training? Where they issued certificates?",
+        "How do you monitor your KPI’s?",
+        "Do you have any defined “Risk” related to Warehouse activities?",
+        "How do you handle “Risk and Opportunities Management”.",
+        "Are job descriptions available for employees."
+      ],
+      "sectionCodes": [
+        "SCM-LOG-WH"
+      ],
+      "departmentCodes": [
+        "SCM"
+      ]
+    }
+  ]
+}

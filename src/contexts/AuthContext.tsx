@@ -9,21 +9,25 @@ import {
   Department,
   Section,
 } from '@/types';
+import { onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
+import {
+  signIn,
+  signOutUser,
+  resolveAppUser,
+  type SignInResult,
+} from '@/lib/auth';
 import {
   initializeSystemAdmin,
   getUserById,
-  getUserByEmail,
   getVisibleUsers as getVisibleUsersFromFirestore,
   getAllDepartments as getAllDepartmentsFromFirestore,
   getAllSections as getAllSectionsFromFirestore,
-  getPassword,
-  setPassword,
   addActiveSession,
   removeActiveSession,
   updateSessionActivity,
-  SYSTEM_ADMIN_ID,
-  DEFAULT_PASSWORD,
 } from '@/lib/firestore';
+import { logger } from '@/lib/logger';
 
 // ===========================================
 // Context Types
@@ -36,9 +40,11 @@ interface AuthContextType {
   isLoading: boolean;
 
   // تسجيل الدخول/الخروج
+  // login يبقى boolean حفاظاً على المستدعين الحاليين، و loginWithResult يعطي سبب الفشل
   login: (username: string, password: string) => Promise<boolean>;
+  loginWithResult: (username: string, password: string) => Promise<SignInResult>;
   logout: () => void;
-  switchUser: (userId: string) => void; // فقط لمدير النظام
+  switchUser: (userId: string) => void; // معطّل - انظر التعليق عند التنفيذ
 
   // الصلاحيات
   permissions: Permission;
@@ -64,7 +70,7 @@ interface AuthContextType {
   canAuditSection: (sectionId: string) => boolean;
   getAuditableDepartments: () => Department[];
 
-  // قائمة المستخدمين للتبديل (لمدير النظام فقط)
+  // قائمة المستخدمين للتبديل - فارغة دائماً بعد الانتقال إلى Firebase Auth
   availableUsers: User[];
 
   // البيانات المحملة (cached)
@@ -73,7 +79,7 @@ interface AuthContextType {
   users: User[];
   dataLoaded: boolean;
 
-  // إعادة تعيين كلمة المرور
+  // إعادة تعيين كلمة المرور - إرسال رابط إعادة التعيين إلى بريد المستخدم
   resetUserPassword: (userId: string) => Promise<boolean>;
 
   // تحديث البيانات
@@ -98,7 +104,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [sections, setSections] = useState<Section[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const dataLoadedRef = useRef(false);
-  const systemInitializedRef = useRef(false);
+  const systemInitPromiseRef = useRef<Promise<boolean> | null>(null);
+
+  // رقم جيل الجلسة. معالج onAuthStateChanged غير متزامن وفيه عدة await، فقد ينتهي
+  // استدعاء قديم بعد تسجيل الخروج أو بعد دخول مستخدم آخر ويعيد ضبط currentUser على
+  // مستخدم لم تعد له جلسة في Firebase - واجهة تبدو مسجلة الدخول بلا جلسة خلفها.
+  // كل استدعاء يأخذ رقماً عند بدايته ويتوقف بعد أي await إذا لم يعد هو الأحدث.
+  const authGenerationRef = useRef(0);
 
   // تحميل البيانات من Firestore مرة واحدة
   const loadData = useCallback(async (force = false) => {
@@ -121,37 +133,76 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // تهيئة النظام مرة واحدة
-  const initSystem = useCallback(async () => {
-    if (systemInitializedRef.current) return;
-    systemInitializedRef.current = true;
-    await initializeSystemAdmin();
+  // تهيئة النظام مرة واحدة.
+  // نحتفظ بالوعد نفسه (وليس بعلامة منطقية) حتى ينتظر أي استدعاء متزامن - مثل login -
+  // نفس عملية التهيئة الجارية بدلاً من المتابعة على قاعدة بيانات نصف مهيأة.
+  const initSystem = useCallback((): Promise<boolean> => {
+    if (!systemInitPromiseRef.current) {
+      systemInitPromiseRef.current = initializeSystemAdmin()
+        .then((success) => {
+          // مسح الوعد عند الفشل حتى تكون إعادة المحاولة ممكنة
+          if (!success) systemInitPromiseRef.current = null;
+          return success;
+        })
+        .catch((error) => {
+          systemInitPromiseRef.current = null;
+          throw error;
+        });
+    }
+    return systemInitPromiseRef.current;
   }, []);
 
-  // تحميل الجلسة عند بدء التطبيق
+  // الجلسة مشتقة بالكامل من Firebase Auth.
+  // Auth يحتفظ بالجلسة بنفسه (IndexedDB) فلم تعد هناك حاجة لقراءة أو كتابة 'qms_session'
+  // في localStorage. المستمع يُشترك مرة واحدة عند التركيب ويعمل عند كل تغيّر في الحالة:
+  // استعادة الجلسة عند إعادة التحميل، تسجيل الدخول، تسجيل الخروج، وانتهاء صلاحية الرمز.
   useEffect(() => {
-    const loadSession = async () => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      const generation = ++authGenerationRef.current;
+      const isStale = () => generation !== authGenerationRef.current;
+
+      if (!firebaseUser) {
+        setCurrentUser(null);
+        dataLoadedRef.current = false;
+        setIsLoading(false);
+        return;
+      }
+
       try {
         await initSystem();
+        if (isStale()) return;
 
-        const savedSession = localStorage.getItem('qms_session');
-        if (savedSession) {
-          const session = JSON.parse(savedSession);
-          const user = await getUserById(session.userId);
-          if (user && user.isActive) {
-            setCurrentUser(user);
-          } else {
-            localStorage.removeItem('qms_session');
-          }
+        // ربط حساب Auth بمستند المستخدم الأصلي عبر authUsers/{uid} وحده
+        const resolved = await resolveAppUser(firebaseUser.uid, firebaseUser.email);
+        // انتهت الجلسة أو تغيّرت أثناء انتظار Firestore - لا نلمس الحالة الحالية
+        if (isStale()) return;
+
+        if (resolved.ok) {
+          // الاحتفاظ بنفس المرجع عند تطابق المعرّف حتى لا تُعاد التأثيرات المعتمدة عليه
+          const user = resolved.user;
+          setCurrentUser((prev) => (prev && prev.id === user.id ? prev : user));
+        } else if (resolved.reason === 'unavailable') {
+          // تعذّرت قراءة الربط - عطل مؤقت في Firestore أو في الشبكة، وليس حكماً على
+          // الحساب. تسجيل الخروج هنا يحوّل انقطاعاً عابراً إلى طرد من الجلسة، فنكتفي
+          // بتسجيل العطل ونترك الحالة كما هي حتى تنجح محاولة لاحقة.
+          logger.error(
+            'Could not resolve the auth session (temporary failure, session kept):',
+            resolved.message
+          );
+        } else {
+          // حكم صريح على الحساب: لا ربط له أو أنه معطّل - لا نترك جلسة نصفية
+          setCurrentUser(null);
+          await signOutUser();
         }
       } catch (error) {
-        console.error('Error loading session:', error);
+        logger.error('Error resolving auth session:', error);
+        if (!isStale()) setCurrentUser(null);
       } finally {
-        setIsLoading(false);
+        if (!isStale()) setIsLoading(false);
       }
-    };
+    });
 
-    loadSession();
+    return () => unsubscribe();
   }, [initSystem]);
 
   // تحميل البيانات عند تسجيل الدخول
@@ -195,60 +246,87 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return DEFAULT_PERMISSIONS[currentUser.role];
   }, [currentUser]);
 
-  // المستخدمين المتاحين للتبديل
-  const availableUsers = useMemo(() => {
-    if (currentUser?.role !== 'system_admin') return [];
-    return users.filter(u => u.isActive);
-  }, [currentUser?.role, users]);
+  // المستخدمين المتاحين للتبديل.
+  // انتحال الهوية من العميل لم يعد ممكناً بعد ربط قواعد Firestore بـ request.auth.uid،
+  // فالقائمة فارغة دائماً حتى لا تعرض الواجهة خياراً لا يعمل. تبقى الخاصية موجودة
+  // لأن Header ما زال يقرؤها.
+  const availableUsers = useMemo<User[]>(() => [], []);
 
-  // تحديث البيانات
+  // تحديث البيانات.
+  // كاتب ثانٍ لـ currentUser بعد عدة await، تماماً كمعالج onAuthStateChanged، فيخضع لنفس
+  // حارس الجيل: لو سجّل المستخدم خروجه أو دخل مستخدم آخر أثناء انتظار Firestore، فإن
+  // الكتابة هنا كانت تعيد مستخدماً لا جلسة له - واجهة تبدو مسجلة الدخول بلا جلسة خلفها.
   const refreshData = useCallback(async () => {
+    const generation = authGenerationRef.current;
+    const isStale = () => generation !== authGenerationRef.current;
+
     await loadData(true);
+    if (isStale()) return;
+
     if (currentUser) {
       const updatedUser = await getUserById(currentUser.id);
+      if (isStale()) return;
+
       if (updatedUser) {
         setCurrentUser(updatedUser);
       }
     }
   }, [loadData, currentUser]);
 
-  // تسجيل الدخول
-  const login = useCallback(async (username: string, password: string): Promise<boolean> => {
-    try {
-      await initSystem();
+  // بدء الجلسة بعد نجاح المصادقة: نفس الخطوات لتسجيل الدخول العادي ولترقية كلمة
+  // المرور القديمة، حتى لا يفترق المساران في تسجيل الجلسة النشطة أو في تحديث الحالة.
+  const establishSession = useCallback(async (user: User) => {
+    // onAuthStateChanged سيصل إلى نفس المستخدم، لكن نضبطه هنا فوراً حتى لا
+    // ينتظر التوجيه إلى لوحة المعلومات دورة إضافية. ورفع رقم الجيل يمنع أي استدعاء
+    // قديم للمستمع - لا يزال معلقاً على await - من الكتابة فوق هذه الحالة.
+    authGenerationRef.current += 1;
+    setCurrentUser(user);
+    dataLoadedRef.current = false; // Reset to load fresh data
 
-      const user = await getUserByEmail(username);
+    await addActiveSession(user.id, {
+      loginAt: new Date().toISOString(),
+      userEmail: user.email,
+      userName: user.fullNameAr,
+    });
+  }, []);
 
-      if (!user || !user.isActive) {
-        return false;
+  // تسجيل الدخول - النسخة الكاملة التي تعيد سبب الفشل لصفحة تسجيل الدخول
+  const loginWithResult = useCallback(
+    async (username: string, password: string): Promise<SignInResult> => {
+      try {
+        await initSystem();
+
+        // signIn: مصادقة Firebase ثم قراءة الربط authUsers/{uid} - بلا أي مسار قديم
+        const result = await signIn(username, password);
+
+        if (!result.ok) {
+          return result;
+        }
+
+        await establishSession(result.user);
+
+        return result;
+      } catch (error) {
+        logger.error('Login error:', error);
+        return { ok: false, reason: 'error' };
       }
+    },
+    [initSystem, establishSession]
+  );
 
-      const storedPassword = await getPassword(user.id);
+  // ملاحظة: لم تعد هناك ترقية لكلمة مرور قديمة. كان ذلك المسار يقرأ مجموعة `passwords`
+  // بلا مصادقة، وهو ما ترفضه قواعد Firestore المشدّدة، فلم يكن ينجح أصلاً. الموظف
+  // القائم يُمنح حساب دخول من صفحة المستخدمين على يد مسؤول (createSignInAccountForUser)
+  // ثم يختار كلمة مروره بنفسه عبر رسالة التعيين.
 
-      if (!storedPassword || storedPassword !== password) {
-        return false;
-      }
-
-      const sessionData = {
-        userId: user.id,
-        loginAt: new Date().toISOString(),
-      };
-      localStorage.setItem('qms_session', JSON.stringify(sessionData));
-
-      await addActiveSession(user.id, {
-        loginAt: sessionData.loginAt,
-        userEmail: user.email,
-        userName: user.fullNameAr,
-      });
-
-      setCurrentUser(user);
-      dataLoadedRef.current = false; // Reset to load fresh data
-      return true;
-    } catch (error) {
-      console.error('Login error:', error);
-      return false;
-    }
-  }, [initSystem]);
+  // نفس العملية بواجهة منطقية - يبقى شكل الاستدعاء القديم صالحاً
+  const login = useCallback(
+    async (username: string, password: string): Promise<boolean> => {
+      const result = await loginWithResult(username, password);
+      return result.ok;
+    },
+    [loginWithResult]
+  );
 
   // تسجيل الخروج
   const logout = useCallback(async () => {
@@ -256,26 +334,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await removeActiveSession(currentUser.id);
     }
 
+    // رفع رقم الجيل أولاً: أي استدعاء للمستمع لا يزال ينتظر Firestore يصبح قديماً،
+    // فلا يستطيع إعادة ضبط المستخدم بعد الخروج
+    authGenerationRef.current += 1;
+
+    // onAuthStateChanged سيمسح المستخدم أيضاً، لكن المسح المباشر يجعل الواجهة فورية
+    await signOutUser();
     setCurrentUser(null);
-    localStorage.removeItem('qms_session');
     dataLoadedRef.current = false;
   }, [currentUser]);
 
-  // تبديل المستخدم (لمدير النظام فقط)
-  const switchUser = useCallback(async (userId: string) => {
-    if (!currentUser || currentUser.role !== 'system_admin') return;
+  // تبديل المستخدم - معطّل.
+  // كان يبدّل currentUser في العميل فقط. بعد ربط قواعد Firestore بـ request.auth.uid
+  // أصبح ذلك يعطي واجهة تعرض بيانات ترفض القواعد تقديمها، أي شاشات فارغة وأخطاء صلاحيات.
+  // نبقي الدالة في الواجهة العامة لأن Header ما زال يستدعيها، لكنها لا تفعل شيئاً.
+  const switchUser = useCallback((userId: string) => {
+    logger.warn(
+      'switchUser is disabled: client-side impersonation no longer works with Firebase Auth rules',
+      userId
+    );
+  }, []);
 
-    const user = await getUserById(userId);
-    if (user && user.isActive) {
-      setCurrentUser(user);
-      localStorage.setItem('qms_session', JSON.stringify({
-        userId: userId,
-        loginAt: new Date().toISOString(),
-      }));
-    }
-  }, [currentUser]);
-
-  // إعادة تعيين كلمة المرور
+  // إعادة تعيين كلمة المرور.
+  // إعادة تعيين كلمة مرور مستخدم آخر تتطلب Admin SDK، وهو غير متاح هنا، لذا نرسل
+  // رابط إعادة تعيين ذاتي إلى بريد المستخدم بدلاً من كتابة كلمة مرور افتراضية.
+  // نفس فحوص الصلاحية السابقة محفوظة كما هي.
   const resetUserPassword = useCallback(async (userId: string): Promise<boolean> => {
     if (!currentUser) return false;
 
@@ -288,7 +371,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (!canReset) return false;
 
-    return await setPassword(userId, DEFAULT_PASSWORD);
+    try {
+      // المستخدم قد لا يكون ضمن القائمة المخزنة (حسابات النظام مستثناة منها)
+      const user = targetUser ?? (await getUserById(userId));
+      if (!user || user.isSystemAccount || !user.email) return false;
+
+      // مع تفعيل الحماية من تعداد الحسابات، ينجح sendPasswordResetEmail على بريد لا
+      // حساب له في Firebase Auth ولا يُرسل شيئاً. الإبلاغ بالنجاح هنا يعطي مدير النظام
+      // علاجاً غير موجود لمستخدم بلا حساب دخول، فنرفض بدل الكذب: مسار هذا المستخدم هو
+      // زر "إنشاء حساب دخول" في صفحة المستخدمين، وهو يرسل رسالة تعيين كلمة المرور بنفسه.
+      const authUid = (user as User & { authUid?: string }).authUid;
+      if (!authUid) {
+        logger.warn(
+          'No password reset link sent: user has no sign-in account yet (not onboarded):',
+          userId
+        );
+        return false;
+      }
+
+      await sendPasswordResetEmail(auth, user.email);
+      return true;
+    } catch (error) {
+      logger.error('Error sending password reset email:', error);
+      return false;
+    }
   }, [currentUser, permissions.canManageUsers, users]);
 
   // التحقق من صلاحية معينة
@@ -487,6 +593,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isAuthenticated,
     isLoading,
     login,
+    loginWithResult,
     logout,
     switchUser,
     permissions,

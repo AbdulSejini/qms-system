@@ -1,6 +1,6 @@
 {
   "common": {
-    "appName": "Quality Management System",
+    "appName": "QMS Audit System",
     "companyName": "Saudi Cable Company",
     "loading": "Loading...",
     "save": "Save",
@@ -33,6 +33,7 @@
   },
   "navigation": {
     "dashboard": "Dashboard",
+    "plans": "Annual Plan",
     "audits": "Audits & Reviews",
     "findings": "Findings",
     "reports": "Reports",
@@ -46,7 +47,7 @@
   },
   "dashboard": {
     "title": "Dashboard",
-    "welcome": "Welcome to Quality Management System",
+    "welcome": "Welcome to the QMS Audit System",
     "totalDocuments": "Total Documents",
     "pendingReview": "Pending Review",
     "approvedDocuments": "Approved Documents",
@@ -121,6 +122,108 @@
       "step4": "Management Review",
       "step5": "Corrective Action",
       "step6": "Closure"
+    }
+  },
+  "plans": {
+    "title": "Annual Audit Plan",
+    "subtitle": "Plan the year's internal audits and get the plan approved",
+    "newPlan": "New Annual Plan",
+    "searchPlaceholder": "Search by year or title...",
+    "status": {
+      "draft": "Draft",
+      "pendingApproval": "Pending Approval",
+      "approved": "Approved",
+      "rejected": "Rejected"
+    },
+    "stats": {
+      "totalPlans": "Total Plans",
+      "pendingApproval": "Pending Approval",
+      "approvedPlans": "Approved Plans",
+      "plannedAudits": "Planned Audits"
+    },
+    "table": {
+      "year": "Year",
+      "planTitle": "Plan Title",
+      "planStatus": "Status",
+      "plannedItems": "Planned Items",
+      "progress": "Progress",
+      "approver": "Approver",
+      "createdBy": "Created by",
+      "department": "Department",
+      "section": "Section",
+      "month": "Planned Month",
+      "auditType": "Audit Type",
+      "leadAuditor": "Lead Auditor",
+      "auditCreated": "Audit Created"
+    },
+    "form": {
+      "year": "Year",
+      "titleAr": "Plan Title (Arabic)",
+      "titleEn": "Plan Title (English)",
+      "selectDepartment": "Select Department",
+      "allSections": "All Sections",
+      "selectLater": "Decide later",
+      "notes": "Notes"
+    },
+    "detail": {
+      "itemsTitle": "Planned Audits",
+      "addItemTitle": "Add a Planned Audit",
+      "noItems": "No planned audits in this plan yet",
+      "progressTitle": "Annual Audit Progress",
+      "approver": "Approver",
+      "approvedAt": "Approved on",
+      "comment": "Comment",
+      "rejectionReason": "Rejection reason",
+      "readOnly": "This plan is approved and can no longer be edited.",
+      "auditCreatedYes": "Created",
+      "auditCreatedNo": "Not yet"
+    },
+    "actions": {
+      "open": "Open Plan",
+      "delete": "Delete Plan",
+      "addItem": "Add Planned Audit",
+      "removeItem": "Remove Item",
+      "submitForApproval": "Submit for Approval",
+      "approve": "Approve",
+      "reject": "Reject"
+    },
+    "submit": {
+      "title": "Submit Plan for Approval",
+      "description": "Choose the person who will approve this plan. They will be notified and only they can approve or reject it.",
+      "searchPlaceholder": "Search users by name, email or employee number...",
+      "noUsers": "No matching users"
+    },
+    "decision": {
+      "approveTitle": "Approve Annual Plan",
+      "rejectTitle": "Reject Annual Plan",
+      "commentOptional": "Comment (optional)",
+      "reasonRequired": "Rejection reason (required)"
+    },
+    "delete": {
+      "title": "Delete Annual Plan",
+      "description": "This plan and all its planned audits will be deleted"
+    },
+    "empty": {
+      "noPlans": "No annual plans yet",
+      "noPlansHint": "Create the plan for the year, then fill it with the audits planned for each department.",
+      "noMatches": "No matching results",
+      "noMatchesHint": "Try adjusting your search or filter."
+    },
+    "errors": {
+      "invalidYear": "Enter a valid year.",
+      "titleRequired": "The Arabic plan title is required.",
+      "yearExists": "A plan already exists for this year.",
+      "createFailed": "Could not create the plan. Check your connection and try again.",
+      "departmentRequired": "Choose a department for the planned audit.",
+      "itemSaveFailed": "Could not save the planned audit. Check your connection and try again.",
+      "itemDeleteFailed": "Could not remove the item. Check your connection and try again.",
+      "noItems": "Add at least one planned audit before submitting the plan.",
+      "approverRequired": "Choose the person who will approve the plan.",
+      "submitFailed": "Could not submit the plan. Check your connection and try again.",
+      "reasonRequired": "A rejection reason is required.",
+      "decisionFailed": "Could not save the decision. Check your connection and try again.",
+      "deleteFailed": "Could not delete the plan. Check your connection and try again.",
+      "notificationFailed": "The plan was saved, but the notification could not be sent."
     }
   },
   "findings": {

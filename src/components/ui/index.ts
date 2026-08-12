@@ -3,3 +3,4 @@ export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 export { Badge, badgeVariants, type BadgeProps } from './Badge';
 export { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell, TableCaption } from './Table';
 export { OneDrivePicker } from './OneDrivePicker';
+export { Skeleton } from './Skeleton';

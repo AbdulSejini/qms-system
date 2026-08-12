@@ -326,6 +326,8 @@ export default function AuditsPage() {
   // QMS Approval modal
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [approvalComment, setApprovalComment] = useState('');
+  const [approvalError, setApprovalError] = useState('');
+  const [isSavingApproval, setIsSavingApproval] = useState(false);
 
   // Helper functions
   const getDepartment = (id: string) => allDepartments.find(d => d.id === id);
@@ -370,7 +372,7 @@ export default function AuditsPage() {
   // Filter and sort audits
   const filteredAudits = useMemo(() => {
     // First filter by user access and view mode
-    let accessibleAudits = auditsData.filter(audit => {
+    const accessibleAudits = auditsData.filter(audit => {
       // Quality manager can see all audits
       if (isQualityManager && viewMode === 'all') return true;
 
@@ -459,8 +461,8 @@ export default function AuditsPage() {
   // Check if user is an auditor in an audit
   const isUserAuditor = (audit: Audit) => {
     return audit.leadAuditorId === currentUser?.id ||
-           audit.auditorIds?.includes(currentUser?.id || '') ||
-           audit.createdBy === currentUser?.id;
+      audit.auditorIds?.includes(currentUser?.id || '') ||
+      audit.createdBy === currentUser?.id;
   };
 
   // Check if user is an auditee (their department is being audited)
@@ -771,8 +773,11 @@ export default function AuditsPage() {
   };
 
   // QMS Approval
-  const handleQMSApproval = (approved: boolean) => {
-    if (!selectedAudit) return;
+  const handleQMSApproval = async (approved: boolean) => {
+    if (!selectedAudit || isSavingApproval) return;
+
+    setIsSavingApproval(true);
+    setApprovalError('');
 
     const updatedAudit = {
       ...selectedAudit,
@@ -780,11 +785,28 @@ export default function AuditsPage() {
         approved,
         comment: approvalComment,
         date: new Date().toISOString().split('T')[0],
-        approvedBy: 'user-3', // Current user
+        approvedBy: currentUser?.id || '',
       },
       currentStage: approved ? selectedAudit.currentStage + 1 : selectedAudit.currentStage,
       status: approved ? workflowStages[selectedAudit.currentStage + 1]?.id || 'completed' : selectedAudit.status,
     };
+
+    // Persist to Firestore - without this the decision is lost on reload
+    const saved = await updateAudit(selectedAudit.id, {
+      qmsApproval: updatedAudit.qmsApproval,
+      currentStage: updatedAudit.currentStage,
+      status: updatedAudit.status as FirestoreAudit['status'],
+    });
+
+    setIsSavingApproval(false);
+
+    if (!saved) {
+      // Keep the modal open so the decision and comment are not lost
+      setApprovalError(language === 'ar'
+        ? 'تعذر حفظ القرار. تحقق من الاتصال ثم أعد المحاولة.'
+        : 'Could not save the decision. Check your connection and try again.');
+      return;
+    }
 
     setAuditsData(prev => prev.map(a => a.id === selectedAudit.id ? updatedAudit : a));
     setSelectedAudit(updatedAudit);
@@ -819,15 +841,13 @@ export default function AuditsPage() {
               {/* All Tab */}
               <button
                 onClick={() => setViewMode('all')}
-                className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 text-sm font-medium transition-all relative ${
-                  viewMode === 'all'
-                    ? 'text-[var(--primary)] bg-[var(--primary-light)]'
-                    : 'text-[var(--foreground-secondary)] hover:bg-[var(--background-secondary)]'
-                }`}
+                className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 text-sm font-medium transition-all relative ${viewMode === 'all'
+                  ? 'text-[var(--primary)] bg-[var(--primary-light)]'
+                  : 'text-[var(--foreground-secondary)] hover:bg-[var(--background-secondary)]'
+                  }`}
               >
-                <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
-                  viewMode === 'all' ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background-tertiary)]'
-                }`}>
+                <div className={`flex items-center justify-center w-10 h-10 rounded-full ${viewMode === 'all' ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background-tertiary)]'
+                  }`}>
                   <ClipboardCheck className="h-5 w-5" />
                 </div>
                 <div className="text-start">
@@ -843,15 +863,13 @@ export default function AuditsPage() {
               {auditsAsAuditor.length > 0 && (
                 <button
                   onClick={() => setViewMode('as_auditor')}
-                  className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 text-sm font-medium transition-all relative border-s border-[var(--border)] ${
-                    viewMode === 'as_auditor'
-                      ? 'text-blue-600 bg-blue-50 dark:bg-blue-900/20'
-                      : 'text-[var(--foreground-secondary)] hover:bg-[var(--background-secondary)]'
-                  }`}
+                  className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 text-sm font-medium transition-all relative border-s border-[var(--border)] ${viewMode === 'as_auditor'
+                    ? 'text-blue-600 bg-blue-50 dark:bg-blue-900/20'
+                    : 'text-[var(--foreground-secondary)] hover:bg-[var(--background-secondary)]'
+                    }`}
                 >
-                  <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
-                    viewMode === 'as_auditor' ? 'bg-blue-600 text-white' : 'bg-[var(--background-tertiary)]'
-                  }`}>
+                  <div className={`flex items-center justify-center w-10 h-10 rounded-full ${viewMode === 'as_auditor' ? 'bg-blue-600 text-white' : 'bg-[var(--background-tertiary)]'
+                    }`}>
                     <UserCheck className="h-5 w-5" />
                   </div>
                   <div className="text-start">
@@ -868,15 +886,13 @@ export default function AuditsPage() {
               {auditsAsAuditee.length > 0 && (
                 <button
                   onClick={() => setViewMode('as_auditee')}
-                  className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 text-sm font-medium transition-all relative border-s border-[var(--border)] ${
-                    viewMode === 'as_auditee'
-                      ? 'text-orange-600 bg-orange-50 dark:bg-orange-900/20'
-                      : 'text-[var(--foreground-secondary)] hover:bg-[var(--background-secondary)]'
-                  }`}
+                  className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 text-sm font-medium transition-all relative border-s border-[var(--border)] ${viewMode === 'as_auditee'
+                    ? 'text-orange-600 bg-orange-50 dark:bg-orange-900/20'
+                    : 'text-[var(--foreground-secondary)] hover:bg-[var(--background-secondary)]'
+                    }`}
                 >
-                  <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
-                    viewMode === 'as_auditee' ? 'bg-orange-600 text-white' : 'bg-[var(--background-tertiary)]'
-                  }`}>
+                  <div className={`flex items-center justify-center w-10 h-10 rounded-full ${viewMode === 'as_auditee' ? 'bg-orange-600 text-white' : 'bg-[var(--background-tertiary)]'
+                    }`}>
                     <Building2 className="h-5 w-5" />
                   </div>
                   <div className="text-start">
@@ -1104,120 +1120,157 @@ export default function AuditsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredAudits.map((audit) => {
-                const dept = getDepartment(audit.departmentId);
-                const section = audit.sectionId ? getSection(audit.sectionId) : null;
-                const leadAuditor = getUser(audit.leadAuditorId);
-                const openFindings = audit.findings.filter(f => f.status !== 'closed').length;
-
-                // Determine user's role in this audit
-                const userIsAuditor = isUserAuditor(audit);
-                const userIsAuditee = isUserAuditee(audit);
-
-                return (
-                  <TableRow key={audit.id}>
-                    <TableCell className="font-mono text-sm">
-                      <div className="flex flex-col gap-1">
-                        <span>{audit.number}</span>
-                        {/* Role Badge */}
-                        {!isQualityManager && (userIsAuditor || userIsAuditee) && (
-                          <div className="flex gap-1">
-                            {userIsAuditor && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                                <UserCheck className="h-3 w-3" />
-                                {language === 'ar' ? 'مراجع' : 'Auditor'}
-                              </span>
-                            )}
-                            {userIsAuditee && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
-                                <Building2 className="h-3 w-3" />
-                                {language === 'ar' ? 'مراجع عليه' : 'Auditee'}
-                              </span>
-                            )}
-                          </div>
-                        )}
+              {filteredAudits.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="h-[400px] text-center">
+                    <div className="flex flex-col items-center justify-center max-w-md mx-auto">
+                      <div className="flex h-20 w-20 items-center justify-center rounded-full bg-[var(--background-secondary)] mb-6 animate-pulse">
+                        <ClipboardCheck className="h-10 w-10 text-[var(--foreground-secondary)] opacity-50" />
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <p className="font-medium">{language === 'ar' ? audit.titleAr : audit.titleEn}</p>
-                      <p className="text-xs text-[var(--foreground-muted)]">
-                        {new Date(audit.startDate).toLocaleDateString(language === 'ar' ? 'ar-SA' : 'en-US')}
+                      <h3 className="text-lg font-semibold text-[var(--foreground)] mb-2">
+                        {searchQuery || selectedType !== 'all' || selectedStatus !== 'all'
+                          ? (language === 'ar' ? 'لا توجد نتائج مطابقة' : 'No matching results')
+                          : (language === 'ar' ? 'لا توجد مراجعات حالياً' : 'No audits found')}
+                      </h3>
+                      <p className="text-[var(--foreground-secondary)] mb-6 max-w-sm">
+                        {searchQuery || selectedType !== 'all' || selectedStatus !== 'all'
+                          ? (language === 'ar' ? 'حاول تغيير معايير البحث أو الفلترة' : 'Try adjusting your search or filters')
+                          : (language === 'ar' ? 'ابدأ بإنشاء مراجعة جديدة لتتبع الجودة والامتثال' : 'Get started by creating a new audit to track quality and compliance')}
                       </p>
-                    </TableCell>
-                    <TableCell>{getTypeBadge(audit.type)}</TableCell>
-                    <TableCell>{getStatusBadge(audit.status)}</TableCell>
-                    <TableCell>
-                      <p className="text-sm">{dept ? (language === 'ar' ? dept.nameAr : dept.nameEn) : '-'}</p>
-                      {section && (
-                        <p className="text-xs text-[var(--foreground-muted)]">
-                          {language === 'ar' ? section.nameAr : section.nameEn}
-                        </p>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--primary-light)] text-xs font-medium text-[var(--primary)]">
-                          {(leadAuditor ? (language === 'ar' ? leadAuditor.fullNameAr : leadAuditor.fullNameEn) : '?').charAt(0)}
-                        </div>
-                        <span className="text-sm">
-                          {leadAuditor ? (language === 'ar' ? leadAuditor.fullNameAr : leadAuditor.fullNameEn) : '-'}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {openFindings > 0 ? (
-                        <Badge variant="danger">{openFindings}</Badge>
-                      ) : (
-                        <span className="text-[var(--foreground-muted)]">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center justify-center gap-1">
-                        <Button variant="ghost" size="icon-sm" onClick={() => handleViewAudit(audit)}>
-                          <Eye className="h-4 w-4" />
+                      {!searchQuery && selectedType === 'all' && selectedStatus === 'all' && (
+                        <Button onClick={() => router.push('/audits/new')}>
+                          <Plus className="h-4 w-4 me-2" />
+                          {t('audits.newAudit')}
                         </Button>
-                        {/* Approval buttons for Quality Manager when audit is pending approval */}
-                        {isQualityManager && audit.status === 'pending_approval' && (
-                          <>
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                              onClick={() => handleApproveAudit(audit.id)}
-                              title={language === 'ar' ? 'موافقة' : 'Approve'}
-                            >
-                              <CheckCircle className="h-4 w-4" />
-                            </Button>
+                      )}
+                      {(searchQuery || selectedType !== 'all' || selectedStatus !== 'all') && (
+                        <Button variant="outline" onClick={() => {
+                          setSearchQuery('');
+                          setSelectedType('all');
+                          setSelectedStatus('all');
+                        }}>
+                          {language === 'ar' ? 'مسح الفلاتر' : 'Clear Filters'}
+                        </Button>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredAudits.map((audit) => {
+                  const dept = getDepartment(audit.departmentId);
+                  const section = audit.sectionId ? getSection(audit.sectionId) : null;
+                  const leadAuditor = getUser(audit.leadAuditorId);
+                  const openFindings = audit.findings.filter(f => f.status !== 'closed').length;
+
+                  // Determine user's role in this audit
+                  const userIsAuditor = isUserAuditor(audit);
+                  const userIsAuditee = isUserAuditee(audit);
+
+                  return (
+                    <TableRow key={audit.id}>
+                      <TableCell className="font-mono text-sm">
+                        <div className="flex flex-col gap-1">
+                          <span>{audit.number}</span>
+                          {/* Role Badge */}
+                          {!isQualityManager && (userIsAuditor || userIsAuditee) && (
+                            <div className="flex gap-1">
+                              {userIsAuditor && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                                  <UserCheck className="h-3 w-3" />
+                                  {language === 'ar' ? 'مراجع' : 'Auditor'}
+                                </span>
+                              )}
+                              {userIsAuditee && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
+                                  <Building2 className="h-3 w-3" />
+                                  {language === 'ar' ? 'مراجع عليه' : 'Auditee'}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <p className="font-medium">{language === 'ar' ? audit.titleAr : audit.titleEn}</p>
+                        <p className="text-xs text-[var(--foreground-muted)]">
+                          {new Date(audit.startDate).toLocaleDateString(language === 'ar' ? 'ar-SA' : 'en-US')}
+                        </p>
+                      </TableCell>
+                      <TableCell>{getTypeBadge(audit.type)}</TableCell>
+                      <TableCell>{getStatusBadge(audit.status)}</TableCell>
+                      <TableCell>
+                        <p className="text-sm">{dept ? (language === 'ar' ? dept.nameAr : dept.nameEn) : '-'}</p>
+                        {section && (
+                          <p className="text-xs text-[var(--foreground-muted)]">
+                            {language === 'ar' ? section.nameAr : section.nameEn}
+                          </p>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--primary-light)] text-xs font-medium text-[var(--primary)]">
+                            {(leadAuditor ? (language === 'ar' ? leadAuditor.fullNameAr : leadAuditor.fullNameEn) : '?').charAt(0)}
+                          </div>
+                          <span className="text-sm">
+                            {leadAuditor ? (language === 'ar' ? leadAuditor.fullNameAr : leadAuditor.fullNameEn) : '-'}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {openFindings > 0 ? (
+                          <Badge variant="danger">{openFindings}</Badge>
+                        ) : (
+                          <span className="text-[var(--foreground-muted)]">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center justify-center gap-1">
+                          <Button variant="ghost" size="icon-sm" onClick={() => handleViewAudit(audit)}>
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          {/* Approval buttons for Quality Manager when audit is pending approval */}
+                          {isQualityManager && audit.status === 'pending_approval' && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                onClick={() => handleApproveAudit(audit.id)}
+                                title={language === 'ar' ? 'موافقة' : 'Approve'}
+                              >
+                                <CheckCircle className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                                onClick={() => {
+                                  const reason = prompt(language === 'ar' ? 'سبب الرفض (اختياري):' : 'Rejection reason (optional):');
+                                  handleRejectAudit(audit.id, reason || '');
+                                }}
+                                title={language === 'ar' ? 'رفض' : 'Reject'}
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
+                          {audit.status !== 'pending_approval' && hasPermission('canDeleteAudits') && (
                             <Button
                               variant="ghost"
                               size="icon-sm"
                               className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                              onClick={() => {
-                                const reason = prompt(language === 'ar' ? 'سبب الرفض (اختياري):' : 'Rejection reason (optional):');
-                                handleRejectAudit(audit.id, reason || '');
-                              }}
-                              title={language === 'ar' ? 'رفض' : 'Reject'}
+                              onClick={() => handleDeleteAudit(audit)}
+                              title={language === 'ar' ? 'حذف المراجعة' : 'Delete Audit'}
                             >
-                              <X className="h-4 w-4" />
+                              <Trash2 className="h-4 w-4" />
                             </Button>
-                          </>
-                        )}
-                        {audit.status !== 'pending_approval' && hasPermission('canDeleteAudits') && (
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                            onClick={() => handleDeleteAudit(audit)}
-                            title={language === 'ar' ? 'حذف المراجعة' : 'Delete Audit'}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
             </TableBody>
           </Table>
         </Card>
@@ -1486,11 +1539,10 @@ export default function AuditsPage() {
                     return (
                       <div key={stage.id} className="flex items-center">
                         <div className="flex flex-col items-center">
-                          <div className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                            isCompleted ? 'bg-green-500 text-white' :
+                          <div className={`flex h-10 w-10 items-center justify-center rounded-full ${isCompleted ? 'bg-green-500 text-white' :
                             isCurrent ? 'bg-[var(--primary)] text-white' :
-                            'bg-[var(--background-tertiary)] text-[var(--foreground-muted)]'
-                          }`}>
+                              'bg-[var(--background-tertiary)] text-[var(--foreground-muted)]'
+                            }`}>
                             {isCompleted ? <CheckCircle className="h-5 w-5" /> : <Icon className="h-5 w-5" />}
                           </div>
                           <p className={`mt-1 text-xs font-medium text-center ${isCurrent ? 'text-[var(--primary)]' : 'text-[var(--foreground-secondary)]'}`}>
@@ -1517,11 +1569,10 @@ export default function AuditsPage() {
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id as typeof activeTab)}
-                    className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
-                      activeTab === tab.id
-                        ? 'border-[var(--primary)] text-[var(--primary)]'
-                        : 'border-transparent text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
-                    }`}
+                    className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === tab.id
+                      ? 'border-[var(--primary)] text-[var(--primary)]'
+                      : 'border-transparent text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
+                      }`}
                   >
                     {language === 'ar' ? tab.labelAr : tab.labelEn}
                     {tab.count !== undefined && tab.count > 0 && (
@@ -1581,9 +1632,8 @@ export default function AuditsPage() {
                           const isLead = id === selectedAudit.leadAuditorId;
                           return auditor ? (
                             <div key={`auditor-${id}-${idx}`} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--background-tertiary)]">
-                              <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${
-                                isLead ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background)] text-[var(--foreground)]'
-                              }`}>
+                              <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${isLead ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background)] text-[var(--foreground)]'
+                                }`}>
                                 {idx + 1}
                               </div>
                               <div className="flex-1">
@@ -1627,16 +1677,15 @@ export default function AuditsPage() {
                                   </p>
                                 )}
                               </div>
-                              <span className={`px-2 py-0.5 rounded-full text-xs ${
-                                q.status === 'compliant' ? 'bg-green-100 text-green-700' :
+                              <span className={`px-2 py-0.5 rounded-full text-xs ${q.status === 'compliant' ? 'bg-green-100 text-green-700' :
                                 q.status === 'non_compliant' ? 'bg-red-100 text-red-700' :
-                                q.status === 'not_applicable' ? 'bg-gray-100 text-gray-700' :
-                                'bg-yellow-100 text-yellow-700'
-                              }`}>
+                                  q.status === 'not_applicable' ? 'bg-gray-100 text-gray-700' :
+                                    'bg-yellow-100 text-yellow-700'
+                                }`}>
                                 {q.status === 'compliant' ? (language === 'ar' ? 'مطابق' : 'Compliant') :
-                                 q.status === 'non_compliant' ? (language === 'ar' ? 'غير مطابق' : 'Non-Compliant') :
-                                 q.status === 'not_applicable' ? (language === 'ar' ? 'لا ينطبق' : 'N/A') :
-                                 (language === 'ar' ? 'معلق' : 'Pending')}
+                                  q.status === 'non_compliant' ? (language === 'ar' ? 'غير مطابق' : 'Non-Compliant') :
+                                    q.status === 'not_applicable' ? (language === 'ar' ? 'لا ينطبق' : 'N/A') :
+                                      (language === 'ar' ? 'معلق' : 'Pending')}
                               </span>
                             </div>
                             {q.answer && (
@@ -1681,12 +1730,11 @@ export default function AuditsPage() {
                               <div className="flex-1">
                                 <div className="flex items-center gap-2 mb-2">
                                   <span className="font-mono text-sm text-[var(--foreground-secondary)]">{finding.reportNumber}</span>
-                                  <span className={`px-2 py-0.5 rounded-full text-xs ${
-                                    finding.categoryB === 'major_nc' ? 'bg-red-100 text-red-700' :
+                                  <span className={`px-2 py-0.5 rounded-full text-xs ${finding.categoryB === 'major_nc' ? 'bg-red-100 text-red-700' :
                                     finding.categoryB === 'minor_nc' ? 'bg-orange-100 text-orange-700' :
-                                    finding.categoryB === 'observation' ? 'bg-yellow-100 text-yellow-700' :
-                                    'bg-blue-100 text-blue-700'
-                                  }`}>
+                                      finding.categoryB === 'observation' ? 'bg-yellow-100 text-yellow-700' :
+                                        'bg-blue-100 text-blue-700'
+                                    }`}>
                                     {findingCategories.B.find(c => c.value === finding.categoryB)?.[language === 'ar' ? 'labelAr' : 'labelEn'] || finding.categoryB}
                                   </span>
                                   {getFindingStatusBadge(finding.status)}
@@ -1725,9 +1773,22 @@ export default function AuditsPage() {
                         ))}
                       </div>
                     ) : (
-                      <div className="text-center py-8 text-[var(--foreground-muted)]">
-                        <CheckCircle className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                        <p>{language === 'ar' ? 'لا توجد ملاحظات' : 'No findings recorded'}</p>
+                      <div className="flex flex-col items-center justify-center py-12 bg-[var(--background-tertiary)]/30 rounded-lg border border-dashed border-[var(--border)]">
+                        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[var(--background-secondary)] mb-4">
+                          <ClipboardCheck className="h-8 w-8 text-[var(--foreground-secondary)] opacity-50" />
+                        </div>
+                        <h4 className="text-lg font-medium mb-1">{language === 'ar' ? 'لا توجد ملاحظات مسجلة' : 'No Findings Recorded'}</h4>
+                        <p className="text-sm text-[var(--foreground-secondary)] max-w-xs text-center mb-6">
+                          {language === 'ar'
+                            ? 'لم يتم تسجيل أي حالات عدم مطابقة أو ملاحظات في هذه المراجعة حتى الآن.'
+                            : 'No non-conformities or observations have been recorded for this audit yet.'}
+                        </p>
+                        {selectedAudit.currentStage >= 2 && selectedAudit.currentStage < 4 && (
+                          <Button onClick={() => setShowFindingModal(true)}>
+                            <Plus className="h-4 w-4 me-2" />
+                            {language === 'ar' ? 'تسجيل أول ملاحظة' : 'Record First Finding'}
+                          </Button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1759,11 +1820,10 @@ export default function AuditsPage() {
                     </div>
 
                     {selectedAudit.qmsApproval ? (
-                      <div className={`p-4 rounded-lg border ${
-                        selectedAudit.qmsApproval.approved
-                          ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-                          : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-                      }`}>
+                      <div className={`p-4 rounded-lg border ${selectedAudit.qmsApproval.approved
+                        ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                        : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
+                        }`}>
                         <div className="flex items-center gap-2 mb-2">
                           {selectedAudit.qmsApproval.approved ? (
                             <ThumbsUp className="h-5 w-5 text-green-600" />
@@ -1793,7 +1853,10 @@ export default function AuditsPage() {
                           <Button
                             size="sm"
                             className="bg-green-600 hover:bg-green-700"
-                            onClick={() => setShowApprovalModal(true)}
+                            onClick={() => {
+                              setApprovalError('');
+                              setShowApprovalModal(true);
+                            }}
                           >
                             <ThumbsUp className="h-4 w-4 me-2" />
                             {language === 'ar' ? 'موافقة' : 'Approve'}
@@ -1803,6 +1866,7 @@ export default function AuditsPage() {
                             variant="outline"
                             className="text-red-600 border-red-600"
                             onClick={() => {
+                              setApprovalError('');
                               setShowApprovalModal(true);
                             }}
                           >
@@ -2033,11 +2097,17 @@ export default function AuditsPage() {
                     className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
                   />
                 </div>
+                {approvalError && (
+                  <p className="rounded-lg bg-red-50 dark:bg-red-900/20 px-3 py-2 text-sm text-red-600 dark:text-red-400">
+                    {approvalError}
+                  </p>
+                )}
               </div>
               <div className="mt-6 flex justify-end gap-3">
                 <Button
                   variant="outline"
                   className="text-red-600 border-red-600"
+                  disabled={isSavingApproval}
                   onClick={() => handleQMSApproval(false)}
                 >
                   <ThumbsDown className="h-4 w-4 me-2" />
@@ -2045,6 +2115,7 @@ export default function AuditsPage() {
                 </Button>
                 <Button
                   className="bg-green-600 hover:bg-green-700"
+                  disabled={isSavingApproval}
                   onClick={() => handleQMSApproval(true)}
                 >
                   <ThumbsUp className="h-4 w-4 me-2" />

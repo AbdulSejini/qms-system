@@ -14,8 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "نظام إدارة الجودة - QMS",
-  description: "نظام إدارة الجودة للكيبل السعودي",
+  title: "نظام مراجعة لنظام الجودة QMS | QMS Audit System",
+  description:
+    "نظام إدارة المراجعة الداخلية للجودة - شركة الكابلات السعودية | Internal quality audit management - Saudi Cable Company",
 };
 
 export default function RootLayout({
@@ -25,8 +26,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ar" dir="rtl" suppressHydrationWarning>
+      {/* suppressHydrationWarning: browser extensions routinely add classes and
+          attributes to <body> before React hydrates, which React reports as a
+          mismatch even though the app's own markup is identical on both sides. */}
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        suppressHydrationWarning
       >
         <Providers>
           {children}

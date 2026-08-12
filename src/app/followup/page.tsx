@@ -76,7 +76,7 @@ const calculateStatus = (dueDate: string, currentStatus: string): 'pending' | 'i
   if (currentStatus === 'closed' || currentStatus === 'completed') return 'completed';
   if (currentStatus === 'pending_verification') return 'awaiting_verification';
 
-  const today = new Date('2026-02-01');
+  const today = new Date();
   const due = new Date(dueDate);
 
   if (due < today && currentStatus !== 'closed') return 'overdue';
@@ -123,8 +123,8 @@ export default function FollowUpPage() {
             status: calculateStatus(audit.endDate || audit.startDate, audit.status),
             priority: audit.type === 'external' ? 'critical' : 'high',
             dueDate: audit.endDate || audit.startDate,
-            assignedTo: audit.leadAuditorId || 'user-3',
-            departmentId: audit.departmentId || 'dept-2',
+            assignedTo: audit.leadAuditorId || '',
+            departmentId: audit.departmentId || '',
             relatedAuditId: audit.id,
             progress: audit.status === 'execution' ? 50 : audit.status === 'awaiting_management' ? 75 : 25,
             lastUpdate: audit.updatedAt || audit.createdAt,
@@ -147,8 +147,8 @@ export default function FollowUpPage() {
                 status: calculateStatus(dueDate, finding.status),
                 priority: getPriorityFromSeverity(finding.categoryB || finding.severity),
                 dueDate: dueDate,
-                assignedTo: finding.responsibleId || audit.leadAuditorId || 'user-3',
-                departmentId: finding.departmentId || audit.departmentId || 'dept-2',
+                assignedTo: finding.responsibleId || audit.leadAuditorId || '',
+                departmentId: finding.departmentId || audit.departmentId || '',
                 sectionId: finding.sectionId,
                 relatedAuditId: audit.id,
                 relatedFindingId: finding.id,
@@ -169,8 +169,8 @@ export default function FollowUpPage() {
                   status: calculateStatus(dueDate, finding.status),
                   priority: getPriorityFromSeverity(finding.categoryB || finding.severity),
                   dueDate: dueDate,
-                  assignedTo: finding.responsibleId || audit.leadAuditorId || 'user-3',
-                  departmentId: finding.departmentId || audit.departmentId || 'dept-2',
+                  assignedTo: finding.responsibleId || audit.leadAuditorId || '',
+                  departmentId: finding.departmentId || audit.departmentId || '',
                   relatedAuditId: audit.id,
                   relatedFindingId: finding.id,
                   progress: finding.status === 'in_progress' ? 60 : finding.status === 'pending_verification' ? 95 : 30,
@@ -258,12 +258,15 @@ export default function FollowUpPage() {
   // Helpers
   const getUserName = (userId: string) => {
     const user = allUsers.find(u => u.id === userId);
-    return user ? (language === 'ar' ? user.fullNameAr : user.fullNameEn) : '';
+    if (user) return language === 'ar' ? user.fullNameAr : user.fullNameEn;
+    // Unassigned items used to render as an empty string, which read as a bug
+    return language === 'ar' ? 'غير معيّن' : 'Unassigned';
   };
 
   const getDepartmentName = (deptId: string) => {
     const dept = allDepartments.find(d => d.id === deptId);
-    return dept ? (language === 'ar' ? dept.nameAr : dept.nameEn) : '';
+    if (dept) return language === 'ar' ? dept.nameAr : dept.nameEn;
+    return language === 'ar' ? 'غير محددة' : 'Not specified';
   };
 
   const getStatusBadge = (status: string) => {
@@ -345,7 +348,7 @@ export default function FollowUpPage() {
 
   // Calculate days remaining or overdue
   const getDaysStatus = (dueDate: string) => {
-    const today = new Date('2026-02-01'); // Demo date
+    const today = new Date();
     const due = new Date(dueDate);
     const diff = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 

@@ -15,9 +15,11 @@ import { User, UserRole } from '@/types';
 import {
   saveUser,
   deleteUser as deleteUserFromFirestore,
-  setPassword,
-  DEFAULT_PASSWORD,
 } from '@/lib/firestore';
+import {
+  createSignInAccountForUser,
+  type CreateSignInAccountReason,
+} from '@/lib/auth';
 import {
   Users,
   Search,
@@ -38,6 +40,8 @@ import {
   KeyRound,
   Check,
   Loader2,
+  UserPlus,
+  ShieldCheck,
 } from 'lucide-react';
 
 // نموذج مستخدم فارغ
@@ -58,6 +62,13 @@ const emptyUser: Omit<User, 'id' | 'createdAt' | 'updatedAt'> = {
   isActive: true,
   lastLoginAt: undefined,
 };
+
+// المؤشر العكسي الذي يكتبه linkAuthUser على مستند المستخدم. ليس جزءاً من نوع User لأنه
+// من شؤون المصادقة لا من بيانات الموظف، فنقرؤه بتوسيع صريح للنوع.
+const getAuthUid = (user: User): string | undefined =>
+  (user as User & { authUid?: string }).authUid;
+
+const hasSignInAccount = (user: User): boolean => Boolean(getAuthUid(user));
 
 export default function UsersPage() {
   const { t, language, isRTL } = useTranslation();
@@ -102,6 +113,12 @@ export default function UsersPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showResetPasswordConfirm, setShowResetPasswordConfirm] = useState(false);
   const [passwordResetSuccess, setPasswordResetSuccess] = useState(false);
+  const [passwordResetError, setPasswordResetError] = useState('');
+
+  // إنشاء حساب دخول لموظف قائم - نافذة التأكيد ونتيجتها
+  const [showCreateAccountConfirm, setShowCreateAccountConfirm] = useState(false);
+  const [createAccountSuccess, setCreateAccountSuccess] = useState(false);
+  const [createAccountError, setCreateAccountError] = useState('');
 
   // Filter users
   const filteredUsers = useMemo(() => {
@@ -151,6 +168,8 @@ export default function UsersPage() {
     total: usersData.length,
     active: usersData.filter((u) => u.isActive).length,
     auditors: usersData.filter((u) => u.canBeAuditor).length,
+    // من لم يُمنح حساب دخول بعد - رقم يتناقص إلى صفر مع اكتمال الإدخال
+    withoutSignIn: usersData.filter((u) => !u.isSystemAccount && !hasSignInAccount(u)).length,
   };
 
   // فتح نموذج إضافة مستخدم جديد
@@ -266,11 +285,44 @@ export default function UsersPage() {
           updatedAt: new Date(),
         };
 
+        // وثيقة الموظف أولاً: قواعد Firestore لا تقبل وثيقة الصلاحيات
+        // authUsers/{uid} إلا إذا كان المستخدم المشار إليه موجوداً فعلاً وبنفس الدور،
+        // ولأن الموظف بلا حساب دخول حالة يعرفها هذا الجدول ويعالجها بزر "إنشاء حساب
+        // دخول"، بينما حساب دخول بلا وثيقة موظف لا سبيل لإصلاحه من المتصفح.
         const success = await saveUser(newUser);
-        if (success) {
-          // إضافة كلمة مرور افتراضية للمستخدم الجديد
-          await setPassword(newUser.id, DEFAULT_PASSWORD);
-          await loadData(); // إعادة تحميل البيانات
+        if (!success) {
+          setFormErrors(prev => ({
+            ...prev,
+            general: language === 'ar'
+              ? 'فشل حفظ بيانات المستخدم، لم يتم إنشاء المستخدم'
+              : 'Failed to save the user data; the user was not created',
+          }));
+          return;
+        }
+
+        // ثم حساب الدخول - بنفس آلية زر "إنشاء حساب دخول" بالضبط: كلمة مرور عشوائية
+        // لا تُعرض ولا تُخزَّن، ثم رسالة يختار الموظف منها كلمة مروره بنفسه. لا توجد
+        // كلمة مرور افتراضية في أي مكان: أي قيمة ثابتة هنا تصل إلى حزمة JavaScript
+        // التي يستطيع أي شخص قراءتها، فتصبح كلمة مرور كل موظف جديد معروفة للجميع.
+        const accountResult = await createSignInAccountForUser(newUser);
+
+        await loadData(); // المستخدم محفوظ فعلاً - نعرضه كما هو في قاعدة البيانات
+
+        if (!accountResult.ok) {
+          // الموظف موجود لكن بلا حساب دخول: الجدول يعرضه هكذا ويعرض زر إنشاء الحساب،
+          // فالمحاولة الثانية لا تحتاج إعادة إدخال بياناته.
+          setFormErrors(prev => ({
+            ...prev,
+            general:
+              (language === 'ar'
+                ? 'حُفظت بيانات الموظف، لكن تعذّر إنشاء حساب الدخول: '
+                : 'The employee was saved, but the sign-in account could not be created: ') +
+              describeCreateAccountReason(accountResult.reason) +
+              (language === 'ar'
+                ? ' أغلق هذه النافذة واستخدم زر "إنشاء حساب دخول" في صف الموظف لإعادة المحاولة.'
+                : ' Close this window and use the "Create sign-in account" button on the employee row to try again.'),
+          }));
+          return;
         }
       }
 
@@ -303,10 +355,11 @@ export default function UsersPage() {
     }
   };
 
-  // إعادة تعيين كلمة المرور
+  // إعادة تعيين كلمة المرور - إرسال رابط إعادة تعيين من Firebase إلى بريد المستخدم
   const handleResetPassword = async () => {
     if (selectedUser) {
       setIsSaving(true);
+      setPasswordResetError('');
       try {
         const success = await resetUserPassword(selectedUser.id);
         if (success) {
@@ -314,13 +367,107 @@ export default function UsersPage() {
           setTimeout(() => {
             setPasswordResetSuccess(false);
             setShowResetPasswordConfirm(false);
-          }, 2000);
+          }, 2500);
+        } else {
+          setPasswordResetError(
+            language === 'ar'
+              ? 'تعذّر إرسال رابط إعادة تعيين كلمة المرور'
+              : 'Could not send the password reset link'
+          );
         }
       } catch (error) {
         console.error('Error resetting password:', error);
+        setPasswordResetError(
+          language === 'ar'
+            ? 'تعذّر إرسال رابط إعادة تعيين كلمة المرور'
+            : 'Could not send the password reset link'
+        );
       } finally {
         setIsSaving(false);
       }
+    }
+  };
+
+  // رسالة صريحة لكل سبب فشل في إنشاء حساب الدخول.
+  // لا شيء هنا يُقال إنه نجح جزئياً: إذا لم يُكتب الربط فالموظف لا يستطيع العمل، وإذا
+  // لم تُرسل الرسالة فهو لا يملك كلمة مرور - وكلاهما مكتوب كما هو.
+  const describeCreateAccountReason = (reason?: CreateSignInAccountReason): string => {
+    switch (reason) {
+      case 'account_exists':
+        return language === 'ar'
+          ? 'يوجد حساب دخول بهذا البريد الإلكتروني مسبقاً. إن تعذّر على الموظف الدخول، فالحساب موجود لكنه غير مربوط - يتولى ذلك مدير النظام من وحدة تحكم Firebase.'
+          : 'A sign-in account already exists for this email. If the employee still cannot sign in, the account exists but is not linked - the system administrator resolves that from the Firebase console.';
+      case 'not_linked':
+        return language === 'ar'
+          ? 'تعذّر كتابة ربط الصلاحيات أو تأكيده، فأُلغي الحساب الذي أُنشئ للتو ولم يبقَ أثر له - أعد المحاولة مباشرة. إن تكرر الفشل فالمشكلة في صلاحيات قاعدة البيانات.'
+          : 'The authorization link could not be written or confirmed, so the account that had just been created was removed again and nothing was left behind - you can retry straight away. If it keeps failing the problem is in the database rules.';
+      case 'reset_email_failed':
+        return language === 'ar'
+          ? 'أُنشئ الحساب وربطه بنجاح، لكن رسالة تعيين كلمة المرور لم تُرسل. استخدم "إعادة تعيين كلمة المرور" لإرسالها مرة أخرى.'
+          : 'The account and its link were created, but the password setup email was not sent. Use "Reset Password" to send it again.';
+      case 'inactive':
+        return language === 'ar'
+          ? 'هذا المستخدم معطّل، فلم يُنشأ له حساب دخول. فعّل المستخدم أولاً.'
+          : 'This user is disabled, so no sign-in account was created. Activate the user first.';
+      case 'no_email':
+        return language === 'ar'
+          ? 'لا يوجد بريد إلكتروني لهذا المستخدم، ولا يمكن إنشاء حساب دخول بدونه.'
+          : 'This user has no email address, and a sign-in account cannot be created without one.';
+      case 'auth_not_enabled':
+        return language === 'ar'
+          ? 'تسجيل الدخول بالبريد وكلمة المرور غير مفعّل في مشروع Firebase.'
+          : 'Email/password sign-in is not enabled in the Firebase project.';
+      case 'auth_not_configured':
+        return language === 'ar'
+          ? 'إعدادات الاتصال بـ Firebase غير مكتملة أو غير صحيحة.'
+          : 'The Firebase connection settings are missing or incorrect.';
+      case 'too_many_requests':
+        return language === 'ar'
+          ? 'تم إيقاف المحاولات مؤقتاً بعد عدد كبير من الطلبات. انتظر قليلاً ثم أعد المحاولة.'
+          : 'Requests are temporarily blocked after too many attempts. Wait a moment and try again.';
+      case 'network_error':
+        return language === 'ar'
+          ? 'تعذر الوصول إلى الخادم. تحقق من الاتصال ثم أعد المحاولة.'
+          : 'Could not reach the server. Check your connection and try again.';
+      default:
+        return language === 'ar'
+          ? 'تعذّر إنشاء حساب الدخول.'
+          : 'Could not create the sign-in account.';
+    }
+  };
+
+  // إنشاء حساب دخول لموظف قائم.
+  // المسؤول مسجّل الدخول بالفعل، فكل الكتابات تجري باسمه كما تشترط القواعد: يُنشأ الحساب
+  // على نسخة Firebase ثانوية بكلمة مرور عشوائية لا يراها أحد، ثم يُكتب الربط ويُؤكَّد،
+  // ثم تُرسل رسالة تعيين كلمة المرور ليختارها الموظف بنفسه.
+  const handleCreateSignInAccount = async () => {
+    if (!selectedUser) return;
+
+    setIsSaving(true);
+    setCreateAccountError('');
+    try {
+      const result = await createSignInAccountForUser(selectedUser);
+
+      // إعادة تحميل القائمة عند كل نتيجة غيّرت حالة الخادم، لا عند النجاح وحده:
+      //   ok                 صار للموظف حساب دخول
+      //   reset_email_failed الحساب والربط قائمان فعلاً، والصف كان يبقى "بلا حساب دخول"
+      //                      ويعرض زر الإنشاء الذي سيصطدم بأن البريد مستخدم مسبقاً
+      //   not_linked         أُلغي الحساب وأُزيل المؤشر من وثيقة المستخدم، فالصف يجب
+      //                      أن يعود ليعرض زر الإنشاء من جديد
+      if (result.ok || result.reason === 'reset_email_failed' || result.reason === 'not_linked') {
+        await loadData();
+      }
+
+      if (result.ok) {
+        setCreateAccountSuccess(true);
+      } else {
+        setCreateAccountError(describeCreateAccountReason(result.reason));
+      }
+    } catch (error) {
+      console.error('Error creating sign-in account:', error);
+      setCreateAccountError(describeCreateAccountReason());
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -397,6 +544,13 @@ export default function UsersPage() {
                 ? `إجمالي ${stats.total} مستخدم • ${stats.active} نشط • ${stats.auditors} مراجع`
                 : `Total ${stats.total} users • ${stats.active} active • ${stats.auditors} auditors`}
             </p>
+            {stats.withoutSignIn > 0 && (
+              <p className="mt-1 text-sm text-amber-600 dark:text-amber-400">
+                {language === 'ar'
+                  ? `${stats.withoutSignIn} مستخدم بلا حساب دخول - لا يستطيعون الدخول حتى يُنشأ لهم حساب`
+                  : `${stats.withoutSignIn} users have no sign-in account - they cannot sign in until one is created`}
+              </p>
+            )}
           </div>
           <button
             onClick={openAddForm}
@@ -572,6 +726,9 @@ export default function UsersPage() {
                       {t('users.canBeAuditor')}
                     </th>
                     <th className="px-4 py-3 text-start text-xs font-semibold uppercase tracking-wider text-[var(--foreground-secondary)]">
+                      {language === 'ar' ? 'حساب الدخول' : 'Sign-in Account'}
+                    </th>
+                    <th className="px-4 py-3 text-start text-xs font-semibold uppercase tracking-wider text-[var(--foreground-secondary)]">
                       {t('common.actions')}
                     </th>
                   </tr>
@@ -630,6 +787,24 @@ export default function UsersPage() {
                             <span className="text-[var(--foreground-muted)] text-xs">-</span>
                           )}
                         </td>
+                        {/* حالة حساب الدخول - يرى المسؤول من لم يُمنح حساباً بعد */}
+                        <td className="px-4 py-3">
+                          {hasSignInAccount(user) ? (
+                            <span className="inline-flex items-center gap-1 text-green-600 dark:text-green-400">
+                              <ShieldCheck className="h-4 w-4" />
+                              <span className="text-xs font-medium">
+                                {language === 'ar' ? 'موجود' : 'Created'}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                              <AlertCircle className="h-4 w-4" />
+                              <span className="text-xs font-medium">
+                                {language === 'ar' ? 'بلا حساب دخول' : 'No sign-in account'}
+                              </span>
+                            </span>
+                          )}
+                        </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
                             <button
@@ -646,10 +821,26 @@ export default function UsersPage() {
                             >
                               <Edit2 className="h-4 w-4" />
                             </button>
-                            {user.role !== 'system_admin' && (
+                            {!hasSignInAccount(user) && !user.isSystemAccount && (
                               <button
                                 onClick={() => {
                                   setSelectedUser(user);
+                                  setCreateAccountError('');
+                                  setCreateAccountSuccess(false);
+                                  setShowCreateAccountConfirm(true);
+                                }}
+                                className="rounded-lg p-2 text-[var(--foreground-secondary)] transition-colors hover:bg-green-50 hover:text-green-600 dark:hover:bg-green-900/20"
+                                title={language === 'ar' ? 'إنشاء حساب دخول' : 'Create sign-in account'}
+                              >
+                                <UserPlus className="h-4 w-4" />
+                              </button>
+                            )}
+                            {user.role !== 'system_admin' && hasSignInAccount(user) && (
+                              <button
+                                onClick={() => {
+                                  setSelectedUser(user);
+                                  setPasswordResetError('');
+                                  setPasswordResetSuccess(false);
                                   setShowResetPasswordConfirm(true);
                                 }}
                                 className="rounded-lg p-2 text-[var(--foreground-secondary)] transition-colors hover:bg-amber-50 hover:text-amber-600 dark:hover:bg-amber-900/20"
@@ -792,6 +983,24 @@ export default function UsersPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Sign-in account */}
+                <div className="flex items-center justify-between rounded-xl bg-[var(--background-secondary)] p-4">
+                  <span className="text-sm text-[var(--foreground-secondary)]">
+                    {language === 'ar' ? 'حساب الدخول' : 'Sign-in Account'}
+                  </span>
+                  {hasSignInAccount(currentSelectedUser) ? (
+                    <span className="inline-flex items-center gap-1 text-sm font-medium text-green-600 dark:text-green-400">
+                      <ShieldCheck className="h-4 w-4" />
+                      {language === 'ar' ? 'موجود' : 'Created'}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-sm font-medium text-amber-600 dark:text-amber-400">
+                      <AlertCircle className="h-4 w-4" />
+                      {language === 'ar' ? 'بلا حساب دخول' : 'No sign-in account'}
+                    </span>
+                  )}
+                </div>
 
                 {/* Status */}
                 <div className="flex items-center justify-between rounded-xl bg-[var(--background-secondary)] p-4">
@@ -1108,6 +1317,14 @@ export default function UsersPage() {
                 </div>
               </div>
 
+              {/* General error - إنشاء حساب الدخول أو حفظ المستند */}
+              {formErrors.general && (
+                <div className="mt-6 flex items-center gap-2 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
+                  <AlertCircle className="h-4 w-4 text-red-500" />
+                  <span className="text-sm text-red-600 dark:text-red-400">{formErrors.general}</span>
+                </div>
+              )}
+
               {/* Actions */}
               <div className="mt-6 flex items-center justify-between">
                 {isEditing && isSystemAdmin ? (
@@ -1215,8 +1432,11 @@ export default function UsersPage() {
                   </h3>
                   <p className="text-sm text-[var(--foreground-secondary)] text-center">
                     {language === 'ar'
-                      ? 'تم إعادة تعيين كلمة المرور إلى: Welcome@123'
-                      : 'Password has been reset to: Welcome@123'}
+                      ? 'تم إرسال رابط إعادة تعيين كلمة المرور إلى بريد المستخدم'
+                      : 'A password reset link has been sent to the user’s email'}
+                  </p>
+                  <p className="mt-1 text-sm font-medium text-[var(--foreground)]" dir="ltr">
+                    {selectedUser.email}
                   </p>
                 </div>
               ) : (
@@ -1239,13 +1459,24 @@ export default function UsersPage() {
                   <div className="rounded-xl bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800 p-4 mb-6">
                     <p className="text-sm text-amber-800 dark:text-amber-200">
                       {language === 'ar'
-                        ? 'سيتم تعيين كلمة المرور الجديدة إلى:'
-                        : 'New password will be set to:'}
+                        ? 'سيتم إرسال رابط إعادة تعيين كلمة المرور إلى:'
+                        : 'A password reset link will be sent to:'}
                     </p>
-                    <p className="text-lg font-mono font-bold text-amber-900 dark:text-amber-100 mt-1">
-                      Welcome@123
+                    <p className="text-base font-mono font-bold text-amber-900 dark:text-amber-100 mt-1" dir="ltr">
+                      {selectedUser.email}
+                    </p>
+                    <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                      {language === 'ar'
+                        ? 'لن تتغير كلمة المرور حتى يفتح المستخدم الرابط ويختار كلمة مرور جديدة.'
+                        : 'The password will not change until the user opens the link and chooses a new one.'}
                     </p>
                   </div>
+                  {passwordResetError && (
+                    <div className="flex items-center gap-2 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 mb-4">
+                      <AlertCircle className="h-4 w-4 text-red-500" />
+                      <span className="text-sm text-red-600 dark:text-red-400">{passwordResetError}</span>
+                    </div>
+                  )}
                   <div className="flex justify-end gap-3">
                     <button
                       onClick={() => setShowResetPasswordConfirm(false)}
@@ -1260,7 +1491,103 @@ export default function UsersPage() {
                       className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
                     >
                       {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                      {language === 'ar' ? 'إعادة التعيين' : 'Reset Password'}
+                      {language === 'ar' ? 'إرسال الرابط' : 'Send Reset Link'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Create Sign-in Account Confirmation Modal */}
+        {showCreateAccountConfirm && selectedUser && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+              onClick={() => !isSaving && setShowCreateAccountConfirm(false)}
+            />
+            <div className="relative w-full max-w-md rounded-2xl bg-[var(--card)] p-6 shadow-xl">
+              {createAccountSuccess ? (
+                <div className="flex flex-col items-center py-4">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30 mb-4">
+                    <Check className="h-8 w-8 text-green-600 dark:text-green-400" />
+                  </div>
+                  <h3 className="text-lg font-bold text-[var(--foreground)] mb-2">
+                    {language === 'ar' ? 'تم إنشاء حساب الدخول' : 'Sign-in account created'}
+                  </h3>
+                  <p className="text-sm text-[var(--foreground-secondary)] text-center">
+                    {language === 'ar'
+                      ? 'أُنشئ الحساب وربط بصلاحيات المستخدم، وأُرسلت رسالة تعيين كلمة المرور إلى:'
+                      : 'The account was created and linked to the user’s permissions, and a password setup email was sent to:'}
+                  </p>
+                  <p className="mt-1 text-sm font-medium text-[var(--foreground)]" dir="ltr">
+                    {selectedUser.email}
+                  </p>
+                  <button
+                    onClick={() => {
+                      setShowCreateAccountConfirm(false);
+                      setCreateAccountSuccess(false);
+                    }}
+                    className="mt-6 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--primary-hover)]"
+                  >
+                    {t('common.close')}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+                      <UserPlus className="h-6 w-6 text-green-600 dark:text-green-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-[var(--foreground)]">
+                        {language === 'ar' ? 'إنشاء حساب دخول' : 'Create sign-in account'}
+                      </h3>
+                      <p className="text-sm text-[var(--foreground-secondary)]">
+                        {language === 'ar'
+                          ? `منح "${selectedUser.fullNameAr}" إمكانية تسجيل الدخول؟`
+                          : `Give "${selectedUser.fullNameEn}" the ability to sign in?`}
+                      </p>
+                    </div>
+                  </div>
+                  {/* ما سيحدث بالضبط، بلا مواربة: حساب يُنشأ ورسالة تُرسل */}
+                  <div className="rounded-xl bg-green-50 dark:bg-green-900/10 border border-green-200 dark:border-green-800 p-4 mb-6">
+                    <p className="text-sm text-green-800 dark:text-green-200">
+                      {language === 'ar'
+                        ? 'سيتم إنشاء حساب دخول لهذا المستخدم وإرسال رسالة تعيين كلمة المرور إلى:'
+                        : 'A sign-in account will be created for this user and a password setup email will be sent to:'}
+                    </p>
+                    <p className="text-base font-mono font-bold text-green-900 dark:text-green-100 mt-1" dir="ltr">
+                      {selectedUser.email}
+                    </p>
+                    <p className="mt-2 text-xs text-green-700 dark:text-green-300">
+                      {language === 'ar'
+                        ? 'يختار المستخدم كلمة مروره بنفسه من تلك الرسالة، ولن تُعرض عليك أي كلمة مرور. جلستك أنت لا تتأثر.'
+                        : 'The user chooses their own password from that email; no password is shown to you. Your own session is not affected.'}
+                    </p>
+                  </div>
+                  {createAccountError && (
+                    <div className="flex items-start gap-2 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 mb-4">
+                      <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-500" />
+                      <span className="text-sm text-red-600 dark:text-red-400">{createAccountError}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-end gap-3">
+                    <button
+                      onClick={() => setShowCreateAccountConfirm(false)}
+                      disabled={isSaving}
+                      className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground-secondary)] transition-colors hover:bg-[var(--background-secondary)] disabled:opacity-50"
+                    >
+                      {t('common.cancel')}
+                    </button>
+                    <button
+                      onClick={handleCreateSignInAccount}
+                      disabled={isSaving}
+                      className="inline-flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-green-700 disabled:opacity-50"
+                    >
+                      {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {language === 'ar' ? 'إنشاء الحساب' : 'Create account'}
                     </button>
                   </div>
                 </>

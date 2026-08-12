@@ -3,11 +3,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
+import { Card, CardContent, CardHeader, CardTitle, Skeleton } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import {
   getAuditById,
+  getAuditNumber,
   updateAudit as updateAuditInFirestore,
   addNotification,
   getAllUsers,
@@ -167,6 +168,7 @@ interface AuditQuestion {
   clause: string;
   answer?: string;
   status: 'pending' | 'compliant' | 'non_compliant' | 'not_applicable';
+  findingId?: string; // معرف الملاحظة إذا تم رفعها من هذا السؤال
   notes?: string;
   attachments?: { id: string; name: string; size: number; webUrl: string }[]; // OneDrive attachments
 }
@@ -234,10 +236,11 @@ interface Finding {
 interface ActivityLogEntry {
   id: string;
   type: 'audit_created' | 'audit_submitted' | 'audit_approved' | 'audit_rejected' | 'audit_postponed' |
-        'modification_requested' | 'stage_changed' | 'question_added' | 'question_answered' |
-        'finding_added' | 'finding_updated' | 'corrective_action_added' | 'extension_requested' |
-        'extension_approved' | 'extension_rejected' | 'execution_confirmed' | 'comment_added' |
-        'department_response' | 'corrective_actions_approved';
+  'modification_requested' | 'stage_changed' | 'question_added' | 'question_answered' |
+  'question_edited' | 'question_deleted' |
+  'finding_added' | 'finding_updated' | 'corrective_action_added' | 'extension_requested' |
+  'extension_approved' | 'extension_rejected' | 'execution_confirmed' | 'comment_added' |
+  'department_response' | 'corrective_actions_approved';
   userId: string;
   timestamp: string;
   details: {
@@ -263,7 +266,7 @@ interface Audit {
   status: string;
   currentStage: number;
   leadAuditorId: string;
-  auditorIds: string[];
+  auditorIds: string[]; // يُحمّل من teamMemberIds في Firestore ويُحفظ إليه
   startDate: string;
   endDate: string;
   scope: string;
@@ -294,236 +297,15 @@ interface Audit {
   activityLog?: ActivityLogEntry[];
 }
 
-// Initial demo audits data (same as in main page)
-const initialAudits: Audit[] = [
-  {
-    id: '1',
-    number: 'AUD-2026-0001',
-    titleAr: 'مراجعة قسم الإنتاج',
-    titleEn: 'Production Department Audit',
-    type: 'internal',
-    departmentId: 'dept-3',
-    sectionId: 'sec-5',
-    status: 'execution',
-    currentStage: 1,
-    leadAuditorId: 'user-3',
-    auditorIds: ['user-3', 'user-5'],
-    startDate: '2026-01-25',
-    endDate: '2026-01-30',
-    scope: 'مراجعة عمليات التصنيع والجودة',
-    objective: 'التحقق من الالتزام بمتطلبات ISO 9001:2015',
-    questions: [
-      { id: 'q1', questionAr: 'هل يتم توثيق جميع عمليات الإنتاج؟', questionEn: 'Are all production processes documented?', clause: '8.5.1', answer: 'نعم، جميع العمليات موثقة', status: 'compliant' },
-      { id: 'q2', questionAr: 'هل يتم إجراء فحوصات الجودة بانتظام؟', questionEn: 'Are quality checks performed regularly?', clause: '8.6', answer: 'نعم، كل ساعتين', status: 'compliant' },
-      { id: 'q3', questionAr: 'هل تم تدريب جميع الموظفين؟', questionEn: 'Are all employees trained?', clause: '7.2', status: 'pending' },
-    ],
-    findings: [
-      {
-        id: 'f1',
-        reportNumber: 'FND-2026-001',
-        departmentId: 'dept-3',
-        sectionId: 'sec-5',
-        clause: 'ISO 9001:2015 - 8.5.1',
-        finding: 'عدم توثيق بعض إجراءات الصيانة الوقائية',
-        evidence: 'سجلات الصيانة للفترة من يناير إلى مارس 2026',
-        categoryA: 'quality',
-        categoryB: 'minor_nc',
-        estimatedClosingDate: '2026-02-15',
-        status: 'open',
-        createdAt: '2026-01-26',
-      },
-    ],
-    createdAt: '2026-01-20',
-  },
-  {
-    id: '2',
-    number: 'AUD-2026-0002',
-    titleAr: 'مراجعة الموارد البشرية',
-    titleEn: 'Human Resources Audit',
-    type: 'internal',
-    departmentId: 'dept-1',
-    status: 'planning',
-    currentStage: 0,
-    leadAuditorId: 'user-3',
-    auditorIds: ['user-3'],
-    startDate: '2026-02-01',
-    endDate: '2026-02-05',
-    scope: 'مراجعة عمليات التوظيف والتدريب',
-    objective: 'التحقق من الالتزام بسياسات الموارد البشرية',
-    questions: [],
-    findings: [],
-    createdAt: '2026-01-25',
-  },
-  {
-    id: '3',
-    number: 'AUD-2026-0003',
-    titleAr: 'مراجعة ISO 9001 الخارجية',
-    titleEn: 'ISO 9001 External Audit',
-    type: 'external',
-    departmentId: 'dept-2',
-    status: 'planning',
-    currentStage: 0,
-    leadAuditorId: 'user-3',
-    auditorIds: ['user-3'],
-    startDate: '2026-03-15',
-    endDate: '2026-03-18',
-    scope: 'مراجعة نظام إدارة الجودة الشامل',
-    objective: 'تجديد شهادة ISO 9001:2015',
-    questions: [],
-    findings: [],
-    createdAt: '2026-01-15',
-  },
-  {
-    id: '4',
-    number: 'AUD-2025-0012',
-    titleAr: 'مراجعة المشتريات',
-    titleEn: 'Procurement Audit',
-    type: 'internal',
-    departmentId: 'dept-4',
-    sectionId: 'sec-7',
-    status: 'qms_review',
-    currentStage: 2,
-    leadAuditorId: 'user-5',
-    auditorIds: ['user-5', 'user-3'],
-    startDate: '2025-12-10',
-    endDate: '2025-12-15',
-    scope: 'مراجعة عمليات الشراء وتقييم الموردين',
-    objective: 'التحقق من الالتزام بإجراءات الشراء',
-    questions: [
-      { id: 'q4', questionAr: 'هل يتم تقييم الموردين سنوياً؟', questionEn: 'Are suppliers evaluated annually?', clause: '8.4', answer: 'بعض الموردين لم يتم تقييمهم', status: 'non_compliant' },
-    ],
-    findings: [
-      {
-        id: 'f2',
-        reportNumber: 'FND-2025-012',
-        departmentId: 'dept-4',
-        clause: 'ISO 9001:2015 - 8.4',
-        finding: 'عدم إجراء تقييم دوري لبعض الموردين',
-        evidence: 'قائمة الموردين النشطين',
-        categoryA: 'quality',
-        categoryB: 'observation',
-        estimatedClosingDate: '2026-01-30',
-        rootCause: 'نقص في الموارد البشرية لإجراء التقييمات',
-        correctiveAction: 'توظيف مختص إضافي لتقييم الموردين',
-        status: 'in_progress',
-        createdAt: '2025-12-12',
-      },
-    ],
-    createdAt: '2025-12-01',
-  },
-  {
-    id: '5',
-    number: 'AUD-2025-0011',
-    titleAr: 'مراجعة المستودعات',
-    titleEn: 'Warehouse Audit',
-    type: 'internal',
-    departmentId: 'dept-3',
-    sectionId: 'sec-6',
-    status: 'completed',
-    currentStage: 5,
-    leadAuditorId: 'user-3',
-    auditorIds: ['user-3', 'user-5'],
-    startDate: '2025-11-20',
-    endDate: '2025-11-25',
-    scope: 'مراجعة إدارة المخزون والتخزين',
-    objective: 'التحقق من سلامة المخزون',
-    questions: [],
-    findings: [],
-    qmsApproval: {
-      approved: true,
-      comment: 'تمت الموافقة على نتائج المراجعة',
-      date: '2025-11-26',
-      approvedBy: 'user-3',
-    },
-    createdAt: '2025-11-15',
-  },
-  // مراجعة على الموارد البشرية - مرحلة الإجراءات التصحيحية
-  {
-    id: '6',
-    number: 'AUD-2025-0010',
-    titleAr: 'مراجعة قسم التوظيف',
-    titleEn: 'Recruitment Section Audit',
-    type: 'internal',
-    departmentId: 'dept-1',
-    sectionId: 'sec-1',
-    status: 'corrective_actions',
-    currentStage: 3,
-    leadAuditorId: 'user-3',
-    auditorIds: ['user-3'],
-    startDate: '2025-12-01',
-    endDate: '2025-12-05',
-    scope: 'مراجعة إجراءات التوظيف والاختيار',
-    objective: 'التحقق من الالتزام بسياسات التوظيف',
-    questions: [
-      { id: 'q5', questionAr: 'هل يتم توثيق جميع طلبات التوظيف؟', questionEn: 'Are all recruitment requests documented?', clause: '7.1.2', answer: 'نعم', status: 'compliant' },
-      { id: 'q6', questionAr: 'هل يتم إجراء مقابلات منظمة؟', questionEn: 'Are structured interviews conducted?', clause: '7.2', answer: 'لا يوجد نموذج موحد', status: 'non_compliant' },
-    ],
-    findings: [
-      {
-        id: 'f3',
-        reportNumber: 'FND-2025-010',
-        departmentId: 'dept-1',
-        sectionId: 'sec-1',
-        clause: 'ISO 9001:2015 - 7.2',
-        finding: 'عدم وجود نموذج موحد للمقابلات الوظيفية',
-        evidence: 'ملفات التوظيف للربع الأخير 2025',
-        categoryA: 'quality',
-        categoryB: 'minor_nc',
-        estimatedClosingDate: '2026-02-28',
-        status: 'open',
-        createdAt: '2025-12-05',
-      },
-      {
-        id: 'f4',
-        reportNumber: 'FND-2025-011',
-        departmentId: 'dept-1',
-        sectionId: 'sec-1',
-        clause: 'ISO 9001:2015 - 7.5',
-        finding: 'تأخر في أرشفة بعض ملفات الموظفين الجدد',
-        evidence: 'ملفات التوظيف للشهرين الأخيرين',
-        categoryA: 'quality',
-        categoryB: 'observation',
-        estimatedClosingDate: '2026-02-15',
-        status: 'open',
-        createdAt: '2025-12-05',
-      },
-    ],
-    qmsApproval: {
-      approved: true,
-      comment: 'تمت الموافقة على نتائج المراجعة، يرجى متابعة الإجراءات التصحيحية',
-      date: '2025-12-10',
-      approvedBy: 'user-3',
-    },
-    createdAt: '2025-11-25',
-  },
-  // مراجعة مكتملة على الموارد البشرية
-  {
-    id: '7',
-    number: 'AUD-2025-0008',
-    titleAr: 'مراجعة التدريب والتطوير',
-    titleEn: 'Training & Development Audit',
-    type: 'internal',
-    departmentId: 'dept-1',
-    sectionId: 'sec-2',
-    status: 'completed',
-    currentStage: 5,
-    leadAuditorId: 'user-5',
-    auditorIds: ['user-5'],
-    startDate: '2025-10-15',
-    endDate: '2025-10-20',
-    scope: 'مراجعة برامج التدريب والتطوير',
-    objective: 'التحقق من فعالية برامج التدريب',
-    questions: [],
-    findings: [],
-    qmsApproval: {
-      approved: true,
-      comment: 'لا توجد ملاحظات',
-      date: '2025-10-22',
-      approvedBy: 'user-3',
-    },
-    createdAt: '2025-10-10',
-  },
-];
+// حقول يحفظها saveAudit في مستند Firestore وهي غير معرّفة في نوع Audit في firestore.ts
+type StoredAuditExtras = Pick<Audit,
+  'executionConfirmed' | 'executionConfirmedAt' | 'executionConfirmedBy' |
+  'correctiveActionsApproved' | 'correctiveActionsApprovedAt' | 'correctiveActionsApprovedBy' |
+  'correctiveActionsApprovalComment'
+>;
+
+// حالات تحدد المرحلة بذاتها: المرحلة المخزّنة معها لا يُعتد بها لأنها قد تكون قديمة
+const STATUS_DETERMINED_STAGES = ['completed', 'cancelled'];
 
 export default function AuditDetailPage() {
   const router = useRouter();
@@ -577,6 +359,11 @@ export default function AuditDetailPage() {
   // Selected question for answering
   const [selectedQuestion, setSelectedQuestion] = useState<AuditQuestion | null>(null);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
+  // Question being edited in the question modal (null = add mode)
+  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
+  // Question pending delete confirmation
+  const [questionToDelete, setQuestionToDelete] = useState<AuditQuestion | null>(null);
+  const [showDeleteQuestionModal, setShowDeleteQuestionModal] = useState(false);
   const [questionAnswer, setQuestionAnswer] = useState({
     answer: '',
     status: 'pending' as 'pending' | 'compliant' | 'non_compliant' | 'not_applicable',
@@ -620,28 +407,45 @@ export default function AuditDetailPage() {
       try {
         const firestoreAudit = await getAuditById(auditId);
         if (firestoreAudit) {
+          // حقول محفوظة في نفس مستند Firestore لكنها غير معرّفة في نوع Audit هناك
+          const storedExtras = firestoreAudit as typeof firestoreAudit & StoredAuditExtras;
           // Convert Firestore audit to local Audit interface
+          // كل حقل يحفظه saveAudit يجب تحميله هنا، وإلا أعاد الحفظ كتابة قيمة فارغة فوق المخزّن
           const convertedAudit: Audit = {
             id: firestoreAudit.id,
-            number: firestoreAudit.id.replace('audit-', 'AUD-'),
+            number: getAuditNumber(firestoreAudit),
             titleAr: firestoreAudit.titleAr,
             titleEn: firestoreAudit.titleEn,
             type: firestoreAudit.type,
             departmentId: firestoreAudit.departmentId,
             sectionId: firestoreAudit.sectionId,
             status: firestoreAudit.status,
-            currentStage: getStageFromStatus(firestoreAudit.status),
+            // الحالات النهائية تحدد المرحلة بنفسها، فأي مرحلة مخزّنة معها تكون قديمة
+            // (مثلاً الرفض من صفحة المراجعات يغيّر الحالة إلى cancelled دون تحديث المرحلة).
+            // فيما عدا ذلك المرحلة المخزّنة هي المرجع، والاشتقاق احتياطي للمراجعات القديمة
+            currentStage: STATUS_DETERMINED_STAGES.includes(firestoreAudit.status)
+              ? getStageFromStatus(firestoreAudit.status)
+              : firestoreAudit.currentStage ?? getStageFromStatus(firestoreAudit.status),
             leadAuditorId: firestoreAudit.leadAuditorId,
             auditorIds: firestoreAudit.teamMemberIds || [],
             startDate: firestoreAudit.startDate,
             endDate: firestoreAudit.endDate,
             scope: firestoreAudit.scope || '',
             objective: firestoreAudit.objectives || '',
-            questions: [],
+            questions: firestoreAudit.questions || [],
             findings: firestoreAudit.findings || [],
+            qmsApproval: firestoreAudit.qmsApproval,
+            qmsApprovalData: firestoreAudit.qmsApprovalData,
+            executionConfirmed: storedExtras.executionConfirmed,
+            executionConfirmedAt: storedExtras.executionConfirmedAt,
+            executionConfirmedBy: storedExtras.executionConfirmedBy,
+            correctiveActionsApproved: storedExtras.correctiveActionsApproved,
+            correctiveActionsApprovedAt: storedExtras.correctiveActionsApprovedAt,
+            correctiveActionsApprovedBy: storedExtras.correctiveActionsApprovedBy,
+            correctiveActionsApprovalComment: storedExtras.correctiveActionsApprovalComment,
             createdAt: firestoreAudit.createdAt,
             createdBy: firestoreAudit.createdBy,
-            activityLog: [],
+            activityLog: firestoreAudit.activityLog || [],
           };
           setAudit(convertedAudit);
         }
@@ -676,7 +480,8 @@ export default function AuditDetailPage() {
   // Save audit changes to Firestore
   const saveAudit = async (updatedAudit: Audit) => {
     // Update in Firestore - include all important fields
-    await updateAuditInFirestore(auditId, {
+    // كل حقل هنا يجب أن يُقرأ في loadAudit أيضاً، وإلا ضاع بعد إعادة التحميل
+    const payload = {
       titleAr: updatedAudit.titleAr,
       titleEn: updatedAudit.titleEn,
       type: updatedAudit.type,
@@ -695,7 +500,16 @@ export default function AuditDetailPage() {
       qmsApproval: updatedAudit.qmsApproval, // Save QMS approval data
       qmsApprovalData: updatedAudit.qmsApprovalData, // Save detailed QMS approval data
       activityLog: updatedAudit.activityLog, // Save activity log
-    });
+      // Execution confirmation and corrective actions approval
+      executionConfirmed: updatedAudit.executionConfirmed,
+      executionConfirmedAt: updatedAudit.executionConfirmedAt,
+      executionConfirmedBy: updatedAudit.executionConfirmedBy,
+      correctiveActionsApproved: updatedAudit.correctiveActionsApproved,
+      correctiveActionsApprovedAt: updatedAudit.correctiveActionsApprovedAt,
+      correctiveActionsApprovedBy: updatedAudit.correctiveActionsApprovedBy,
+      correctiveActionsApprovalComment: updatedAudit.correctiveActionsApprovalComment,
+    };
+    await updateAuditInFirestore(auditId, payload);
     setAudit(updatedAudit);
   };
 
@@ -947,6 +761,103 @@ export default function AuditDetailPage() {
     setShowQuestionModal(false);
   };
 
+  // Open the question modal in add mode
+  const openAddQuestionModal = () => {
+    setNewQuestion({ questionAr: '', questionEn: '', clause: '' });
+    setEditingQuestionId(null);
+    setShowQuestionModal(true);
+  };
+
+  // Open the question modal in edit mode (reuses the add-question modal)
+  const openEditQuestionModal = (question: AuditQuestion) => {
+    if (!canEditQuestion(question)) return;
+    setEditingQuestionId(question.id);
+    setNewQuestion({
+      questionAr: question.questionAr,
+      questionEn: question.questionEn,
+      clause: question.clause,
+    });
+    setShowQuestionModal(true);
+  };
+
+  // Close the question modal and reset its state
+  const closeQuestionModal = () => {
+    setNewQuestion({ questionAr: '', questionEn: '', clause: '' });
+    setEditingQuestionId(null);
+    setShowQuestionModal(false);
+  };
+
+  // A question is locked once it has been answered or linked to a finding: rewriting its
+  // text would leave the old answer and the old evidence attached to a different question
+  const isQuestionLocked = (question: AuditQuestion) =>
+    Boolean(question.answer) || question.status !== 'pending' || Boolean(question.findingId);
+
+  // A question can only be edited while it is still unanswered and unlinked
+  const canEditQuestion = (question: AuditQuestion) => !isQuestionLocked(question);
+
+  // Edit question (only if it has no answer and no linked finding)
+  const handleEditQuestion = () => {
+    if (!audit || !editingQuestionId || !newQuestion.questionAr) return;
+
+    const originalQuestion = audit.questions.find(q => q.id === editingQuestionId);
+    if (!originalQuestion || !canEditQuestion(originalQuestion)) return;
+
+    const updatedQuestions = audit.questions.map(q =>
+      q.id === editingQuestionId
+        ? {
+          ...q,
+          questionAr: newQuestion.questionAr,
+          questionEn: newQuestion.questionEn || newQuestion.questionAr,
+          clause: newQuestion.clause,
+        }
+        : q
+    );
+
+    let updatedAudit = {
+      ...audit,
+      questions: updatedQuestions,
+    };
+
+    // Add activity log
+    updatedAudit = addActivityLog(updatedAudit, 'question_edited', {
+      questionId: editingQuestionId,
+      description: `تم تعديل السؤال: "${newQuestion.questionAr.substring(0, 50)}${newQuestion.questionAr.length > 50 ? '...' : ''}"`,
+    });
+
+    saveAudit(updatedAudit);
+    closeQuestionModal();
+  };
+
+  // A question can only be deleted while it is still unanswered and unlinked
+  const canDeleteQuestion = (question: AuditQuestion) => !isQuestionLocked(question);
+
+  // Open the delete confirmation for a question
+  const openDeleteQuestionModal = (question: AuditQuestion) => {
+    setQuestionToDelete(question);
+    setShowDeleteQuestionModal(true);
+  };
+
+  // Delete question (only if it has no answer and no linked finding)
+  const handleDeleteQuestion = () => {
+    if (!audit || !questionToDelete || !canDeleteQuestion(questionToDelete)) return;
+
+    const updatedAudit = addActivityLog(
+      {
+        ...audit,
+        questions: audit.questions.filter(q => q.id !== questionToDelete.id),
+      },
+      'question_deleted',
+      {
+        questionId: questionToDelete.id,
+        description: `تم حذف السؤال: "${questionToDelete.questionAr.substring(0, 50)}${questionToDelete.questionAr.length > 50 ? '...' : ''}"`,
+      }
+    );
+
+    saveAudit(updatedAudit);
+    setQuestionToDelete(null);
+    setShowDeleteQuestionModal(false);
+  };
+
   // Answer question
   const handleAnswerQuestion = () => {
     if (!audit || !selectedQuestion) return;
@@ -1052,22 +963,41 @@ export default function AuditDetailPage() {
 
     saveAudit(updatedAudit);
 
-    // Send notification to auditee department employees
+    // Send notification to the auditee department, the audit team and the quality managers
     const targetDepartmentId = newFinding.departmentId || audit.departmentId;
     const deptEmployees = allUsers.filter(u =>
       u.departmentId === targetDepartmentId && u.isActive
     );
+    // فريق المراجعة (رئيس الفريق والمراجعون) - المستخدمون غير النشطين لا يُشعَرون
+    const auditTeamIds = allUsers
+      .filter(u => u.isActive && (u.id === audit.leadAuditorId || (audit.auditorIds || []).includes(u.id)))
+      .map(u => u.id);
+    const qualityManagerIds = allUsers
+      .filter(u => u.role === 'quality_manager' && u.isActive)
+      .map(u => u.id);
 
-    if (deptEmployees.length > 0) {
+    // Deduplicate and never notify the user who raised the finding
+    const recipientIds = Array.from(new Set([
+      ...deptEmployees.map(e => e.id),
+      ...auditTeamIds,
+      ...qualityManagerIds,
+    ])).filter(id => id && id !== currentUser?.id);
+
+    if (recipientIds.length > 0) {
       const dept = allDepartments.find(d => d.id === targetDepartmentId);
-      const deptName = dept?.nameAr || '';
+      const deptName = (language === 'ar' ? dept?.nameAr : dept?.nameEn) || '';
+      const findingExcerpt = `${newFinding.finding.substring(0, 100)}${newFinding.finding.length > 100 ? '...' : ''}`;
 
       sendNotification({
         type: 'new_finding',
-        title: `ملاحظة جديدة - ${finding.reportNumber}`,
-        message: `تم تسجيل ملاحظة جديدة على إدارة ${deptName}: "${newFinding.finding.substring(0, 100)}${newFinding.finding.length > 100 ? '...' : ''}"`,
+        title: language === 'ar'
+          ? `ملاحظة جديدة - ${finding.reportNumber}`
+          : `New Finding - ${finding.reportNumber}`,
+        message: language === 'ar'
+          ? `تم تسجيل ملاحظة جديدة على إدارة ${deptName}: "${findingExcerpt}"`
+          : `A new finding was recorded on ${deptName} department: "${findingExcerpt}"`,
         auditId: audit.id,
-        forUserIds: deptEmployees.map(e => e.id),
+        forUserIds: recipientIds,
       });
     }
     setNewFinding({
@@ -1089,8 +1019,6 @@ export default function AuditDetailPage() {
   // Handle approval
   const handleApproval = (approved: boolean) => {
     if (!audit) return;
-
-    const currentUser = allUsers.find(u => u.id === 'user-3'); // In real app, get from auth context
 
     const updatedAudit = {
       ...audit,
@@ -1120,7 +1048,7 @@ export default function AuditDetailPage() {
       newDate: extensionRequest.newDate,
       reason: extensionRequest.reason,
       status: 'pending',
-      requestedBy: 'user-3', // In real app, get from auth context
+      requestedBy: currentUser?.id || '',
     };
 
     const updatedFindings = audit.findings.map(f =>
@@ -1147,7 +1075,7 @@ export default function AuditDetailPage() {
             return {
               ...er,
               status: newStatus,
-              reviewedBy: 'user-3',
+              reviewedBy: currentUser?.id || '',
               reviewedAt: new Date().toISOString(),
             };
           }
@@ -1176,11 +1104,11 @@ export default function AuditDetailPage() {
     const updatedFindings = audit.findings.map(f =>
       f.id === selectedFinding.id
         ? {
-            ...f,
-            rootCause: correctiveActionForm.rootCause,
-            correctiveAction: correctiveActionForm.correctiveAction,
-            status: 'in_progress' as const,
-          }
+          ...f,
+          rootCause: correctiveActionForm.rootCause,
+          correctiveAction: correctiveActionForm.correctiveAction,
+          status: 'in_progress' as const,
+        }
         : f
     );
 
@@ -1210,23 +1138,23 @@ export default function AuditDetailPage() {
     const updatedFindings = audit.findings.map(f =>
       f.id === selectedFinding.id
         ? {
-            ...f,
-            departmentResponse: {
-              approvedBy: currentUser?.id || '',
-              approvedAt: new Date().toISOString(),
-              closingDate: auditeeResponseForm.closingDate,
-              comment: auditeeResponseForm.comment || undefined,
-              attachments: auditeeResponseForm.attachments.map(file => ({
-                type: 'onedrive' as const,
-                name: file.name,
-                size: file.size,
-                webUrl: file.webUrl,
-                id: file.id,
-              })),
-            },
-            estimatedClosingDate: auditeeResponseForm.closingDate,
-            status: 'in_progress' as const,
-          }
+          ...f,
+          departmentResponse: {
+            approvedBy: currentUser?.id || '',
+            approvedAt: new Date().toISOString(),
+            closingDate: auditeeResponseForm.closingDate,
+            comment: auditeeResponseForm.comment || undefined,
+            attachments: auditeeResponseForm.attachments.map(file => ({
+              type: 'onedrive' as const,
+              name: file.name,
+              size: file.size,
+              webUrl: file.webUrl,
+              id: file.id,
+            })),
+          },
+          estimatedClosingDate: auditeeResponseForm.closingDate,
+          status: 'in_progress' as const,
+        }
         : f
     );
 
@@ -1433,8 +1361,8 @@ export default function AuditDetailPage() {
       modification_requested: 'تم طلب تعديلات على المراجعة',
     };
     const activityType = decision === 'approved' ? 'audit_approved' :
-                        decision === 'rejected' ? 'audit_rejected' :
-                        decision === 'postponed' ? 'audit_postponed' : 'modification_requested';
+      decision === 'rejected' ? 'audit_rejected' :
+        decision === 'postponed' ? 'audit_postponed' : 'modification_requested';
 
     updatedAudit = addActivityLog(updatedAudit, activityType, {
       description: decisionLabels[decision],
@@ -1582,8 +1510,8 @@ export default function AuditDetailPage() {
     currentUser?.role === 'quality_manager' &&
     audit?.status === 'qms_review' &&
     (!audit?.qmsApprovalData?.currentDecision ||
-     audit?.qmsApprovalData?.currentDecision === 'modification_requested' &&
-     audit?.qmsApprovalData?.currentDecision === null);
+      audit?.qmsApprovalData?.currentDecision === 'modification_requested' &&
+      audit?.qmsApprovalData?.currentDecision === null);
 
   const canEditAudit =
     audit?.status === 'qms_review' &&
@@ -1593,17 +1521,77 @@ export default function AuditDetailPage() {
   const canReply =
     audit?.status === 'qms_review' &&
     (currentUser?.role === 'quality_manager' ||
-     audit?.auditorIds?.includes(currentUser?.id || ''));
+      audit?.auditorIds?.includes(currentUser?.id || ''));
 
+  // Skeleton Loading State
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[var(--primary)] mx-auto"></div>
-            <p className="mt-4 text-[var(--foreground-secondary)]">
-              {language === 'ar' ? 'جاري التحميل...' : 'Loading...'}
-            </p>
+        <div className="space-y-6">
+          {/* Header Skeleton */}
+          <div className="flex items-center justify-between">
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-8 w-64" />
+            </div>
+            <Skeleton className="h-10 w-32" />
+          </div>
+
+          {/* Progress Bar Skeleton */}
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex justify-between items-center mb-6">
+                {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <div key={i} className="flex flex-col items-center gap-2">
+                    <Skeleton className="h-10 w-10 rounded-full" />
+                    <Skeleton className="h-4 w-20" />
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Tabs Skeleton */}
+          <div className="flex gap-2">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <Skeleton key={i} className="h-10 w-24 rounded-md" />
+            ))}
+          </div>
+
+          {/* Content Skeleton */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 space-y-6">
+              <Card>
+                <CardHeader>
+                  <Skeleton className="h-6 w-40" />
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <Skeleton className="h-20 w-full" />
+                    <Skeleton className="h-20 w-full" />
+                  </div>
+                  <Skeleton className="h-32 w-full" />
+                </CardContent>
+              </Card>
+            </div>
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <Skeleton className="h-6 w-32" />
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-3">
+                      <Skeleton className="h-10 w-10 rounded-full" />
+                      <div className="space-y-2">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-3 w-24" />
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </div>
         </div>
       </DashboardLayout>
@@ -1648,8 +1636,14 @@ export default function AuditDetailPage() {
     return lead ? (language === 'ar' ? lead.fullNameAr : lead.fullNameEn) : '';
   };
 
+  // اعتماد إدارة الجودة يتحقق فقط عندما يتفق التمثيلان: سجل الاعتماد القديم يقول "معتمد"
+  // ولا يوجد قرار أحدث يناقضه (رفض أو تأجيل أو طلب تعديل). وجود السجل وحده لا يكفي،
+  // فالرفض يكتب سجلاً بـ approved: false ويُبقي المراجعة في مرحلة مراجعة الجودة
+  const isApprovedByQMS = audit.qmsApproval?.approved === true &&
+    (!audit.qmsApprovalData?.currentDecision || audit.qmsApprovalData.currentDecision === 'approved');
+
   // Check if waiting for approval
-  const isWaitingForApproval = currentStage.requiresApproval && !audit.qmsApproval;
+  const isWaitingForApproval = currentStage.requiresApproval && !isApprovedByQMS;
 
   // Check if can move to previous stage
   const canMoveToPrev = audit.currentStage > 0 && audit.currentStage < workflowStages.length - 1;
@@ -1685,6 +1679,18 @@ export default function AuditDetailPage() {
 
   // Users who can see full audit details: QMS Manager, Lead Auditor, or Auditors
   const canSeeFullDetails = isQualityManager || isLeadAuditor || isAuditor;
+
+  // Users who can edit/delete audit questions: audit team, QMS Manager or system admin
+  const canManageQuestions = isLeadAuditor || isAuditor || isQualityManager || currentUser?.role === 'system_admin';
+
+  // المراحل التي يُسمح فيها بتغيير قائمة الأسئلة: التخطيط والتنفيذ،
+  // أو أثناء مراجعة الجودة عندما يطلب مدير الجودة تعديلاً من أحد المراجعين
+  const isQuestionEditingStage = audit.currentStage === 0 || audit.currentStage === 1 ||
+    (audit.currentStage === 2 && audit.qmsApprovalData?.currentDecision === 'modification_requested' &&
+      audit.auditorIds.includes(currentUser?.id || ''));
+
+  // التعديل والحذف لا يكونان أوسع صلاحية من الإضافة: نفس شرط المرحلة + صلاحية إدارة الأسئلة
+  const canModifyQuestions = canManageQuestions && isQuestionEditingStage;
 
   // Users from audited department who are not auditors can only see limited info
   const isAuditeeOnly = isFromAuditedDepartment && !canSeeFullDetails;
@@ -1794,25 +1800,22 @@ export default function AuditDetailPage() {
                 return (
                   <div key={stage.id} className="flex items-center flex-shrink-0">
                     <div className="flex flex-col items-center">
-                      <div className={`flex items-center justify-center w-12 h-12 rounded-full transition-colors ${
-                        isCompleted
-                          ? 'bg-green-500 text-white'
-                          : isCurrent
-                            ? 'bg-[var(--primary)] text-white'
-                            : 'bg-[var(--background-secondary)] text-[var(--foreground-secondary)]'
-                      }`}>
+                      <div className={`flex items-center justify-center w-12 h-12 rounded-full transition-colors ${isCompleted
+                        ? 'bg-green-500 text-white'
+                        : isCurrent
+                          ? 'bg-[var(--primary)] text-white'
+                          : 'bg-[var(--background-secondary)] text-[var(--foreground-secondary)]'
+                        }`}>
                         {isCompleted ? <CheckCircle className="h-6 w-6" /> : <Icon className="h-6 w-6" />}
                       </div>
-                      <p className={`text-xs mt-2 text-center max-w-[80px] ${
-                        isCurrent ? 'font-semibold text-[var(--primary)]' : 'text-[var(--foreground-secondary)]'
-                      }`}>
+                      <p className={`text-xs mt-2 text-center max-w-[80px] ${isCurrent ? 'font-semibold text-[var(--primary)]' : 'text-[var(--foreground-secondary)]'
+                        }`}>
                         {language === 'ar' ? stage.stepAr : stage.stepEn}
                       </p>
                     </div>
                     {idx < workflowStages.length - 1 && (
-                      <div className={`w-12 h-1 mx-2 rounded-full ${
-                        isCompleted ? 'bg-green-500' : 'bg-[var(--background-secondary)]'
-                      }`} />
+                      <div className={`w-12 h-1 mx-2 rounded-full ${isCompleted ? 'bg-green-500' : 'bg-[var(--background-secondary)]'
+                        }`} />
                     )}
                   </div>
                 );
@@ -1894,37 +1897,36 @@ export default function AuditDetailPage() {
         <div className="flex gap-2 border-b border-[var(--border)] overflow-x-auto">
           {(isAuditeeOnly
             ? [
-                // الموظف المدقق عليه يرى التفاصيل فقط، والملاحظات فقط إذا كان لديه ملاحظات
-                { id: 'details', labelAr: 'التفاصيل', labelEn: 'Details' },
-                ...(hasAuditeeFindings ? [{ id: 'findings', labelAr: 'الملاحظات', labelEn: 'Findings', count: audit.findings.filter(f => f.departmentId === currentUser?.departmentId).length }] : []),
-              ]
+              // الموظف المدقق عليه يرى التفاصيل فقط، والملاحظات فقط إذا كان لديه ملاحظات
+              { id: 'details', labelAr: 'التفاصيل', labelEn: 'Details' },
+              ...(hasAuditeeFindings ? [{ id: 'findings', labelAr: 'الملاحظات', labelEn: 'Findings', count: audit.findings.filter(f => f.departmentId === currentUser?.departmentId).length }] : []),
+            ]
             : isDualRole
               ? [
-                  // المستخدم مراجع ومراجع عليه - يرى كل شيء مع تبويب خاص للملاحظات عليه
-                  { id: 'details', labelAr: 'التفاصيل', labelEn: 'Details' },
-                  { id: 'questions', labelAr: 'الأسئلة', labelEn: 'Questions', count: audit.questions.length },
-                  { id: 'findings', labelAr: 'الملاحظات (كمراجع)', labelEn: 'Findings (As Auditor)', count: audit.findings.length },
-                  ...(hasAuditeeFindings ? [{ id: 'my_findings', labelAr: 'الملاحظات عليّ', labelEn: 'My Findings', count: audit.findings.filter(f => f.departmentId === currentUser?.departmentId).length }] : []),
-                  { id: 'approval', labelAr: 'الموافقات', labelEn: 'Approvals' },
-                  { id: 'activity', labelAr: 'سجل النشاطات', labelEn: 'Activity Log', count: audit.activityLog?.length || 0 },
-                ]
+                // المستخدم مراجع ومراجع عليه - يرى كل شيء مع تبويب خاص للملاحظات عليه
+                { id: 'details', labelAr: 'التفاصيل', labelEn: 'Details' },
+                { id: 'questions', labelAr: 'الأسئلة', labelEn: 'Questions', count: audit.questions.length },
+                { id: 'findings', labelAr: 'الملاحظات (كمراجع)', labelEn: 'Findings (As Auditor)', count: audit.findings.length },
+                ...(hasAuditeeFindings ? [{ id: 'my_findings', labelAr: 'الملاحظات عليّ', labelEn: 'My Findings', count: audit.findings.filter(f => f.departmentId === currentUser?.departmentId).length }] : []),
+                { id: 'approval', labelAr: 'الموافقات', labelEn: 'Approvals' },
+                { id: 'activity', labelAr: 'سجل النشاطات', labelEn: 'Activity Log', count: audit.activityLog?.length || 0 },
+              ]
               : [
-                  // المراجعون ومدير الجودة يرون كل التبويبات
-                  { id: 'details', labelAr: 'التفاصيل', labelEn: 'Details' },
-                  { id: 'questions', labelAr: 'الأسئلة', labelEn: 'Questions', count: audit.questions.length },
-                  { id: 'findings', labelAr: 'الملاحظات', labelEn: 'Findings', count: audit.findings.length },
-                  { id: 'approval', labelAr: 'الموافقات', labelEn: 'Approvals' },
-                  { id: 'activity', labelAr: 'سجل النشاطات', labelEn: 'Activity Log', count: audit.activityLog?.length || 0 },
-                ]
+                // المراجعون ومدير الجودة يرون كل التبويبات
+                { id: 'details', labelAr: 'التفاصيل', labelEn: 'Details' },
+                { id: 'questions', labelAr: 'الأسئلة', labelEn: 'Questions', count: audit.questions.length },
+                { id: 'findings', labelAr: 'الملاحظات', labelEn: 'Findings', count: audit.findings.length },
+                { id: 'approval', labelAr: 'الموافقات', labelEn: 'Approvals' },
+                { id: 'activity', labelAr: 'سجل النشاطات', labelEn: 'Activity Log', count: audit.activityLog?.length || 0 },
+              ]
           ).map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as typeof activeTab)}
-              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                activeTab === tab.id
-                  ? 'border-[var(--primary)] text-[var(--primary)]'
-                  : 'border-transparent text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
-              }`}
+              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.id
+                ? 'border-[var(--primary)] text-[var(--primary)]'
+                : 'border-transparent text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
+                }`}
             >
               {language === 'ar' ? tab.labelAr : tab.labelEn}
               {tab.count !== undefined && (
@@ -1988,12 +1990,10 @@ export default function AuditDetailPage() {
                           const auditor = getUser(id);
                           const isLead = id === audit.leadAuditorId;
                           return auditor ? (
-                            <div key={`auditee-auditor-${id}-${idx}`} className={`flex items-center gap-3 p-3 rounded-lg ${
-                              isLead ? 'bg-[var(--primary)]/10 border border-[var(--primary)]/30' : 'bg-[var(--background)]'
-                            }`}>
-                              <div className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-medium ${
-                                isLead ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background-secondary)] text-[var(--foreground)]'
+                            <div key={`auditee-auditor-${id}-${idx}`} className={`flex items-center gap-3 p-3 rounded-lg ${isLead ? 'bg-[var(--primary)]/10 border border-[var(--primary)]/30' : 'bg-[var(--background)]'
                               }`}>
+                              <div className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-medium ${isLead ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background-secondary)] text-[var(--foreground)]'
+                                }`}>
                                 {(language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn).charAt(0)}
                               </div>
                               <div className="flex-1">
@@ -2063,180 +2063,178 @@ export default function AuditDetailPage() {
                       </div>
                     )}
 
-                {/* الخطوة 1: معلومات المراجعة الأساسية */}
-                <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]/50">
-                  <h4 className="font-medium text-[var(--primary)] mb-4 flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-[var(--primary)] text-white text-xs flex items-center justify-center">1</span>
-                    {language === 'ar' ? 'معلومات المراجعة الأساسية' : 'Basic Audit Information'}
-                  </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-3 rounded-lg bg-[var(--background)]">
-                      <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'عنوان المراجعة (عربي)' : 'Audit Title (Arabic)'}</p>
-                      <p className="font-medium">{audit.titleAr || '-'}</p>
-                    </div>
-                    <div className="p-3 rounded-lg bg-[var(--background)]">
-                      <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'عنوان المراجعة (إنجليزي)' : 'Audit Title (English)'}</p>
-                      <p className="font-medium">{audit.titleEn || '-'}</p>
-                    </div>
-                    <div className="p-3 rounded-lg bg-[var(--background)]">
-                      <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'نوع المراجعة' : 'Audit Type'}</p>
-                      <p className="font-medium">
-                        {audit.type === 'internal' && (language === 'ar' ? 'داخلي' : 'Internal')}
-                        {audit.type === 'external' && (language === 'ar' ? 'خارجي' : 'External')}
-                        {audit.type === 'surveillance' && (language === 'ar' ? 'مراقبة' : 'Surveillance')}
-                        {audit.type === 'certification' && (language === 'ar' ? 'شهادة' : 'Certification')}
-                      </p>
-                    </div>
-                    <div className="p-3 rounded-lg bg-[var(--background)]">
-                      <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'رقم المراجعة' : 'Audit Number'}</p>
-                      <p className="font-medium">{audit.number}</p>
-                    </div>
-                    <div className="p-3 rounded-lg bg-[var(--background)] md:col-span-2">
-                      <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'نطاق المراجعة' : 'Audit Scope'}</p>
-                      <p className="text-sm">{audit.scope || '-'}</p>
-                    </div>
-                    <div className="p-3 rounded-lg bg-[var(--background)] md:col-span-2">
-                      <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'هدف المراجعة' : 'Audit Objective'}</p>
-                      <p className="text-sm">{audit.objective || '-'}</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* الخطوة 2: الإدارة وفريق المراجعة */}
-                <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]/50">
-                  <h4 className="font-medium text-[var(--primary)] mb-4 flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-[var(--primary)] text-white text-xs flex items-center justify-center">2</span>
-                    {language === 'ar' ? 'الإدارة وفريق المراجعة' : 'Department & Audit Team'}
-                  </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* الإدارة */}
-                    <div>
-                      <div className="p-3 rounded-lg bg-[var(--background)] mb-3">
-                        <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'الإدارة' : 'Department'}</p>
-                        <p className="font-medium flex items-center gap-2">
-                          <Building2 className="h-4 w-4 text-[var(--primary)]" />
-                          {getDepartment(audit.departmentId)?.[language === 'ar' ? 'nameAr' : 'nameEn'] || '-'}
-                        </p>
-                      </div>
-                      {audit.sectionId && (
+                    {/* الخطوة 1: معلومات المراجعة الأساسية */}
+                    <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]/50">
+                      <h4 className="font-medium text-[var(--primary)] mb-4 flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-full bg-[var(--primary)] text-white text-xs flex items-center justify-center">1</span>
+                        {language === 'ar' ? 'معلومات المراجعة الأساسية' : 'Basic Audit Information'}
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="p-3 rounded-lg bg-[var(--background)]">
-                          <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'القسم' : 'Section'}</p>
+                          <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'عنوان المراجعة (عربي)' : 'Audit Title (Arabic)'}</p>
+                          <p className="font-medium">{audit.titleAr || '-'}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-[var(--background)]">
+                          <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'عنوان المراجعة (إنجليزي)' : 'Audit Title (English)'}</p>
+                          <p className="font-medium">{audit.titleEn || '-'}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-[var(--background)]">
+                          <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'نوع المراجعة' : 'Audit Type'}</p>
                           <p className="font-medium">
-                            {getSection(audit.sectionId)?.[language === 'ar' ? 'nameAr' : 'nameEn'] || '-'}
+                            {audit.type === 'internal' && (language === 'ar' ? 'داخلي' : 'Internal')}
+                            {audit.type === 'external' && (language === 'ar' ? 'خارجي' : 'External')}
+                            {audit.type === 'surveillance' && (language === 'ar' ? 'مراقبة' : 'Surveillance')}
+                            {audit.type === 'certification' && (language === 'ar' ? 'شهادة' : 'Certification')}
                           </p>
                         </div>
-                      )}
+                        <div className="p-3 rounded-lg bg-[var(--background)]">
+                          <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'رقم المراجعة' : 'Audit Number'}</p>
+                          <p className="font-medium">{audit.number}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-[var(--background)] md:col-span-2">
+                          <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'نطاق المراجعة' : 'Audit Scope'}</p>
+                          <p className="text-sm">{audit.scope || '-'}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-[var(--background)] md:col-span-2">
+                          <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'هدف المراجعة' : 'Audit Objective'}</p>
+                          <p className="text-sm">{audit.objective || '-'}</p>
+                        </div>
+                      </div>
                     </div>
 
-                    {/* فريق المراجعة */}
-                    <div>
-                      <p className="text-xs text-[var(--foreground-secondary)] mb-2 flex items-center gap-1">
-                        <Users className="h-3 w-3" />
-                        {language === 'ar' ? 'فريق المراجعة' : 'Audit Team'}
-                      </p>
-                      <div className="space-y-2">
-                        {[...new Set(audit.auditorIds)].map((id, idx) => {
-                          const auditor = getUser(id);
-                          const isLead = id === audit.leadAuditorId;
-                          return auditor ? (
-                            <div key={`auditor-${id}-${idx}`} className={`flex items-center gap-3 p-3 rounded-lg ${
-                              isLead ? 'bg-[var(--primary)]/10 border border-[var(--primary)]/30' : 'bg-[var(--background)]'
-                            }`}>
-                              <div className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium ${
-                                isLead ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background-secondary)] text-[var(--foreground)]'
-                              }`}>
-                                {(language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn).charAt(0)}
-                              </div>
-                              <div className="flex-1">
-                                <p className="font-medium text-sm">{language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}</p>
-                                <p className="text-xs text-[var(--foreground-secondary)]">
-                                  {isLead ? (language === 'ar' ? 'رئيس الفريق' : 'Lead Auditor') : (language === 'ar' ? 'عضو' : 'Member')}
-                                </p>
-                              </div>
-                              {isLead && (
-                                <span className="px-2 py-0.5 text-xs rounded-full bg-[var(--primary)] text-white">
-                                  {language === 'ar' ? 'المسؤول' : 'Lead'}
-                                </span>
-                              )}
+                    {/* الخطوة 2: الإدارة وفريق المراجعة */}
+                    <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]/50">
+                      <h4 className="font-medium text-[var(--primary)] mb-4 flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-full bg-[var(--primary)] text-white text-xs flex items-center justify-center">2</span>
+                        {language === 'ar' ? 'الإدارة وفريق المراجعة' : 'Department & Audit Team'}
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* الإدارة */}
+                        <div>
+                          <div className="p-3 rounded-lg bg-[var(--background)] mb-3">
+                            <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'الإدارة' : 'Department'}</p>
+                            <p className="font-medium flex items-center gap-2">
+                              <Building2 className="h-4 w-4 text-[var(--primary)]" />
+                              {getDepartment(audit.departmentId)?.[language === 'ar' ? 'nameAr' : 'nameEn'] || '-'}
+                            </p>
+                          </div>
+                          {audit.sectionId && (
+                            <div className="p-3 rounded-lg bg-[var(--background)]">
+                              <p className="text-xs text-[var(--foreground-secondary)] mb-1">{language === 'ar' ? 'القسم' : 'Section'}</p>
+                              <p className="font-medium">
+                                {getSection(audit.sectionId)?.[language === 'ar' ? 'nameAr' : 'nameEn'] || '-'}
+                              </p>
                             </div>
-                          ) : null;
-                        })}
+                          )}
+                        </div>
+
+                        {/* فريق المراجعة */}
+                        <div>
+                          <p className="text-xs text-[var(--foreground-secondary)] mb-2 flex items-center gap-1">
+                            <Users className="h-3 w-3" />
+                            {language === 'ar' ? 'فريق المراجعة' : 'Audit Team'}
+                          </p>
+                          <div className="space-y-2">
+                            {[...new Set(audit.auditorIds)].map((id, idx) => {
+                              const auditor = getUser(id);
+                              const isLead = id === audit.leadAuditorId;
+                              return auditor ? (
+                                <div key={`auditor-${id}-${idx}`} className={`flex items-center gap-3 p-3 rounded-lg ${isLead ? 'bg-[var(--primary)]/10 border border-[var(--primary)]/30' : 'bg-[var(--background)]'
+                                  }`}>
+                                  <div className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium ${isLead ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background-secondary)] text-[var(--foreground)]'
+                                    }`}>
+                                    {(language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn).charAt(0)}
+                                  </div>
+                                  <div className="flex-1">
+                                    <p className="font-medium text-sm">{language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}</p>
+                                    <p className="text-xs text-[var(--foreground-secondary)]">
+                                      {isLead ? (language === 'ar' ? 'رئيس الفريق' : 'Lead Auditor') : (language === 'ar' ? 'عضو' : 'Member')}
+                                    </p>
+                                  </div>
+                                  {isLead && (
+                                    <span className="px-2 py-0.5 text-xs rounded-full bg-[var(--primary)] text-white">
+                                      {language === 'ar' ? 'المسؤول' : 'Lead'}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : null;
+                            })}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </div>
 
-                {/* الخطوة 3: الجدول الزمني */}
-                <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]/50">
-                  <h4 className="font-medium text-[var(--primary)] mb-4 flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-[var(--primary)] text-white text-xs flex items-center justify-center">3</span>
-                    {language === 'ar' ? 'الجدول الزمني' : 'Timeline'}
-                  </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="p-3 rounded-lg bg-[var(--background)]">
-                      <p className="text-xs text-[var(--foreground-secondary)] mb-1 flex items-center gap-1">
-                        <Calendar className="h-3 w-3" />
-                        {language === 'ar' ? 'تاريخ البدء' : 'Start Date'}
-                      </p>
-                      <p className="font-medium">{audit.startDate || '-'}</p>
-                    </div>
-                    <div className="p-3 rounded-lg bg-[var(--background)]">
-                      <p className="text-xs text-[var(--foreground-secondary)] mb-1 flex items-center gap-1">
-                        <Calendar className="h-3 w-3" />
-                        {language === 'ar' ? 'تاريخ الانتهاء' : 'End Date'}
-                      </p>
-                      <p className="font-medium">{audit.endDate || '-'}</p>
-                    </div>
-                    <div className="p-3 rounded-lg bg-[var(--background)]">
-                      <p className="text-xs text-[var(--foreground-secondary)] mb-1 flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
-                        {language === 'ar' ? 'مدة المراجعة' : 'Duration'}
-                      </p>
-                      <p className="font-medium">
-                        {audit.startDate && audit.endDate
-                          ? (() => {
-                              const days = Math.ceil((new Date(audit.endDate).getTime() - new Date(audit.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
-                              return days === 1
-                                ? (language === 'ar' ? 'يوم واحد' : '1 day')
-                                : (language === 'ar' ? `${days} أيام` : `${days} days`);
-                            })()
-                          : '-'}
-                      </p>
-                    </div>
-                  </div>
-                  {/* ملاحظة */}
-                  <div className="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
-                    <div className="flex items-start gap-2 text-amber-700 dark:text-amber-300 text-xs">
-                      <Lightbulb className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                      <div>
-                        <p>{language === 'ar' ? 'التدقيق يستغرق عادةً يوم واحد' : 'Audit typically takes one day'}</p>
-                        <p>{language === 'ar' ? 'الإجراءات التصحيحية يحدد المدقق موعداً لها وقد يُمدد عند الحاجة' : 'Corrective actions deadline is set by auditor and may be extended if needed'}</p>
+                    {/* الخطوة 3: الجدول الزمني */}
+                    <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]/50">
+                      <h4 className="font-medium text-[var(--primary)] mb-4 flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-full bg-[var(--primary)] text-white text-xs flex items-center justify-center">3</span>
+                        {language === 'ar' ? 'الجدول الزمني' : 'Timeline'}
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="p-3 rounded-lg bg-[var(--background)]">
+                          <p className="text-xs text-[var(--foreground-secondary)] mb-1 flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
+                            {language === 'ar' ? 'تاريخ البدء' : 'Start Date'}
+                          </p>
+                          <p className="font-medium">{audit.startDate || '-'}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-[var(--background)]">
+                          <p className="text-xs text-[var(--foreground-secondary)] mb-1 flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
+                            {language === 'ar' ? 'تاريخ الانتهاء' : 'End Date'}
+                          </p>
+                          <p className="font-medium">{audit.endDate || '-'}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-[var(--background)]">
+                          <p className="text-xs text-[var(--foreground-secondary)] mb-1 flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {language === 'ar' ? 'مدة المراجعة' : 'Duration'}
+                          </p>
+                          <p className="font-medium">
+                            {audit.startDate && audit.endDate
+                              ? (() => {
+                                const days = Math.ceil((new Date(audit.endDate).getTime() - new Date(audit.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                                return days === 1
+                                  ? (language === 'ar' ? 'يوم واحد' : '1 day')
+                                  : (language === 'ar' ? `${days} أيام` : `${days} days`);
+                              })()
+                              : '-'}
+                          </p>
+                        </div>
+                      </div>
+                      {/* ملاحظة */}
+                      <div className="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                        <div className="flex items-start gap-2 text-amber-700 dark:text-amber-300 text-xs">
+                          <Lightbulb className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                          <div>
+                            <p>{language === 'ar' ? 'التدقيق يستغرق عادةً يوم واحد' : 'Audit typically takes one day'}</p>
+                            <p>{language === 'ar' ? 'الإجراءات التصحيحية يحدد المدقق موعداً لها وقد يُمدد عند الحاجة' : 'Corrective actions deadline is set by auditor and may be extended if needed'}</p>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </div>
 
-                {/* معلومات الإنشاء */}
-                <div className="p-4 rounded-lg border border-dashed border-[var(--border)] bg-[var(--background)]">
-                  <div className="flex items-center justify-between text-sm text-[var(--foreground-secondary)]">
-                    <div className="flex items-center gap-2">
-                      <User className="h-4 w-4" />
-                      <span>{language === 'ar' ? 'تم الإنشاء بواسطة:' : 'Created by:'}</span>
-                      <span className="font-medium text-[var(--foreground)]">
-                        {audit.createdBy ? (
-                          getUser(audit.createdBy)?.[language === 'ar' ? 'fullNameAr' : 'fullNameEn'] || '-'
-                        ) : '-'}
-                      </span>
+                    {/* معلومات الإنشاء */}
+                    <div className="p-4 rounded-lg border border-dashed border-[var(--border)] bg-[var(--background)]">
+                      <div className="flex items-center justify-between text-sm text-[var(--foreground-secondary)]">
+                        <div className="flex items-center gap-2">
+                          <User className="h-4 w-4" />
+                          <span>{language === 'ar' ? 'تم الإنشاء بواسطة:' : 'Created by:'}</span>
+                          <span className="font-medium text-[var(--foreground)]">
+                            {audit.createdBy ? (
+                              getUser(audit.createdBy)?.[language === 'ar' ? 'fullNameAr' : 'fullNameEn'] || '-'
+                            ) : '-'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Calendar className="h-4 w-4" />
+                          <span>{language === 'ar' ? 'تاريخ الإنشاء:' : 'Created on:'}</span>
+                          <span className="font-medium text-[var(--foreground)]">
+                            {audit.createdAt ? new Date(audit.createdAt).toLocaleDateString(language === 'ar' ? 'ar-SA' : 'en-US') : '-'}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Calendar className="h-4 w-4" />
-                      <span>{language === 'ar' ? 'تاريخ الإنشاء:' : 'Created on:'}</span>
-                      <span className="font-medium text-[var(--foreground)]">
-                        {audit.createdAt ? new Date(audit.createdAt).toLocaleDateString(language === 'ar' ? 'ar-SA' : 'en-US') : '-'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
                   </>
                 )}
               </div>
@@ -2246,22 +2244,19 @@ export default function AuditDetailPage() {
             {activeTab === 'questions' && (
               <div className="space-y-6">
                 {/* تعليمات المرحلة */}
-                <div className={`p-4 rounded-lg border ${
-                  audit.currentStage === 0 ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800' :
+                <div className={`p-4 rounded-lg border ${audit.currentStage === 0 ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800' :
                   audit.currentStage === 1 ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' :
-                  'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
-                }`}>
+                    'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
+                  }`}>
                   <div className="flex items-start gap-3">
-                    <div className={`p-2 rounded-full ${
-                      audit.currentStage === 0 ? 'bg-blue-100 dark:bg-blue-800' :
+                    <div className={`p-2 rounded-full ${audit.currentStage === 0 ? 'bg-blue-100 dark:bg-blue-800' :
                       audit.currentStage === 1 ? 'bg-green-100 dark:bg-green-800' :
-                      'bg-gray-100 dark:bg-gray-700'
-                    }`}>
-                      <FileQuestion className={`h-5 w-5 ${
-                        audit.currentStage === 0 ? 'text-blue-600 dark:text-blue-400' :
+                        'bg-gray-100 dark:bg-gray-700'
+                      }`}>
+                      <FileQuestion className={`h-5 w-5 ${audit.currentStage === 0 ? 'text-blue-600 dark:text-blue-400' :
                         audit.currentStage === 1 ? 'text-green-600 dark:text-green-400' :
-                        'text-gray-600 dark:text-gray-400'
-                      }`} />
+                          'text-gray-600 dark:text-gray-400'
+                        }`} />
                     </div>
                     <div className="flex-1">
                       <h4 className="font-medium mb-1">
@@ -2330,10 +2325,8 @@ export default function AuditDetailPage() {
                     <ClipboardCheck className="h-5 w-5 text-[var(--primary)]" />
                     {language === 'ar' ? 'قائمة الأسئلة' : 'Questions List'}
                   </h3>
-                  {(audit.currentStage === 0 || audit.currentStage === 1 ||
-                    (audit.currentStage === 2 && audit.qmsApprovalData?.currentDecision === 'modification_requested' &&
-                     audit.auditorIds.includes(currentUser?.id || ''))) && (
-                    <Button size="sm" leftIcon={<Plus className="h-4 w-4" />} onClick={() => setShowQuestionModal(true)}>
+                  {isQuestionEditingStage && (
+                    <Button size="sm" leftIcon={<Plus className="h-4 w-4" />} onClick={openAddQuestionModal}>
                       {language === 'ar' ? 'إضافة سؤال' : 'Add Question'}
                     </Button>
                   )}
@@ -2342,17 +2335,15 @@ export default function AuditDetailPage() {
                 {audit.questions.length > 0 ? (
                   <div className="space-y-3">
                     {audit.questions.map((q, idx) => (
-                      <div key={q.id} className={`p-4 rounded-lg border transition-all ${
-                        q.status === 'compliant' ? 'border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-900/10' :
+                      <div key={q.id} className={`p-4 rounded-lg border transition-all ${q.status === 'compliant' ? 'border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-900/10' :
                         q.status === 'non_compliant' ? 'border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-900/10' :
-                        'border-[var(--border)] hover:border-[var(--primary)]/50'
-                      }`}>
+                          'border-[var(--border)] hover:border-[var(--primary)]/50'
+                        }`}>
                         <div className="flex items-start gap-3">
-                          <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white text-sm flex items-center justify-center font-medium ${
-                            q.status === 'compliant' ? 'bg-green-500' :
+                          <span className={`flex-shrink-0 w-8 h-8 rounded-full text-white text-sm flex items-center justify-center font-medium ${q.status === 'compliant' ? 'bg-green-500' :
                             q.status === 'non_compliant' ? 'bg-red-500' :
-                            'bg-[var(--primary)]'
-                          }`}>
+                              'bg-[var(--primary)]'
+                            }`}>
                             {idx + 1}
                           </span>
                           <div className="flex-1">
@@ -2397,8 +2388,8 @@ export default function AuditDetailPage() {
                           <div className="flex items-center gap-2">
                             <Badge variant={
                               q.status === 'compliant' ? 'success' :
-                              q.status === 'non_compliant' ? 'danger' :
-                              q.status === 'not_applicable' ? 'secondary' : 'warning'
+                                q.status === 'non_compliant' ? 'danger' :
+                                  q.status === 'not_applicable' ? 'secondary' : 'warning'
                             }>
                               {q.status === 'pending' && (language === 'ar' ? 'بانتظار الإجابة' : 'Pending')}
                               {q.status === 'compliant' && (language === 'ar' ? 'مطابق' : 'Compliant')}
@@ -2419,6 +2410,44 @@ export default function AuditDetailPage() {
                                 }
                               </Button>
                             )}
+                            {/* أزرار تعديل وحذف السؤال - لفريق المراجعة وإدارة الجودة، وفي مراحل تعديل الأسئلة فقط */}
+                            {canModifyQuestions && (
+                              <>
+                                {canEditQuestion(q) ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    onClick={() => openEditQuestionModal(q)}
+                                    title={language === 'ar' ? 'تعديل السؤال' : 'Edit Question'}
+                                  >
+                                    <Edit3 className="h-4 w-4" />
+                                  </Button>
+                                ) : (
+                                  /* لا يمكن تعديل نص سؤال تمت الإجابة عليه أو مرتبط بملاحظة */
+                                  <span
+                                    className="inline-flex h-8 w-8 items-center justify-center text-[var(--foreground-secondary)]"
+                                    title={q.findingId
+                                      ? (language === 'ar'
+                                        ? 'لا يمكن تعديل نص هذا السؤال لأنه مرتبط بملاحظة مسجلة'
+                                        : 'This question cannot be edited because it is linked to a recorded finding')
+                                      : (language === 'ar'
+                                        ? 'لا يمكن تعديل نص هذا السؤال لأنه تمت الإجابة عليه. يمكنك تعديل الإجابة من زر الإجابة.'
+                                        : 'This question cannot be edited because it has already been answered. You can edit the answer from the Answer button.')}
+                                  >
+                                    <Lock className="h-4 w-4" />
+                                  </span>
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  className="text-red-600 hover:text-red-700"
+                                  onClick={() => openDeleteQuestionModal(q)}
+                                  title={language === 'ar' ? 'حذف السؤال' : 'Delete Question'}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -2435,8 +2464,8 @@ export default function AuditDetailPage() {
                         ? 'ابدأ بإضافة الأسئلة التي ستطرحها أثناء المراجعة. تأكد من تغطية جميع البنود المطلوبة.'
                         : 'Start adding questions you will ask during the audit. Make sure to cover all required items.'}
                     </p>
-                    {(audit.currentStage === 0 || audit.currentStage === 1) && (
-                      <Button onClick={() => setShowQuestionModal(true)} leftIcon={<Plus className="h-4 w-4" />}>
+                    {isQuestionEditingStage && (
+                      <Button onClick={openAddQuestionModal} leftIcon={<Plus className="h-4 w-4" />}>
                         {language === 'ar' ? 'إضافة أول سؤال' : 'Add First Question'}
                       </Button>
                     )}
@@ -2671,17 +2700,16 @@ export default function AuditDetailPage() {
                             const hasPendingExtension = finding.extensionRequests?.some(er => er.status === 'pending');
 
                             return (
-                              <div key={finding.id} className={`p-4 rounded-lg border ${
-                                isOverdue ? 'border-red-300 bg-red-50/50 dark:bg-red-900/10' : 'border-[var(--border)]'
-                              }`}>
+                              <div key={finding.id} className={`p-4 rounded-lg border ${isOverdue ? 'border-red-300 bg-red-50/50 dark:bg-red-900/10' : 'border-[var(--border)]'
+                                }`}>
                                 {/* رأس الملاحظة */}
                                 <div className="flex items-start justify-between mb-3">
                                   <div className="flex items-center gap-2 flex-wrap">
                                     <span className="text-sm font-medium text-[var(--primary)]">{finding.reportNumber}</span>
                                     <Badge variant={
                                       finding.categoryB === 'major_nc' ? 'danger' :
-                                      finding.categoryB === 'minor_nc' ? 'warning' :
-                                      finding.categoryB === 'observation' ? 'secondary' : 'success'
+                                        finding.categoryB === 'minor_nc' ? 'warning' :
+                                          finding.categoryB === 'observation' ? 'secondary' : 'success'
                                     }>
                                       {findingCategories.B.find(c => c.value === finding.categoryB)?.[language === 'ar' ? 'labelAr' : 'labelEn']}
                                     </Badge>
@@ -2700,7 +2728,7 @@ export default function AuditDetailPage() {
                                   </div>
                                   <Badge variant={
                                     finding.status === 'closed' ? 'success' :
-                                    finding.status === 'pending_verification' ? 'warning' : 'secondary'
+                                      finding.status === 'pending_verification' ? 'warning' : 'secondary'
                                   }>
                                     {finding.status === 'open' && (language === 'ar' ? 'مفتوح' : 'Open')}
                                     {finding.status === 'in_progress' && (language === 'ar' ? 'قيد التنفيذ' : 'In Progress')}
@@ -2797,11 +2825,10 @@ export default function AuditDetailPage() {
                                     <p className="text-sm font-medium mb-2">{language === 'ar' ? 'طلبات التمديد:' : 'Extension Requests:'}</p>
                                     <div className="space-y-2">
                                       {finding.extensionRequests.map((er) => (
-                                        <div key={er.id} className={`p-2 rounded-lg text-xs ${
-                                          er.status === 'pending' ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200' :
+                                        <div key={er.id} className={`p-2 rounded-lg text-xs ${er.status === 'pending' ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200' :
                                           er.status === 'approved' ? 'bg-green-50 dark:bg-green-900/20 border border-green-200' :
-                                          'bg-red-50 dark:bg-red-900/20 border border-red-200'
-                                        }`}>
+                                            'bg-red-50 dark:bg-red-900/20 border border-red-200'
+                                          }`}>
                                           <div className="flex items-center justify-between mb-1">
                                             <span>
                                               {language === 'ar' ? 'الموعد الجديد المطلوب: ' : 'Requested New Date: '}
@@ -2809,7 +2836,7 @@ export default function AuditDetailPage() {
                                             </span>
                                             <Badge variant={
                                               er.status === 'pending' ? 'warning' :
-                                              er.status === 'approved' ? 'success' : 'danger'
+                                                er.status === 'approved' ? 'success' : 'danger'
                                             } className="text-xs">
                                               {er.status === 'pending' && (language === 'ar' ? 'قيد المراجعة' : 'Pending')}
                                               {er.status === 'approved' && (language === 'ar' ? 'موافق' : 'Approved')}
@@ -2884,22 +2911,19 @@ export default function AuditDetailPage() {
                 ) : (
                   <>
                     {/* تعليمات المرحلة - للمراجعين */}
-                    <div className={`p-4 rounded-lg border ${
-                      audit.currentStage === 1 ? 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800' :
+                    <div className={`p-4 rounded-lg border ${audit.currentStage === 1 ? 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800' :
                       audit.currentStage >= 2 ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800' :
-                      'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
-                    }`}>
+                        'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700'
+                      }`}>
                       <div className="flex items-start gap-3">
-                        <div className={`p-2 rounded-full ${
-                          audit.currentStage === 1 ? 'bg-orange-100 dark:bg-orange-800' :
+                        <div className={`p-2 rounded-full ${audit.currentStage === 1 ? 'bg-orange-100 dark:bg-orange-800' :
                           audit.currentStage >= 2 ? 'bg-blue-100 dark:bg-blue-800' :
-                          'bg-gray-100 dark:bg-gray-700'
-                        }`}>
-                          <AlertTriangle className={`h-5 w-5 ${
-                            audit.currentStage === 1 ? 'text-orange-600 dark:text-orange-400' :
+                            'bg-gray-100 dark:bg-gray-700'
+                          }`}>
+                          <AlertTriangle className={`h-5 w-5 ${audit.currentStage === 1 ? 'text-orange-600 dark:text-orange-400' :
                             audit.currentStage >= 2 ? 'text-blue-600 dark:text-blue-400' :
-                            'text-gray-600 dark:text-gray-400'
-                          }`} />
+                              'text-gray-600 dark:text-gray-400'
+                            }`} />
                         </div>
                         <div className="flex-1">
                           <h4 className="font-medium mb-1">
@@ -2994,16 +3018,15 @@ export default function AuditDetailPage() {
                       );
 
                       return (
-                        <div key={finding.id} className={`p-4 rounded-lg border ${
-                          isOverdue ? 'border-red-300 bg-red-50/50 dark:bg-red-900/10' : 'border-[var(--border)]'
-                        }`}>
+                        <div key={finding.id} className={`p-4 rounded-lg border ${isOverdue ? 'border-red-300 bg-red-50/50 dark:bg-red-900/10' : 'border-[var(--border)]'
+                          }`}>
                           <div className="flex items-start justify-between mb-3">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-sm font-medium text-[var(--primary)]">{finding.reportNumber}</span>
                               <Badge variant={
                                 finding.categoryB === 'major_nc' ? 'danger' :
-                                finding.categoryB === 'minor_nc' ? 'warning' :
-                                finding.categoryB === 'observation' ? 'secondary' : 'success'
+                                  finding.categoryB === 'minor_nc' ? 'warning' :
+                                    finding.categoryB === 'observation' ? 'secondary' : 'success'
                               }>
                                 {findingCategories.B.find(c => c.value === finding.categoryB)?.[language === 'ar' ? 'labelAr' : 'labelEn']}
                               </Badge>
@@ -3022,7 +3045,7 @@ export default function AuditDetailPage() {
                             </div>
                             <Badge variant={
                               finding.status === 'closed' ? 'success' :
-                              finding.status === 'pending_verification' ? 'warning' : 'secondary'
+                                finding.status === 'pending_verification' ? 'warning' : 'secondary'
                             }>
                               {finding.status === 'open' && (language === 'ar' ? 'مفتوح' : 'Open')}
                               {finding.status === 'in_progress' && (language === 'ar' ? 'قيد التنفيذ' : 'In Progress')}
@@ -3118,11 +3141,10 @@ export default function AuditDetailPage() {
                               </p>
                               <div className="space-y-2">
                                 {finding.extensionRequests.map((er) => (
-                                  <div key={er.id} className={`p-2 rounded-lg text-xs ${
-                                    er.status === 'pending' ? 'bg-blue-50 dark:bg-blue-900/20' :
+                                  <div key={er.id} className={`p-2 rounded-lg text-xs ${er.status === 'pending' ? 'bg-blue-50 dark:bg-blue-900/20' :
                                     er.status === 'approved' ? 'bg-green-50 dark:bg-green-900/20' :
-                                    'bg-red-50 dark:bg-red-900/20'
-                                  }`}>
+                                      'bg-red-50 dark:bg-red-900/20'
+                                    }`}>
                                     <div className="flex items-center justify-between mb-1">
                                       <span>
                                         {language === 'ar' ? 'الموعد الجديد: ' : 'New Date: '}
@@ -3130,7 +3152,7 @@ export default function AuditDetailPage() {
                                       </span>
                                       <Badge variant={
                                         er.status === 'pending' ? 'warning' :
-                                        er.status === 'approved' ? 'success' : 'danger'
+                                          er.status === 'approved' ? 'success' : 'danger'
                                       } className="text-xs">
                                         {er.status === 'pending' && (language === 'ar' ? 'قيد المراجعة' : 'Pending')}
                                         {er.status === 'approved' && (language === 'ar' ? 'موافق' : 'Approved')}
@@ -3272,17 +3294,16 @@ export default function AuditDetailPage() {
                         const hasPendingExtension = finding.extensionRequests?.some(er => er.status === 'pending');
 
                         return (
-                          <div key={finding.id} className={`p-4 rounded-lg border ${
-                            isOverdue ? 'border-red-300 bg-red-50/50 dark:bg-red-900/10' : 'border-[var(--border)]'
-                          }`}>
+                          <div key={finding.id} className={`p-4 rounded-lg border ${isOverdue ? 'border-red-300 bg-red-50/50 dark:bg-red-900/10' : 'border-[var(--border)]'
+                            }`}>
                             {/* رأس الملاحظة */}
                             <div className="flex items-start justify-between mb-3">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-sm font-medium text-[var(--primary)]">{finding.reportNumber}</span>
                                 <Badge variant={
                                   finding.categoryB === 'major_nc' ? 'danger' :
-                                  finding.categoryB === 'minor_nc' ? 'warning' :
-                                  finding.categoryB === 'observation' ? 'secondary' : 'success'
+                                    finding.categoryB === 'minor_nc' ? 'warning' :
+                                      finding.categoryB === 'observation' ? 'secondary' : 'success'
                                 }>
                                   {findingCategories.B.find(c => c.value === finding.categoryB)?.[language === 'ar' ? 'labelAr' : 'labelEn']}
                                 </Badge>
@@ -3295,7 +3316,7 @@ export default function AuditDetailPage() {
                               </div>
                               <Badge variant={
                                 finding.status === 'closed' ? 'success' :
-                                finding.status === 'pending_verification' ? 'warning' : 'secondary'
+                                  finding.status === 'pending_verification' ? 'warning' : 'secondary'
                               }>
                                 {finding.status === 'open' && (language === 'ar' ? 'مفتوح' : 'Open')}
                                 {finding.status === 'in_progress' && (language === 'ar' ? 'قيد التنفيذ' : 'In Progress')}
@@ -3411,25 +3432,22 @@ export default function AuditDetailPage() {
                     {language === 'ar' ? 'مسار سير العمل' : 'Workflow Path'}
                   </h4>
                   <div className="flex flex-wrap items-center gap-2">
-                    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${
-                      audit.currentStage > 1 ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-800'
-                    }`}>
+                    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${audit.currentStage > 1 ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-800'
+                      }`}>
                       <CheckCircle className={`h-4 w-4 ${audit.currentStage > 1 ? 'text-green-600' : 'text-gray-400'}`} />
                       <span className="text-sm">{language === 'ar' ? 'التنفيذ' : 'Execution'}</span>
                     </div>
                     <ArrowRight className="h-4 w-4 text-[var(--foreground-secondary)]" />
-                    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${
-                      audit.currentStage === 2 ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 ring-2 ring-yellow-400' :
+                    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${audit.currentStage === 2 ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 ring-2 ring-yellow-400' :
                       audit.currentStage > 2 ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-800'
-                    }`}>
+                      }`}>
                       {audit.currentStage === 2 ? <Clock className="h-4 w-4 text-yellow-600" /> :
-                       audit.currentStage > 2 ? <CheckCircle className="h-4 w-4 text-green-600" /> : <Shield className="h-4 w-4 text-gray-400" />}
+                        audit.currentStage > 2 ? <CheckCircle className="h-4 w-4 text-green-600" /> : <Shield className="h-4 w-4 text-gray-400" />}
                       <span className="text-sm font-medium">{language === 'ar' ? 'مراجعة الجودة' : 'QMS Review'}</span>
                     </div>
                     <ArrowRight className="h-4 w-4 text-[var(--foreground-secondary)]" />
-                    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${
-                      audit.currentStage > 2 ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-800'
-                    }`}>
+                    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${audit.currentStage > 2 ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-800'
+                      }`}>
                       <Wrench className={`h-4 w-4 ${audit.currentStage > 2 ? 'text-green-600' : 'text-gray-400'}`} />
                       <span className="text-sm">{language === 'ar' ? 'الإجراءات التصحيحية' : 'Corrective Actions'}</span>
                     </div>
@@ -3530,23 +3548,21 @@ export default function AuditDetailPage() {
 
                 {/* حالة القرار الحالية */}
                 {audit.qmsApprovalData?.currentDecision && (
-                  <div className={`p-4 rounded-lg border ${
-                    audit.qmsApprovalData.currentDecision === 'approved' ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' :
+                  <div className={`p-4 rounded-lg border ${audit.qmsApprovalData.currentDecision === 'approved' ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' :
                     audit.qmsApprovalData.currentDecision === 'rejected' ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' :
-                    audit.qmsApprovalData.currentDecision === 'postponed' ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800' :
-                    'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800'
-                  }`}>
+                      audit.qmsApprovalData.currentDecision === 'postponed' ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800' :
+                        'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800'
+                    }`}>
                     <div className="flex items-center gap-2 mb-2">
                       {audit.qmsApprovalData.currentDecision === 'approved' && <ThumbsUp className="h-5 w-5 text-green-600" />}
                       {audit.qmsApprovalData.currentDecision === 'rejected' && <ThumbsDown className="h-5 w-5 text-red-600" />}
                       {audit.qmsApprovalData.currentDecision === 'postponed' && <Pause className="h-5 w-5 text-amber-600" />}
                       {audit.qmsApprovalData.currentDecision === 'modification_requested' && <Edit3 className="h-5 w-5 text-purple-600" />}
-                      <span className={`font-medium ${
-                        audit.qmsApprovalData.currentDecision === 'approved' ? 'text-green-800 dark:text-green-200' :
+                      <span className={`font-medium ${audit.qmsApprovalData.currentDecision === 'approved' ? 'text-green-800 dark:text-green-200' :
                         audit.qmsApprovalData.currentDecision === 'rejected' ? 'text-red-800 dark:text-red-200' :
-                        audit.qmsApprovalData.currentDecision === 'postponed' ? 'text-amber-800 dark:text-amber-200' :
-                        'text-purple-800 dark:text-purple-200'
-                      }`}>
+                          audit.qmsApprovalData.currentDecision === 'postponed' ? 'text-amber-800 dark:text-amber-200' :
+                            'text-purple-800 dark:text-purple-200'
+                        }`}>
                         {audit.qmsApprovalData.currentDecision === 'approved' && (language === 'ar' ? 'تمت الموافقة' : 'Approved')}
                         {audit.qmsApprovalData.currentDecision === 'rejected' && (language === 'ar' ? 'تم الرفض' : 'Rejected')}
                         {audit.qmsApprovalData.currentDecision === 'postponed' && (language === 'ar' ? 'تم التأجيل' : 'Postponed')}
@@ -3557,107 +3573,111 @@ export default function AuditDetailPage() {
                 )}
 
                 {/* أزرار القرار لمدير الجودة */}
+                {/* الرفض والتأجيل كلاهما يُبقي المراجعة في مرحلة مراجعة الجودة، لذا يظل بإمكان
+                    مدير الجودة إعادة اتخاذ القرار؛ أما الموافقة وطلب التعديل فينتقل بهما المسار */}
                 {audit.currentStage === 2 && currentUser?.role === 'quality_manager' &&
-                 (!audit.qmsApprovalData?.currentDecision || audit.qmsApprovalData.currentDecision === 'postponed') && (
-                  <div className="p-4 rounded-lg bg-[var(--background-secondary)] border border-[var(--border)]">
-                    <h4 className="font-medium mb-4 flex items-center gap-2">
-                      <Shield className="h-5 w-5 text-[var(--primary)]" />
-                      {language === 'ar' ? 'اتخاذ القرار' : 'Make Decision'}
-                    </h4>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      <Button
-                        className="bg-green-600 hover:bg-green-700 text-white"
-                        onClick={() => {
-                          setSelectedDecision('approved');
-                          setShowQMSDecisionModal(true);
-                        }}
-                      >
-                        <ThumbsUp className="h-4 w-4 mx-1" />
-                        {language === 'ar' ? 'موافقة' : 'Approve'}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="border-red-500 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
-                        onClick={() => {
-                          setSelectedDecision('rejected');
-                          setShowQMSDecisionModal(true);
-                        }}
-                      >
-                        <ThumbsDown className="h-4 w-4 mx-1" />
-                        {language === 'ar' ? 'رفض' : 'Reject'}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="border-amber-500 text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/20"
-                        onClick={() => {
-                          setSelectedDecision('postponed');
-                          setShowQMSDecisionModal(true);
-                        }}
-                      >
-                        <Pause className="h-4 w-4 mx-1" />
-                        {language === 'ar' ? 'تأجيل' : 'Postpone'}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="border-purple-500 text-purple-500 hover:bg-purple-50 dark:hover:bg-purple-900/20"
-                        onClick={() => {
-                          setSelectedDecision('modification_requested');
-                          setShowQMSDecisionModal(true);
-                        }}
-                      >
-                        <Edit3 className="h-4 w-4 mx-1" />
-                        {language === 'ar' ? 'طلب تعديل' : 'Request Modification'}
-                      </Button>
+                  (!audit.qmsApprovalData?.currentDecision ||
+                    audit.qmsApprovalData.currentDecision === 'postponed' ||
+                    audit.qmsApprovalData.currentDecision === 'rejected') && (
+                    <div className="p-4 rounded-lg bg-[var(--background-secondary)] border border-[var(--border)]">
+                      <h4 className="font-medium mb-4 flex items-center gap-2">
+                        <Shield className="h-5 w-5 text-[var(--primary)]" />
+                        {language === 'ar' ? 'اتخاذ القرار' : 'Make Decision'}
+                      </h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <Button
+                          className="bg-green-600 hover:bg-green-700 text-white"
+                          onClick={() => {
+                            setSelectedDecision('approved');
+                            setShowQMSDecisionModal(true);
+                          }}
+                        >
+                          <ThumbsUp className="h-4 w-4 mx-1" />
+                          {language === 'ar' ? 'موافقة' : 'Approve'}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="border-red-500 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+                          onClick={() => {
+                            setSelectedDecision('rejected');
+                            setShowQMSDecisionModal(true);
+                          }}
+                        >
+                          <ThumbsDown className="h-4 w-4 mx-1" />
+                          {language === 'ar' ? 'رفض' : 'Reject'}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="border-amber-500 text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+                          onClick={() => {
+                            setSelectedDecision('postponed');
+                            setShowQMSDecisionModal(true);
+                          }}
+                        >
+                          <Pause className="h-4 w-4 mx-1" />
+                          {language === 'ar' ? 'تأجيل' : 'Postpone'}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="border-purple-500 text-purple-500 hover:bg-purple-50 dark:hover:bg-purple-900/20"
+                          onClick={() => {
+                            setSelectedDecision('modification_requested');
+                            setShowQMSDecisionModal(true);
+                          }}
+                        >
+                          <Edit3 className="h-4 w-4 mx-1" />
+                          {language === 'ar' ? 'طلب تعديل' : 'Request Modification'}
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
                 {/* وضع التعديل للمراجعين */}
                 {audit.qmsApprovalData?.currentDecision === 'modification_requested' &&
-                 audit.auditorIds.includes(currentUser?.id || '') && (
-                  <div className="p-4 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800">
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-2">
-                        <Edit3 className="h-5 w-5 text-purple-600" />
-                        <span className="font-medium text-purple-800 dark:text-purple-200">
-                          {language === 'ar' ? 'مطلوب تعديلات' : 'Modifications Required'}
-                        </span>
-                      </div>
-                      {!isEditMode ? (
-                        <Button
-                          size="sm"
-                          onClick={() => setIsEditMode(true)}
-                        >
-                          <Edit3 className="h-4 w-4 mx-1" />
-                          {language === 'ar' ? 'بدء التعديل' : 'Start Editing'}
-                        </Button>
-                      ) : (
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setIsEditMode(false)}
-                          >
-                            {language === 'ar' ? 'إلغاء' : 'Cancel'}
-                          </Button>
-                          <Button
-                            size="sm"
-                            className="bg-green-600 hover:bg-green-700"
-                            onClick={handleSubmitModifications}
-                          >
-                            <Send className="h-4 w-4 mx-1" />
-                            {language === 'ar' ? 'إرسال التعديلات' : 'Submit Modifications'}
-                          </Button>
+                  audit.auditorIds.includes(currentUser?.id || '') && (
+                    <div className="p-4 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <Edit3 className="h-5 w-5 text-purple-600" />
+                          <span className="font-medium text-purple-800 dark:text-purple-200">
+                            {language === 'ar' ? 'مطلوب تعديلات' : 'Modifications Required'}
+                          </span>
                         </div>
-                      )}
+                        {!isEditMode ? (
+                          <Button
+                            size="sm"
+                            onClick={() => setIsEditMode(true)}
+                          >
+                            <Edit3 className="h-4 w-4 mx-1" />
+                            {language === 'ar' ? 'بدء التعديل' : 'Start Editing'}
+                          </Button>
+                        ) : (
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setIsEditMode(false)}
+                            >
+                              {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="bg-green-600 hover:bg-green-700"
+                              onClick={handleSubmitModifications}
+                            >
+                              <Send className="h-4 w-4 mx-1" />
+                              {language === 'ar' ? 'إرسال التعديلات' : 'Submit Modifications'}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-sm text-purple-700 dark:text-purple-300">
+                        {language === 'ar'
+                          ? 'مدير الجودة يطلب تعديلات على هذه المراجعة. قم بمراجعة التعليقات أدناه وإجراء التعديلات المطلوبة.'
+                          : 'QMS Manager has requested modifications to this audit. Review the comments below and make the required changes.'}
+                      </p>
                     </div>
-                    <p className="text-sm text-purple-700 dark:text-purple-300">
-                      {language === 'ar'
-                        ? 'مدير الجودة يطلب تعديلات على هذه المراجعة. قم بمراجعة التعليقات أدناه وإجراء التعديلات المطلوبة.'
-                        : 'QMS Manager has requested modifications to this audit. Review the comments below and make the required changes.'}
-                    </p>
-                  </div>
-                )}
+                  )}
 
                 {/* قسم التعليقات والردود */}
                 {audit.qmsApprovalData?.comments && audit.qmsApprovalData.comments.length > 0 && (
@@ -3672,16 +3692,14 @@ export default function AuditDetailPage() {
                         return (
                           <div
                             key={comment.id}
-                            className={`p-4 rounded-lg ${
-                              comment.isFromQMSManager
-                                ? 'bg-blue-50 dark:bg-blue-900/20 border-s-4 border-blue-500'
-                                : 'bg-gray-50 dark:bg-gray-800/50 border-s-4 border-gray-300 dark:border-gray-600'
-                            }`}
+                            className={`p-4 rounded-lg ${comment.isFromQMSManager
+                              ? 'bg-blue-50 dark:bg-blue-900/20 border-s-4 border-blue-500'
+                              : 'bg-gray-50 dark:bg-gray-800/50 border-s-4 border-gray-300 dark:border-gray-600'
+                              }`}
                           >
                             <div className="flex items-center gap-2 mb-2">
-                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-medium ${
-                                comment.isFromQMSManager ? 'bg-blue-500' : 'bg-gray-500'
-                              }`}>
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-medium ${comment.isFromQMSManager ? 'bg-blue-500' : 'bg-gray-500'
+                                }`}>
                                 {author ? (language === 'ar' ? author.fullNameAr : author.fullNameEn).charAt(0) : '?'}
                               </div>
                               <div>
@@ -3748,12 +3766,11 @@ export default function AuditDetailPage() {
                         const author = getUser(entry.modifiedBy);
                         return (
                           <div key={entry.id} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--background-secondary)]">
-                            <div className={`w-3 h-3 rounded-full ${
-                              entry.decision === 'approved' ? 'bg-green-500' :
+                            <div className={`w-3 h-3 rounded-full ${entry.decision === 'approved' ? 'bg-green-500' :
                               entry.decision === 'rejected' ? 'bg-red-500' :
-                              entry.decision === 'postponed' ? 'bg-amber-500' :
-                              'bg-purple-500'
-                            }`} />
+                                entry.decision === 'postponed' ? 'bg-amber-500' :
+                                  'bg-purple-500'
+                              }`} />
                             <div className="flex-1">
                               <p className="text-sm font-medium">
                                 {entry.decision === 'approved' && (language === 'ar' ? 'موافقة' : 'Approved')}
@@ -3823,6 +3840,8 @@ export default function AuditDetailPage() {
                           stage_changed: { icon: <ArrowRight className="h-4 w-4" />, color: 'bg-blue-500', labelAr: 'تغيير المرحلة', labelEn: 'Stage Changed' },
                           question_added: { icon: <HelpCircle className="h-4 w-4" />, color: 'bg-cyan-500', labelAr: 'إضافة سؤال', labelEn: 'Question Added' },
                           question_answered: { icon: <CheckCircle className="h-4 w-4" />, color: 'bg-teal-500', labelAr: 'إجابة سؤال', labelEn: 'Question Answered' },
+                          question_edited: { icon: <Edit3 className="h-4 w-4" />, color: 'bg-cyan-500', labelAr: 'تعديل سؤال', labelEn: 'Question Edited' },
+                          question_deleted: { icon: <Trash2 className="h-4 w-4" />, color: 'bg-red-500', labelAr: 'حذف سؤال', labelEn: 'Question Deleted' },
                           finding_added: { icon: <AlertTriangle className="h-4 w-4" />, color: 'bg-orange-500', labelAr: 'إضافة ملاحظة', labelEn: 'Finding Added' },
                           finding_updated: { icon: <Edit3 className="h-4 w-4" />, color: 'bg-yellow-500', labelAr: 'تحديث ملاحظة', labelEn: 'Finding Updated' },
                           corrective_action_added: { icon: <Wrench className="h-4 w-4" />, color: 'bg-indigo-500', labelAr: 'إضافة إجراء تصحيحي', labelEn: 'Corrective Action Added' },
@@ -3962,13 +3981,15 @@ export default function AuditDetailPage() {
         {/* Question Modal */}
         {showQuestionModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowQuestionModal(false)} />
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={closeQuestionModal} />
             <div className="relative z-50 w-full max-w-md rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-semibold">
-                  {language === 'ar' ? 'إضافة سؤال جديد' : 'Add New Question'}
+                  {editingQuestionId
+                    ? (language === 'ar' ? 'تعديل السؤال' : 'Edit Question')
+                    : (language === 'ar' ? 'إضافة سؤال جديد' : 'Add New Question')}
                 </h2>
-                <Button variant="ghost" size="icon-sm" onClick={() => setShowQuestionModal(false)}>
+                <Button variant="ghost" size="icon-sm" onClick={closeQuestionModal}>
                   <X className="h-4 w-4" />
                 </Button>
               </div>
@@ -4009,13 +4030,74 @@ export default function AuditDetailPage() {
                 </div>
               </div>
               <div className="flex justify-end gap-2 mt-6">
-                <Button variant="outline" onClick={() => setShowQuestionModal(false)}>
+                <Button variant="outline" onClick={closeQuestionModal}>
                   {language === 'ar' ? 'إلغاء' : 'Cancel'}
                 </Button>
-                <Button onClick={handleAddQuestion} disabled={!newQuestion.questionAr}>
-                  {language === 'ar' ? 'إضافة' : 'Add'}
+                <Button
+                  onClick={editingQuestionId ? handleEditQuestion : handleAddQuestion}
+                  disabled={!newQuestion.questionAr}
+                >
+                  {editingQuestionId
+                    ? (language === 'ar' ? 'حفظ' : 'Save')
+                    : (language === 'ar' ? 'إضافة' : 'Add')}
                 </Button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete Question Confirmation Modal */}
+        {showDeleteQuestionModal && questionToDelete && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center">
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowDeleteQuestionModal(false)} />
+            <div className="relative z-[70] w-full max-w-md rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4">
+              <div className="flex items-center justify-center mb-4">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+                  <AlertTriangle className="h-6 w-6 text-red-600" />
+                </div>
+              </div>
+              <h2 className="text-xl font-semibold text-center mb-2">
+                {language === 'ar' ? 'تأكيد حذف السؤال' : 'Confirm Delete Question'}
+              </h2>
+              {canDeleteQuestion(questionToDelete) ? (
+                <>
+                  <p className="text-center text-[var(--foreground-secondary)] mb-4">
+                    {language === 'ar'
+                      ? `هل أنت متأكد من حذف السؤال "${questionToDelete.questionAr}"؟`
+                      : `Are you sure you want to delete "${questionToDelete.questionEn}"?`}
+                  </p>
+                  <p className="text-xs text-red-500 text-center mb-6">
+                    {language === 'ar' ? 'لا يمكن التراجع عن هذا الإجراء' : 'This action cannot be undone'}
+                  </p>
+                  <div className="flex justify-center gap-3">
+                    <Button variant="outline" onClick={() => setShowDeleteQuestionModal(false)}>
+                      {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                    </Button>
+                    <Button className="bg-red-600 hover:bg-red-700 text-white" onClick={handleDeleteQuestion}>
+                      <Trash2 className="h-4 w-4 me-2" />
+                      {language === 'ar' ? 'حذف' : 'Delete'}
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* لا يمكن حذف سؤال تمت الإجابة عليه أو مرتبط بملاحظة */}
+                  <p className="text-center text-[var(--foreground-secondary)] mb-6">
+                    {questionToDelete.findingId
+                      ? (language === 'ar'
+                        ? 'لا يمكن حذف هذا السؤال لأنه مرتبط بملاحظة مسجلة. قم بحذف الملاحظة أولاً.'
+                        : 'This question cannot be deleted because it is linked to a recorded finding. Delete the finding first.')
+                      : (language === 'ar'
+                        ? 'لا يمكن حذف هذا السؤال لأنه تمت الإجابة عليه. يمكنك تعديله بدلاً من حذفه.'
+                        : 'This question cannot be deleted because it has already been answered. You can edit it instead.')}
+                  </p>
+                  <div className="flex justify-center">
+                    <Button variant="outline" onClick={() => setShowDeleteQuestionModal(false)}>
+                      {language === 'ar' ? 'إغلاق' : 'Close'}
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -4055,11 +4137,10 @@ export default function AuditDetailPage() {
                     <button
                       type="button"
                       onClick={() => setQuestionAnswer({ ...questionAnswer, status: 'compliant' })}
-                      className={`p-3 rounded-lg border-2 transition-all flex items-center justify-center gap-2 ${
-                        questionAnswer.status === 'compliant'
-                          ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
-                          : 'border-[var(--border)] hover:border-green-300'
-                      }`}
+                      className={`p-3 rounded-lg border-2 transition-all flex items-center justify-center gap-2 ${questionAnswer.status === 'compliant'
+                        ? 'border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                        : 'border-[var(--border)] hover:border-green-300'
+                        }`}
                     >
                       <CheckCircle className="h-5 w-5" />
                       <span className="font-medium">{language === 'ar' ? 'مطابق' : 'Compliant'}</span>
@@ -4067,11 +4148,10 @@ export default function AuditDetailPage() {
                     <button
                       type="button"
                       onClick={() => setQuestionAnswer({ ...questionAnswer, status: 'non_compliant' })}
-                      className={`p-3 rounded-lg border-2 transition-all flex items-center justify-center gap-2 ${
-                        questionAnswer.status === 'non_compliant'
-                          ? 'border-red-500 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
-                          : 'border-[var(--border)] hover:border-red-300'
-                      }`}
+                      className={`p-3 rounded-lg border-2 transition-all flex items-center justify-center gap-2 ${questionAnswer.status === 'non_compliant'
+                        ? 'border-red-500 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+                        : 'border-[var(--border)] hover:border-red-300'
+                        }`}
                     >
                       <X className="h-5 w-5" />
                       <span className="font-medium">{language === 'ar' ? 'غير مطابق' : 'Non-Compliant'}</span>
@@ -4079,11 +4159,10 @@ export default function AuditDetailPage() {
                     <button
                       type="button"
                       onClick={() => setQuestionAnswer({ ...questionAnswer, status: 'not_applicable' })}
-                      className={`p-3 rounded-lg border-2 transition-all flex items-center justify-center gap-2 col-span-2 ${
-                        questionAnswer.status === 'not_applicable'
-                          ? 'border-gray-500 bg-gray-50 dark:bg-gray-900/20 text-gray-700 dark:text-gray-300'
-                          : 'border-[var(--border)] hover:border-gray-300'
-                      }`}
+                      className={`p-3 rounded-lg border-2 transition-all flex items-center justify-center gap-2 col-span-2 ${questionAnswer.status === 'not_applicable'
+                        ? 'border-gray-500 bg-gray-50 dark:bg-gray-900/20 text-gray-700 dark:text-gray-300'
+                        : 'border-[var(--border)] hover:border-gray-300'
+                        }`}
                     >
                       <span className="font-medium">{language === 'ar' ? 'غير قابل للتطبيق' : 'Not Applicable'}</span>
                     </button>
@@ -4152,8 +4231,8 @@ export default function AuditDetailPage() {
                   disabled={questionAnswer.status === 'pending'}
                   className={
                     questionAnswer.status === 'compliant' ? 'bg-green-600 hover:bg-green-700' :
-                    questionAnswer.status === 'non_compliant' ? 'bg-red-600 hover:bg-red-700' :
-                    ''
+                      questionAnswer.status === 'non_compliant' ? 'bg-red-600 hover:bg-red-700' :
+                        ''
                   }
                 >
                   {language === 'ar' ? 'حفظ الإجابة' : 'Save Answer'}
@@ -4341,9 +4420,8 @@ export default function AuditDetailPage() {
                           return (
                             <div
                               key={index}
-                              className={`flex items-center justify-between p-2 rounded-lg bg-[var(--background)] border ${
-                                isOneDrive ? 'border-blue-200 dark:border-blue-800' : 'border-[var(--border)]'
-                              }`}
+                              className={`flex items-center justify-between p-2 rounded-lg bg-[var(--background)] border ${isOneDrive ? 'border-blue-200 dark:border-blue-800' : 'border-[var(--border)]'
+                                }`}
                             >
                               <div className="flex items-center gap-2 min-w-0 flex-1">
                                 {isOneDrive ? (
@@ -4362,8 +4440,8 @@ export default function AuditDetailPage() {
                                       {file.size < 1024
                                         ? `${file.size} B`
                                         : file.size < 1024 * 1024
-                                        ? `${(file.size / 1024).toFixed(1)} KB`
-                                        : `${(file.size / (1024 * 1024)).toFixed(1)} MB`}
+                                          ? `${(file.size / 1024).toFixed(1)} KB`
+                                          : `${(file.size / (1024 * 1024)).toFixed(1)} MB`}
                                     </span>
                                   )}
                                 </div>
@@ -4815,12 +4893,11 @@ export default function AuditDetailPage() {
                 <p className="text-sm">{language === 'ar' ? audit.titleAr : audit.titleEn}</p>
               </div>
 
-              <div className={`p-3 rounded-lg mb-4 ${
-                selectedDecision === 'approved' ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200' :
+              <div className={`p-3 rounded-lg mb-4 ${selectedDecision === 'approved' ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200' :
                 selectedDecision === 'rejected' ? 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200' :
-                selectedDecision === 'postponed' ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200' :
-                'bg-purple-50 dark:bg-purple-900/20 text-purple-800 dark:text-purple-200'
-              }`}>
+                  selectedDecision === 'postponed' ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200' :
+                    'bg-purple-50 dark:bg-purple-900/20 text-purple-800 dark:text-purple-200'
+                }`}>
                 <p className="text-sm">
                   {selectedDecision === 'approved' && (language === 'ar'
                     ? 'سيتم الموافقة على المراجعة والانتقال لمرحلة الإجراءات التصحيحية'
@@ -4852,8 +4929,8 @@ export default function AuditDetailPage() {
                     selectedDecision === 'modification_requested'
                       ? (language === 'ar' ? 'اذكر التعديلات المطلوبة بالتفصيل...' : 'Describe the required modifications in detail...')
                       : selectedDecision === 'approved'
-                      ? (language === 'ar' ? 'أضف تعليقك هنا (اختياري)...' : 'Add your comment here (optional)...')
-                      : (language === 'ar' ? 'أضف تعليقك هنا...' : 'Add your comment here...')
+                        ? (language === 'ar' ? 'أضف تعليقك هنا (اختياري)...' : 'Add your comment here (optional)...')
+                        : (language === 'ar' ? 'أضف تعليقك هنا...' : 'Add your comment here...')
                   }
                   className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
                 />
@@ -4872,9 +4949,9 @@ export default function AuditDetailPage() {
                   disabled={selectedDecision !== 'approved' && !qmsComment.trim()}
                   className={
                     selectedDecision === 'approved' ? 'bg-green-600 hover:bg-green-700' :
-                    selectedDecision === 'rejected' ? 'bg-red-600 hover:bg-red-700' :
-                    selectedDecision === 'postponed' ? 'bg-amber-600 hover:bg-amber-700' :
-                    'bg-purple-600 hover:bg-purple-700'
+                      selectedDecision === 'rejected' ? 'bg-red-600 hover:bg-red-700' :
+                        selectedDecision === 'postponed' ? 'bg-amber-600 hover:bg-amber-700' :
+                          'bg-purple-600 hover:bg-purple-700'
                   }
                 >
                   {selectedDecision === 'approved' && <ThumbsUp className="h-4 w-4 mx-1" />}
