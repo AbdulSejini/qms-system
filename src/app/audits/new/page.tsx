@@ -414,6 +414,19 @@ export default function NewAuditPage() {
     return typed || generatedTitle(lang);
   };
 
+  // ما جاء من بند معتمد لا يُعدَّل هنا.
+  //
+  // الإدارة والقسم والنوع والشهر والفريق كلها أُدخلت في الخطة واعتُمدت هناك، فتعديلها
+  // من هذه الشاشة يعني مراجعةً تخالف الخطة التي وافق عليها المعتمِد - وسجلٌّ يقول
+  // شيئاً والخطة تقول غيره. من أراد تغييرها يعدّل بند الخطة، فيمرّ التعديل بمعتمِدها.
+  // والمتروك هنا هو ما لا تعرفه الخطة: اليوم داخل الشهر، والنطاق والهدف والأسئلة.
+  const lockedByPlan = !!planLink;
+
+  const planLockNote = (): string =>
+    language === 'ar'
+      ? 'من بند الخطة المعتمدة - للتغيير عدّل البند في صفحة الخطة السنوية (ويحتاج اعتماداً).'
+      : 'From the approved plan line - to change it, amend the line on the annual plan page (which needs approval).';
+
   // حدود اليوم داخل الشهر المخطط - الخطة اعتمدت الشهر، فلا يُنقل منه هنا
   const plannedMonthRange = (): { min: string; max: string } | null => {
     if (!planLink?.month || !planLink.year) return null;
@@ -1181,15 +1194,23 @@ export default function NewAuditPage() {
                 <div>
                   <label className="block text-sm font-medium mb-3">
                     {language === 'ar' ? 'نوع المراجعة *' : 'Audit Type *'}
+                    {lockedByPlan && (
+                      <span className="ms-2 text-xs font-normal text-[var(--foreground-muted)]">
+                        {planLockNote()}
+                      </span>
+                    )}
                   </label>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {auditTypes.map((type) => (
                       <div
                         key={type.value}
-                        onClick={() => setFormData({ ...formData, type: type.value as typeof formData.type })}
-                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${formData.type === type.value
+                        onClick={() => {
+                          if (lockedByPlan) return;   // النوع اعتُمد في الخطة
+                          setFormData({ ...formData, type: type.value as typeof formData.type });
+                        }}
+                        className={`p-4 rounded-lg border-2 transition-all ${lockedByPlan ? 'cursor-not-allowed' : 'cursor-pointer'} ${formData.type === type.value
                           ? 'border-[var(--primary)] bg-[var(--primary)]/5'
-                          : 'border-[var(--border)] hover:border-[var(--primary)]/50'
+                          : `border-[var(--border)] ${lockedByPlan ? 'opacity-50' : 'hover:border-[var(--primary)]/50'}`
                           }`}
                       >
                         <div className="flex items-center gap-3">
@@ -1218,6 +1239,12 @@ export default function NewAuditPage() {
             {/* Step 2: Department & Team */}
             {currentStep === 2 && (
               <div className="space-y-6">
+                {lockedByPlan && (
+                  <div className="flex items-start gap-2 rounded-lg bg-[var(--background-secondary)] p-3 text-xs text-[var(--foreground-secondary)]">
+                    <Info className="h-4 w-4 shrink-0 text-[var(--primary)]" />
+                    <span>{planLockNote()}</span>
+                  </div>
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <label className="block text-sm font-medium mb-2">
@@ -1225,6 +1252,7 @@ export default function NewAuditPage() {
                     </label>
                     <select
                       value={formData.departmentId}
+                      disabled={lockedByPlan}
                       onChange={(e) => setFormData({ ...formData, departmentId: e.target.value, sectionId: '' })}
                       className={`w-full rounded-lg border px-4 py-3 text-sm ${errors.departmentId ? 'border-red-500' : 'border-[var(--border)]'
                         } bg-[var(--background)]`}
@@ -1251,6 +1279,7 @@ export default function NewAuditPage() {
                       </label>
                       <select
                         value={formData.sectionId}
+                        disabled={lockedByPlan}
                         onChange={(e) => setFormData({ ...formData, sectionId: e.target.value })}
                         className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-3 text-sm"
                       >
@@ -1271,6 +1300,14 @@ export default function NewAuditPage() {
                     {language === 'ar' ? 'فريق المراجعة' : 'Audit Team'}
                   </h4>
 
+                  {/* الفريق اعتُمد على بند الخطة - تغييره يمرّ بالمعتمِد هناك */}
+                  {lockedByPlan && (
+                    <div className="mb-4 flex items-start gap-2 rounded-lg bg-[var(--background-secondary)] p-3 text-xs text-[var(--foreground-secondary)]">
+                      <Info className="h-4 w-4 shrink-0 text-[var(--primary)]" />
+                      <span>{planLockNote()}</span>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                       <label className="block text-sm font-medium mb-2">
@@ -1278,6 +1315,7 @@ export default function NewAuditPage() {
                       </label>
                       <select
                         value={formData.leadAuditorId}
+                        disabled={lockedByPlan}
                         onChange={(e) => setFormData({ ...formData, leadAuditorId: e.target.value })}
                         className={`w-full rounded-lg border px-4 py-3 text-sm ${errors.leadAuditorId ? 'border-red-500' : 'border-[var(--border)]'
                           } bg-[var(--background)]`}
@@ -1301,7 +1339,7 @@ export default function NewAuditPage() {
                       <label className="block text-sm font-medium mb-2">
                         {language === 'ar' ? 'أعضاء الفريق' : 'Team Members'}
                       </label>
-                      <div className="relative">
+                      <div className={`relative${lockedByPlan ? ' hidden' : ''}`}>
                         <div className="flex items-center gap-2">
                           <Search className="absolute right-3 h-4 w-4 text-[var(--foreground-secondary)]" />
                           <input
@@ -1358,13 +1396,15 @@ export default function NewAuditPage() {
                                 className="inline-flex items-center gap-1 px-3 py-1 bg-[var(--primary)]/10 text-[var(--primary)] rounded-full text-sm"
                               >
                                 {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
-                                <button
-                                  type="button"
-                                  onClick={() => removeAuditorFromTeam(id)}
-                                  className="hover:text-red-500"
-                                >
-                                  <X className="h-3.5 w-3.5" />
-                                </button>
+                                {!lockedByPlan && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeAuditorFromTeam(id)}
+                                    className="hover:text-red-500"
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
                               </span>
                             ) : null;
                           })}

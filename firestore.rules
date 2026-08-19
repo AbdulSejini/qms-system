@@ -838,11 +838,11 @@ service cloud.firestore {
     //   - AMENDING AN APPROVED LINE, branches (6) and (7). A year-long plan that
     //     cannot be rescheduled is a plan that gets ignored rather than followed:
     //     people leave, sites close, an auditor turns out to sit in the very
-    //     department under audit. The two halves are split by WHO DECIDES. The
-    //     MONTH is the quality manager's own call and lands on the line directly.
-    //     The TEAM is a large part of what the approver approved, so a change to
-    //     it is written as a proposal (pendingTeamChange) that only this plan's
-    //     own approver can turn into the live value.
+    //     department under audit. But WHEN an audit happens and WHO performs it
+    //     are the substance of the approval itself, so neither moves on the
+    //     quality manager's word: the change is written as a proposal
+    //     (pendingAmendment) carrying the month, the lead and the members, and
+    //     only this plan's own approver can turn it into the live values.
     //
     // ONE PLAN PER YEAR IS NOT ENFORCED HERE and cannot be: answering "does a
     // plan for this year already exist?" needs a query, and rules only ever
@@ -1082,57 +1082,61 @@ service cloud.firestore {
                && after.get('auditId', '') != '';
       }
 
-      // (6) THE LINE IS AMENDED AFTER APPROVAL. An approved plan is a commitment,
-      //     not a stone: a month moves, and a team changes when somebody leaves,
-      //     is on site, or turns out to sit in the department under audit. The
-      //     two are not the same act, and this branch is only the half that needs
-      //     no new decision:
-      //       - plannedMonth may be written straight onto the line. Rescheduling
-      //         inside the plan year is the quality manager's own call, and the
-      //         activity log carries who moved what and when.
-      //       - pendingTeamChange may be raised, revised or withdrawn. It is a
-      //         PROPOSAL sitting beside the live values, never the values
-      //         themselves: leadAuditorId and auditorIds are not in the allowed
-      //         key set, so this branch cannot change who audits anything. Branch
-      //         (7) is the only path that can.
+      // (6) AN AMENDMENT IS PROPOSED ON AN APPROVED LINE. An approved plan is a
+      //     commitment, not a stone: a month moves when a line stops, and a team
+      //     changes when somebody leaves or turns out to sit in the department
+      //     under audit. But WHEN the audit happens and WHO performs it are the
+      //     substance of what the approver approved, so neither moves on the
+      //     quality manager's word alone.
+      //
+      //     This branch therefore writes ONE key and no other: pendingAmendment,
+      //     a proposal that may be raised, revised or withdrawn. plannedMonth,
+      //     leadAuditorId and auditorIds are NOT in the allowed key set, so the
+      //     plans page cannot change the schedule or the team of an approved line
+      //     whatever it sends. Branch (7) - the approver's decision - is the only
+      //     path that can.
       function amendsApprovedItem(role, after, before) {
         return role in ['system_admin', 'quality_manager']
-               && after.diff(before).affectedKeys()
-                    .hasOnly(['plannedMonth', 'pendingTeamChange']);
+               && after.diff(before).affectedKeys().hasOnly(['pendingAmendment']);
       }
 
-      // (7) THE APPROVER DECIDES ON A PROPOSED TEAM. The same person this plan
-      //     already named - approverId - and nobody else: not the quality manager
-      //     who asked for the change, not an administrator. It is the only way
-      //     leadAuditorId and auditorIds ever move on an approved plan, and it is
-      //     nailed to the proposal actually put to them:
-      //       - the line must currently CARRY a pendingTeamChange;
+      // (7) THE APPROVER DECIDES ON THE PROPOSED AMENDMENT. The same person this
+      //     plan already named - approverId - and nobody else: not the quality
+      //     manager who asked for the change, not an administrator. It is the only
+      //     way plannedMonth, leadAuditorId and auditorIds ever move on an
+      //     approved plan, and it is nailed to the proposal actually put to them:
+      //       - the line must currently CARRY a pendingAmendment;
       //       - the amended line must NOT carry one afterwards - the proposal is
       //         consumed either way, approved or rejected;
-      //       - and the resulting lead and members must equal the PROPOSED ones
-      //         (an approval) or the ones already there (a rejection). Anything
-      //         between the two - approving a team nobody proposed - is neither,
-      //         and is refused.
-      function decidesItemTeamChange(uid, after, before) {
+      //       - and the resulting month, lead and members must equal the PROPOSED
+      //         ones (an approval) or the ones already there (a rejection).
+      //         Anything between the two - approving a month or a team nobody
+      //         proposed - is neither, and is refused. The proposal always carries
+      //         all three fields, so the comparison needs no special case for
+      //         "this part was not being changed".
+      function decidesItemAmendment(uid, after, before) {
         return approver() != ''
                && approver() == uid
                && uid != author()
                && after.diff(before).affectedKeys()
-                    .hasOnly(['pendingTeamChange', 'leadAuditorId', 'auditorIds'])
-               && 'pendingTeamChange' in before
-               && !('pendingTeamChange' in after)
-               && ((after.get('leadAuditorId', '')
-                      == before.pendingTeamChange.get('leadAuditorId', '')
+                    .hasOnly(['pendingAmendment', 'plannedMonth', 'leadAuditorId', 'auditorIds'])
+               && 'pendingAmendment' in before
+               && !('pendingAmendment' in after)
+               && ((after.get('plannedMonth', 0)
+                      == before.pendingAmendment.get('plannedMonth', 0)
+                    && after.get('leadAuditorId', '')
+                      == before.pendingAmendment.get('leadAuditorId', '')
                     && after.get('auditorIds', [])
-                      == before.pendingTeamChange.get('auditorIds', []))
-                   || (after.get('leadAuditorId', '') == before.get('leadAuditorId', '')
+                      == before.pendingAmendment.get('auditorIds', []))
+                   || (after.get('plannedMonth', 0) == before.get('plannedMonth', 0)
+                       && after.get('leadAuditorId', '') == before.get('leadAuditorId', '')
                        && after.get('auditorIds', []) == before.get('auditorIds', [])));
       }
 
       function movesApprovedLine(uid, role, after, before) {
         return linksCreatedAuditToItem(after, before)
                || amendsApprovedItem(role, after, before)
-               || decidesItemTeamChange(uid, after, before);
+               || decidesItemAmendment(uid, after, before);
       }
 
       // get:  getAnnualPlanById, getAnnualPlanByYear (where year == ...)
