@@ -648,6 +648,8 @@ export interface Notification {
   'audit_scheduled' | 'corrective_action_response_required' | 'new_finding' |
   // الخطة السنوية - يرسلها مدير الجودة للمعتمِد الذي اختاره، ويعود قراره إليه
   'plan_approval_request' | 'plan_approved' | 'plan_rejected' |
+  // تعديل بند في خطة معتمدة: تغيير الفريق يمرّ بالمعتمِد نفسه، ويعود قراره لطالبه
+  'plan_item_change_request' | 'plan_item_change_approved' | 'plan_item_change_rejected' |
   // تأكيد الموعد - يذهب للمراجع وللمراجَع عليه، ويعود ردّهما لمدير الجودة
   'schedule_confirmation_request' | 'schedule_accepted' | 'schedule_reschedule_requested' |
   // اعتماد قائمة الأسئلة ثم اعتماد الأجوبة - كلاهما من مدير الجودة
