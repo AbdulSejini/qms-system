@@ -136,6 +136,7 @@ function PlansPageContent() {
     plannedMonth: number;
     auditType: AuditType;
     leadAuditorId: string;
+    auditorIds: string[];
     notes: string;
   }>({
     departmentId: '',
@@ -143,6 +144,7 @@ function PlansPageContent() {
     plannedMonth: 1,
     auditType: 'internal',
     leadAuditorId: '',
+    auditorIds: [],
     notes: '',
   });
 
@@ -298,6 +300,32 @@ function PlansPageContent() {
       ),
     [allUsers, newItem.departmentId, newItem.sectionId]
   );
+
+  // أعضاء الفريق المتاحون للإضافة الآن: مراجع مستقل، ليس رئيس الفريق، ولم يُضف بعد.
+  const availableTeamAuditors = useMemo(
+    () => auditors.filter(
+      a => a.id !== newItem.leadAuditorId && !newItem.auditorIds.includes(a.id)
+    ),
+    [auditors, newItem.leadAuditorId, newItem.auditorIds]
+  );
+
+  // تغيير الإدارة أو القسم يغيّر من هو مستقل عن الجهة محل المراجعة. من لم يعد مستقلاً
+  // يخرج من الاختيار في اللحظة نفسها - وإلا بقي مختاراً وهو غائب عن القائمة، ثم انتقل
+  // مع البند إلى المراجعة، وهو بالضبط ما يمنعه فلتر الاستقلالية.
+  const keepIndependent = (ids: string[], departmentId: string, sectionId: string): string[] =>
+    ids.filter(id => {
+      const user = allUsers.find(u => u.id === id);
+      return !!user && isIndependentOf(user, departmentId, sectionId);
+    });
+
+  const addTeamMember = (auditorId: string) => {
+    if (!auditorId || newItem.auditorIds.includes(auditorId)) return;
+    setNewItem({ ...newItem, auditorIds: [...newItem.auditorIds, auditorId] });
+  };
+
+  const removeTeamMember = (auditorId: string) => {
+    setNewItem({ ...newItem, auditorIds: newItem.auditorIds.filter(id => id !== auditorId) });
+  };
 
   // من ترفضه القواعد معتمِداً، فلا يُعرض في القائمة أصلاً. قاعدة authorSubmits في
   // firestore.rules تشترط approverId != createdBy و approverId != المستخدم الذي
@@ -501,6 +529,7 @@ function PlansPageContent() {
       plannedMonth: 1,
       auditType: 'internal',
       leadAuditorId: '',
+      auditorIds: [],
       notes: '',
     });
   };
@@ -523,6 +552,10 @@ function PlansPageContent() {
       plannedMonth: newItem.plannedMonth,
       auditType: newItem.auditType,
       leadAuditorId: newItem.leadAuditorId || undefined,
+      // رئيس الفريق لا يُكرَّر داخل الأعضاء - الحقلان منفصلان في البند وفي المراجعة
+      auditorIds: newItem.auditorIds.length > 0
+        ? newItem.auditorIds.filter(id => id !== newItem.leadAuditorId)
+        : undefined,
       notes: newItem.notes.trim() || undefined,
     };
 
@@ -701,6 +734,11 @@ function PlansPageContent() {
     });
     if (item.sectionId) params.set('sectionId', item.sectionId);
     if (item.leadAuditorId) params.set('leadAuditorId', item.leadAuditorId);
+    // بقية الفريق تنتقل معه: النموذج يقرأها ويملأ بها فريق المراجعة، فلا يُعاد
+    // اختيار الأسماء نفسها يدوياً بعد أن اختارها مدير الجودة على البند.
+    if (item.auditorIds && item.auditorIds.length > 0) {
+      params.set('auditorIds', item.auditorIds.join(','));
+    }
     router.push(`/audits/new?${params.toString()}`);
   };
 
@@ -1286,6 +1324,7 @@ function PlansPageContent() {
                         <TableHead>{t('plans.table.month')}</TableHead>
                         <TableHead>{t('plans.table.auditType')}</TableHead>
                         <TableHead>{t('plans.table.leadAuditor')}</TableHead>
+                        <TableHead>{t('plans.table.team')}</TableHead>
                         <TableHead>{t('plans.table.auditCreated')}</TableHead>
                         {showItemActions(selectedPlan) && (
                           <TableHead className="text-center">{t('common.actions')}</TableHead>
@@ -1295,7 +1334,7 @@ function PlansPageContent() {
                     <TableBody>
                       {(selectedPlan.items || []).length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={showItemActions(selectedPlan) ? 7 : 6} className="py-8 text-center text-[var(--foreground-secondary)]">
+                          <TableCell colSpan={showItemActions(selectedPlan) ? 8 : 7} className="py-8 text-center text-[var(--foreground-secondary)]">
                             {t('plans.detail.noItems')}
                           </TableCell>
                         </TableRow>
@@ -1314,6 +1353,13 @@ function PlansPageContent() {
                               <TableCell className="text-sm">{getMonthName(item.plannedMonth)}</TableCell>
                               <TableCell className="text-sm">{getTypeName(item.auditType)}</TableCell>
                               <TableCell className="text-sm">{getUserName(item.leadAuditorId) || '-'}</TableCell>
+                              <TableCell className="text-sm">
+                                {(item.auditorIds || []).length === 0
+                                  ? '-'
+                                  : (item.auditorIds || [])
+                                    .map(id => getUserName(id) || id)
+                                    .join(language === 'ar' ? '، ' : ', ')}
+                              </TableCell>
                               <TableCell>
                                 {item.auditId ? (
                                   <Badge variant="success">{t('plans.detail.auditCreatedYes')}</Badge>
@@ -1383,7 +1429,18 @@ function PlansPageContent() {
                         <label className="mb-1.5 block text-sm font-medium">{t('plans.table.department')} *</label>
                         <select
                           value={newItem.departmentId}
-                          onChange={(e) => setNewItem({ ...newItem, departmentId: e.target.value, sectionId: '' })}
+                          onChange={(e) => {
+                            const departmentId = e.target.value;
+                            setNewItem({
+                              ...newItem,
+                              departmentId,
+                              sectionId: '',
+                              leadAuditorId: keepIndependent(
+                                newItem.leadAuditorId ? [newItem.leadAuditorId] : [], departmentId, ''
+                              )[0] || '',
+                              auditorIds: keepIndependent(newItem.auditorIds, departmentId, ''),
+                            });
+                          }}
                           className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
                         >
                           <option value="">{t('plans.form.selectDepartment')}</option>
@@ -1398,7 +1455,17 @@ function PlansPageContent() {
                         <label className="mb-1.5 block text-sm font-medium">{t('plans.table.section')}</label>
                         <select
                           value={newItem.sectionId}
-                          onChange={(e) => setNewItem({ ...newItem, sectionId: e.target.value })}
+                          onChange={(e) => {
+                            const sectionId = e.target.value;
+                            setNewItem({
+                              ...newItem,
+                              sectionId,
+                              leadAuditorId: keepIndependent(
+                                newItem.leadAuditorId ? [newItem.leadAuditorId] : [], newItem.departmentId, sectionId
+                              )[0] || '',
+                              auditorIds: keepIndependent(newItem.auditorIds, newItem.departmentId, sectionId),
+                            });
+                          }}
                           disabled={!newItem.departmentId}
                           className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm disabled:opacity-50"
                         >
@@ -1442,7 +1509,15 @@ function PlansPageContent() {
                         <label className="mb-1.5 block text-sm font-medium">{t('plans.table.leadAuditor')}</label>
                         <select
                           value={newItem.leadAuditorId}
-                          onChange={(e) => setNewItem({ ...newItem, leadAuditorId: e.target.value })}
+                          onChange={(e) => {
+                            const leadAuditorId = e.target.value;
+                            setNewItem({
+                              ...newItem,
+                              leadAuditorId,
+                              // من رُقّي رئيساً للفريق يخرج من قائمة الأعضاء - لا يُحسب مرتين
+                              auditorIds: newItem.auditorIds.filter(id => id !== leadAuditorId),
+                            });
+                          }}
                           className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
                         >
                           <option value="">{t('plans.form.selectLater')}</option>
@@ -1452,6 +1527,49 @@ function PlansPageContent() {
                             </option>
                           ))}
                         </select>
+                      </div>
+                      {/* بقية فريق المراجعة - يُضاف عضو في كل مرة، والمضافون يظهرون
+                          كوسوم قابلة للإزالة. القائمة هي نفسها قائمة رئيس الفريق:
+                          مراجعون مستقلون عن الجهة محل المراجعة لا غير. */}
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium">{t('plans.table.team')}</label>
+                        <select
+                          value=""
+                          onChange={(e) => addTeamMember(e.target.value)}
+                          disabled={availableTeamAuditors.length === 0}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm disabled:opacity-50"
+                        >
+                          <option value="">
+                            {availableTeamAuditors.length === 0
+                              ? t('plans.form.noMoreAuditors')
+                              : t('plans.form.addTeamMember')}
+                          </option>
+                          {availableTeamAuditors.map(auditor => (
+                            <option key={auditor.id} value={auditor.id}>
+                              {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
+                            </option>
+                          ))}
+                        </select>
+                        {newItem.auditorIds.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {newItem.auditorIds.map(id => (
+                              <span
+                                key={id}
+                                className="inline-flex items-center gap-1 rounded-full bg-[var(--primary)]/10 px-3 py-1 text-xs text-[var(--primary)]"
+                              >
+                                {getUserName(id) || id}
+                                <button
+                                  type="button"
+                                  onClick={() => removeTeamMember(id)}
+                                  className="hover:text-red-500"
+                                  aria-label={language === 'ar' ? 'إزالة من الفريق' : 'Remove from the team'}
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label className="mb-1.5 block text-sm font-medium">{t('plans.form.notes')}</label>

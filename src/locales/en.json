@@ -207,7 +207,8 @@
       "month": "Planned Month",
       "auditType": "Audit Type",
       "leadAuditor": "Lead Auditor",
-      "auditCreated": "Audit Created"
+      "auditCreated": "Audit Created",
+      "team": "Audit Team"
     },
     "form": {
       "year": "Year",
@@ -216,7 +217,9 @@
       "selectDepartment": "Select Department",
       "allSections": "All Sections",
       "selectLater": "Decide later",
-      "notes": "Notes"
+      "notes": "Notes",
+      "addTeamMember": "Add a team member",
+      "noMoreAuditors": "No auditors available"
     },
     "detail": {
       "itemsTitle": "Planned Audits",

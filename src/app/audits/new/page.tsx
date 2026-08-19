@@ -91,9 +91,18 @@ export default function NewAuditPage() {
     clause: string;
   }
 
-  // Get default lead auditor (current user if they can be auditor)
+  // Get default lead auditor (current user if they can be auditor).
+  //
+  // The test is made against currentUser directly, NOT against the `auditors` list below:
+  // this runs inside the useState initialiser, which React evaluates on every render pass,
+  // and `auditors` is declared after it - so reading it threw "Cannot access 'auditors'
+  // before initialization" before a single element of this page could render. The page was
+  // dead on arrival for everybody, which is also why nothing ever reached the plan link.
+  // The check is the same one `auditors` applies: no department is chosen at this point,
+  // and isIndependentOf() returns true for an empty department, so what remains of that
+  // filter is exactly canBeAuditor && isActive.
   const getDefaultLeadAuditorId = () => {
-    if (currentUser && auditors.some(a => a.id === currentUser.id)) {
+    if (currentUser?.canBeAuditor && currentUser.isActive) {
       return currentUser.id;
     }
     return '';
@@ -183,6 +192,13 @@ export default function NewAuditPage() {
     const departmentId = params.get('departmentId') || '';
     const sectionId = params.get('sectionId') || '';
     const leadAuditorId = params.get('leadAuditorId') || '';
+    // فريق المراجعة كما اختاره مدير الجودة على بند الخطة، بلا تكرار وبلا رئيس الفريق
+    const auditorIds = Array.from(new Set(
+      (params.get('auditorIds') || '')
+        .split(',')
+        .map(id => id.trim())
+        .filter(id => id !== '' && id !== leadAuditorId)
+    ));
     const type = params.get('type');
 
     setPlanLink({ planId, planItemId, year: Number.isFinite(year) ? year : 0 });
@@ -192,6 +208,7 @@ export default function NewAuditPage() {
       if (departmentId) next.departmentId = departmentId;
       if (sectionId) next.sectionId = sectionId;
       if (leadAuditorId) next.leadAuditorId = leadAuditorId;
+      if (auditorIds.length > 0) next.auditorIds = auditorIds;
       if (type && auditTypes.some(auditType => auditType.value === type)) {
         next.type = type as typeof prev.type;
       }
