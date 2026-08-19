@@ -254,7 +254,8 @@
     },
     "delete": {
       "title": "Delete Annual Plan",
-      "description": "This plan and all its planned audits will be deleted"
+      "description": "This plan and all its planned audits will be deleted",
+      "cascade": "The plan disappears at once from every page - the dashboard and the plan list - its notifications (the approval request and the approver's decision) are removed with it, and the deletion is written to the system activity log."
     },
     "empty": {
       "noPlans": "No annual plans yet",

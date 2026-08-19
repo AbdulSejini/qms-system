@@ -14,8 +14,10 @@ import {
   createAnnualPlan,
   updateAnnualPlan,
   deleteAnnualPlan,
+  deleteNotificationsForPlan,
   addNotification,
 } from '@/lib/firestore';
+import { recordActivity } from '@/lib/activity-log';
 import { AnnualPlan, AnnualPlanItem, AnnualPlanStatus, AuditType } from '@/types';
 import orgStructure from '@/data/org-structure.json';
 import {
@@ -169,6 +171,10 @@ function PlansPageContent() {
   const [deleteError, setDeleteError] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // رسالة على مستوى الصفحة - تُستخدم بعد إغلاق النافذة المنبثقة: نتيجة الحذف،
+  // أو أن الخطة المطلوبة برابط الإشعار لم تعد موجودة.
+  const [pageNotice, setPageNotice] = useState('');
+
   // فتح خطة بعينها من رابط الإشعار: /plans?plan=<id>
   // المعتمِد قد يكون موظفاً عادياً لا يظهر له عنصر "الخطط" في القائمة الجانبية،
   // فالرابط المباشر هو ما يضمن وصوله للخطة التي عليه البت فيها.
@@ -199,6 +205,25 @@ function PlansPageContent() {
     () => plans.find(p => p.id === selectedPlanId) || null,
     [plans, selectedPlanId]
   );
+
+  // خطة مطلوبة بمعرّف لا يقابله شيء - غالباً خطة حُذفت وإشعارها ما زال قائماً عند
+  // صاحبه، أو خطة حُذفت من متصفّح آخر بينما نافذتها مفتوحة هنا. الحالتان كانتا
+  // صمتاً تاماً: النافذة لا تُفتح ولا تُقال كلمة، فيبقى القارئ يظن أن الرابط معطوب.
+  // مشتقّة لا محفوظة: لا setState في العرض ولا في useEffect، والرسالة تختفي وحدها
+  // متى ما أُغلقت الخطة. الشرط plansLoaded ضروري لأن القائمة فارغة قبل وصول أول
+  // لقطة من الاشتراك، فتبدو كل خطة عندها "غير موجودة".
+  const missingPlanNotice = plansLoaded && selectedPlanId && !selectedPlan
+    ? (language === 'ar'
+      ? 'الخطة المطلوبة لم تعد موجودة - يبدو أنها حُذفت. إن كنت وصلت إليها من تنبيه فبإمكانك حذف ذلك التنبيه.'
+      : 'The requested plan no longer exists - it appears to have been deleted. If a notification brought you here, you can dismiss it.')
+    : '';
+
+  // إغلاق شريط الرسالة: يمسح رسالة الحذف، ويُغلق الخطة المفقودة معها فيختفي
+  // التنبيه المشتقّ ويُنظَّف ?plan= من العنوان.
+  const dismissPageNotice = () => {
+    setPageNotice('');
+    if (missingPlanNotice) closePlanDetail();
+  };
 
   // ===========================================
   // الهيكل التنظيمي - نفضّل بيانات Firestore ونرجع للملف عند غيابها
@@ -748,22 +773,68 @@ function PlansPageContent() {
     setDetailNotice(notified ? '' : t('plans.errors.notificationFailed'));
   };
 
-  // حذف خطة - للمسودات والمرفوضة فقط
+  // حذف خطة - للمسودات والمرفوضة فقط.
+  //
+  // الحذف لا يمسّ وثيقة الخطة وحدها: الإشعارات التي أنتجتها الخطة تظهر في الجرس
+  // الموجود في رأس كل صفحة، فبقاؤها بعد الحذف يعني أن المعتمِد يظل يُطالَب باعتماد
+  // خطة لم تعد موجودة، وأن الضغط على الإشعار يفتح /plans?plan=<محذوفة> فلا يحدث شيء.
+  // لذلك يمضي الحذف على ثلاث خطوات مرتّبة: تُحذف الخطة، ثم تُنظَّف إشعاراتها، ثم
+  // يُسجَّل الحذف في سجل النشاط ليبقى في السجل أثرٌ لمن حذف ماذا ومتى.
+  //
+  // ترتيب الخطوات مقصود: نجاح حذف الخطة هو نجاح العملية. تعذُّر تنظيف إشعار أو
+  // كتابة قيد في السجل يُعرَض كملاحظة لا كفشل، وإلا فهمها المستخدم على أن الخطة
+  // لم تُحذف وأعاد المحاولة على شيء لم يعد موجوداً. باقي الصفحات (لوحة التحكم
+  // وهذه الصفحة) تقرأ الخطط عبر subscribeToAnnualPlans، فتختفي الخطة عنها لحظياً
+  // دون أي عمل إضافي هنا.
   const confirmDeletePlan = async () => {
     if (!planToDelete || isDeleting) return;
+    const plan = planToDelete;
     setDeleteError('');
 
     setIsDeleting(true);
-    const deleted = await deleteAnnualPlan(planToDelete.id);
-    setIsDeleting(false);
+    const deleted = await deleteAnnualPlan(plan.id);
 
     if (!deleted) {
+      setIsDeleting(false);
       setDeleteError(t('plans.errors.deleteFailed'));
       return;
     }
 
-    if (selectedPlanId === planToDelete.id) closePlanDetail();
+    // إشعارات الخطة: طلب الاعتماد، وإشعار السحب، وقرار المعتمِد
+    const cleanup = await deleteNotificationsForPlan(plan.id, {
+      userId: currentUser?.id || '',
+      isSystemAdmin,
+    });
+    setIsDeleting(false);
+
+    // سجل النشاط - يُكتب ولا يُنتظر (recordActivity لا ترمي أبداً)
+    if (currentUser) {
+      void recordActivity({
+        actorUserId: currentUser.id,
+        actorName: currentUser.fullNameEn || currentUser.fullNameAr,
+        actorEmail: currentUser.email ?? '',
+        actorRole: currentUser.role,
+        action: 'delete',
+        entity: 'annualPlan',
+        entityId: plan.id,
+        entityLabel: plan.titleAr || plan.titleEn || `${plan.year}`,
+        summaryAr: `حذف خطة المراجعة الداخلية السنوية ${plan.year} (${plan.items?.length || 0} بنداً مخططاً، الحالة قبل الحذف: ${plan.status === 'rejected' ? 'مرفوضة' : 'مسودة'})`,
+        summaryEn: `Deleted the ${plan.year} annual internal audit plan (${plan.items?.length || 0} planned items, status before deletion: ${plan.status})`,
+      });
+    }
+
+    if (selectedPlanId === plan.id) closePlanDetail();
     setPlanToDelete(null);
+
+    setPageNotice(
+      cleanup.failed > 0
+        ? (language === 'ar'
+          ? `حُذفت خطة ${plan.year} ولم تعد تظهر في أي صفحة، لكن تعذّر حذف بعض إشعاراتها - قد تبقى في جرس التنبيهات حتى يزيلها صاحبها.`
+          : `The ${plan.year} plan was deleted and no longer appears on any page, but some of its notifications could not be removed - they may remain in their recipient's bell until dismissed.`)
+        : (language === 'ar'
+          ? `حُذفت خطة ${plan.year} مع إشعاراتها، ولم تعد تظهر في لوحة التحكم ولا في قائمة التنبيهات.`
+          : `The ${plan.year} plan and its notifications were deleted; it no longer appears on the dashboard or in the notification list.`)
+    );
   };
 
   return (
@@ -785,6 +856,22 @@ function PlansPageContent() {
             </Button>
           )}
         </div>
+
+        {/* نتيجة الحذف أو خطة مفقودة - تبقى حتى يُغلقها القارئ */}
+        {(pageNotice || missingPlanNotice) && (
+          <div className="flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 text-sm text-[var(--foreground-secondary)]">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--primary)]" />
+            <span className="flex-1">{pageNotice || missingPlanNotice}</span>
+            <button
+              type="button"
+              onClick={dismissPageNotice}
+              className="shrink-0 rounded p-0.5 text-[var(--foreground-muted)] hover:text-[var(--foreground)]"
+              aria-label={language === 'ar' ? 'إغلاق' : 'Dismiss'}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1646,8 +1733,12 @@ function PlansPageContent() {
             <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setPlanToDelete(null)} />
             <div className="relative z-[60] w-full max-w-md rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4">
               <h2 className="mb-2 text-lg font-semibold">{t('plans.delete.title')}</h2>
-              <p className="mb-4 text-sm text-[var(--foreground-secondary)]">
+              <p className="mb-2 text-sm text-[var(--foreground-secondary)]">
                 {t('plans.delete.description')} ({planToDelete.year})
+              </p>
+              {/* ما يذهب مع الخطة - يُقال قبل الضغط لا بعده */}
+              <p className="mb-4 text-sm text-[var(--foreground-muted)]">
+                {t('plans.delete.cascade')}
               </p>
 
               {deleteError && (
