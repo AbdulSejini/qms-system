@@ -548,6 +548,9 @@ export interface AnnualPlanItem {
   plannedMonth: number;        // 1-12
   auditType: AuditType;
   leadAuditorId?: string;
+  // بقية فريق المراجعة إلى جانب رئيسه. يختارهم مدير الجودة على البند نفسه، فينتقلون
+  // مع البند إلى نموذج إنشاء المراجعة. لا يحتوي رئيس الفريق أبداً - هو حقل مستقل.
+  auditorIds?: string[];
   notes?: string;
   auditId?: string;            // set once the scheduled audit is created from this line
 }

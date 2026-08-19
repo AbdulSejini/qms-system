@@ -207,7 +207,8 @@
       "month": "الشهر المخطط",
       "auditType": "نوع المراجعة",
       "leadAuditor": "رئيس فريق المراجعة",
-      "auditCreated": "أُنشئت المراجعة"
+      "auditCreated": "أُنشئت المراجعة",
+      "team": "فريق المراجعة"
     },
     "form": {
       "year": "السنة",
@@ -216,7 +217,9 @@
       "selectDepartment": "اختر الإدارة",
       "allSections": "كل الأقسام",
       "selectLater": "يُحدد لاحقاً",
-      "notes": "ملاحظات"
+      "notes": "ملاحظات",
+      "addTeamMember": "أضف عضواً للفريق",
+      "noMoreAuditors": "لا يوجد مراجعون متاحون"
     },
     "detail": {
       "itemsTitle": "المراجعات المخططة",
