@@ -57,8 +57,39 @@ export const connectEmulators = (authInstance: Auth, dbInstance: Firestore): voi
   }
 };
 
+// ===========================================
+// A build with no Firebase configuration must not fail
+// ===========================================
+//
+// getAuth() throws `auth/invalid-api-key` the moment apiKey is missing, and this module is
+// imported - directly or through a page - by everything. `next build` prerenders every
+// route on the server, so ONE environment without NEXT_PUBLIC_FIREBASE_* fails the whole
+// build on a page as innocent as /_not-found, with a stack trace that names Firebase
+// internals and no environment variable.
+//
+// That is exactly what happens on a preview deployment whose variables were only set for
+// production. The build says nothing about configuration; it says `auth/invalid-api-key`.
+//
+// So when the configuration is absent the app is initialised with an obviously fake one.
+// Nothing is hidden by it: the server render produces the same empty shell either way (every
+// page here is a client component and none reads data while prerendering), and in a BROWSER
+// the missing configuration is reported loudly below and every call still fails - a
+// misconfigured deployment stays broken, it just stops taking the build down with it.
+const hasFirebaseConfig = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
+
+const buildTimePlaceholder = {
+  apiKey: 'missing-firebase-configuration',
+  authDomain: 'missing.firebaseapp.com',
+  projectId: 'missing-firebase-configuration',
+  storageBucket: 'missing.appspot.com',
+  messagingSenderId: '000000000000',
+  appId: '1:000000000000:web:0000000000000000000000',
+};
+
 // Initialize Firebase only if it hasn't been initialized
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+const app = getApps().length === 0
+  ? initializeApp(hasFirebaseConfig ? firebaseConfig : buildTimePlaceholder)
+  : getApps()[0];
 
 // Initialize Firestore
 export const db = getFirestore(app);
@@ -67,6 +98,17 @@ export const db = getFirestore(app);
 export const auth = getAuth(app);
 
 connectEmulators(auth, db);
+
+// A browser that got here without configuration cannot talk to anything, and the reason has
+// to be readable by whoever deploys it - not inferred from a Firebase error code.
+if (!hasFirebaseConfig && typeof window !== 'undefined') {
+  console.error(
+    '[QMS] Firebase configuration is missing: NEXT_PUBLIC_FIREBASE_API_KEY and ' +
+      'NEXT_PUBLIC_FIREBASE_PROJECT_ID are not set for this deployment, so sign-in and every ' +
+      'read and write will fail. Set the NEXT_PUBLIC_FIREBASE_* variables for THIS environment ' +
+      '(preview environments need their own copy) and redeploy.'
+  );
+}
 
 // Said out loud on purpose: an emulator session holds no real data, and mistaking it for
 // the live system is the one way this setting can cost anybody anything.
