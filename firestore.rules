@@ -599,10 +599,23 @@ service cloud.firestore {
                && !isOwnMapping();
       }
 
-      // get: resolveAppUser and confirmAuthMapping (src/lib/auth.ts), on the
-      //      caller's own mapping. Readable by its subject so that sign-in can
-      //      resolve the application user, and by an administrator.
-      allow get: if isSignedIn() && (authUid == request.auth.uid || isAdmin());
+      // get: resolveAppUser and confirmAuthMapping (src/lib/auth.ts). Readable by
+      //      its subject, so that sign-in can resolve the application user - and
+      //      by whoever may ISSUE a mapping, which since 2.2 is the quality
+      //      manager as well as the administrator.
+      //
+      //      READING SOMEBODY ELSE'S MAPPING IS NOT A LUXURY HERE, it is the
+      //      last step of onboarding. createSignInAccount writes the mapping and
+      //      then reads it back (confirmAuthMapping), because a write can be
+      //      accepted locally and never reach the server, and an account that is
+      //      reported as usable but has no mapping cannot sign in. When the read
+      //      was denied the confirmation failed, so the freshly created Auth
+      //      account was ROLLED BACK and deleted: the quality manager was allowed
+      //      to create employees and issue their access, and every attempt ended
+      //      in "the account was removed again". `list` stays administrator-only
+      //      - this permits reading a named mapping, not enumerating them.
+      allow get: if isSignedIn()
+                 && (authUid == request.auth.uid || isQualityStaff());
 
       // list: only the operator reports enumerate this collection
       //       (scripts/check-auth-migration.mjs:73, and the COLLECTIONS list in
