@@ -12,6 +12,7 @@ import {
   orderBy,
   Timestamp,
   onSnapshot,
+  DocumentReference,
   Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -769,6 +770,72 @@ export const deleteNotification = async (notificationId: string): Promise<boolea
   }
 };
 
+// Remove every notification that belongs to one annual plan.
+//
+// A deleted plan used to leave its notifications standing, and a notification is visible on
+// EVERY page - the bell lives in the header. So the approver kept being told that a plan
+// awaited their decision after that plan had been deleted, and opening the notification
+// landed on /plans?plan=<gone> which did nothing at all. A plan's notifications are part of
+// the plan; they go when it goes.
+//
+// WHAT THE CALLER MAY REMOVE is settled in firestore.rules, not here: a system
+// administrator may delete any notification, and everybody else may delete the ones
+// addressed to them and the ones they themselves sent. For a plan that covers all of them,
+// because the quality manager who deletes the plan is one or the other on every notification
+// it ever produced - they sent the approval request and the recall notice, and they received
+// the approval or the rejection from the approver they had picked. Anything a caller may not
+// touch is counted in `failed` rather than silently ignored, so the page can say so.
+//
+// Both queries are equality-only. Firestore serves those by merging its automatic
+// single-field indexes, so no composite index is needed - which matters here, because this
+// project has no deployment step that could create one.
+export const deleteNotificationsForPlan = async (
+  planId: string,
+  actor: { userId: string; isSystemAdmin: boolean }
+): Promise<{ removed: number; failed: number }> => {
+  const notificationsRef = collection(db, COLLECTIONS.NOTIFICATIONS);
+
+  const queries = actor.isSystemAdmin
+    ? [query(notificationsRef, where('planId', '==', planId))]
+    : [
+      query(notificationsRef, where('planId', '==', planId), where('recipientId', '==', actor.userId)),
+      query(notificationsRef, where('planId', '==', planId), where('senderId', '==', actor.userId)),
+    ];
+
+  // The same notification can come back from both queries (the author notifying themselves
+  // is not a shape the pages produce, but a Map costs nothing and a double delete would be
+  // counted as a failure).
+  const targets = new Map<string, DocumentReference>();
+  let failed = 0;
+
+  for (const q of queries) {
+    try {
+      const snapshot = await getDocs(q);
+      snapshot.docs.forEach(entry => targets.set(entry.id, entry.ref));
+    } catch (error) {
+      // One query denied or offline must not stop the other from clearing what it can
+      console.error('Error reading plan notifications for cleanup:', error);
+      failed += 1;
+    }
+  }
+
+  const results = await Promise.allSettled(
+    Array.from(targets.values()).map(ref => deleteDoc(ref))
+  );
+
+  let removed = 0;
+  results.forEach(result => {
+    if (result.status === 'fulfilled') {
+      removed += 1;
+    } else {
+      failed += 1;
+      console.error('Error deleting plan notification:', result.reason);
+    }
+  });
+
+  return { removed, failed };
+};
+
 // ===========================================
 // Audit Operations
 // ===========================================
@@ -1024,7 +1091,13 @@ export const updateAnnualPlan = async (planId: string, updates: Partial<AnnualPl
   }
 };
 
-// Delete annual plan
+// Delete annual plan.
+//
+// The plan document is the only thing this removes. Its notifications are removed by
+// deleteNotificationsForPlan (the Notifications section above), which the plans page calls
+// straight after this returns true - deliberately as a second, separate call: the plan
+// really is gone once this succeeds, and a notification that could not be cleared must not
+// be reported to the operator as a plan that was not deleted.
 export const deleteAnnualPlan = async (planId: string): Promise<boolean> => {
   try {
     const planRef = doc(db, COLLECTIONS.ANNUAL_PLANS, planId);

@@ -1211,11 +1211,17 @@ service cloud.firestore {
       // list: getNotificationsForUser, subscribeToNotifications and
       //       markAllNotificationsAsRead all query where recipientId == <own id>,
       //       so the recipient clause is always satisfied by the query itself.
+      //       deleteNotificationsForPlan (src/lib/firestore.ts) queries
+      //       planId == <plan> AND senderId == <own id> for the other half of a
+      //       deleted plan's notifications - the ones the caller sent to somebody
+      //       else - which the sender clause below satisfies the same way.
       //       The admin clause is document-independent and lets the backup
       //       script export the collection.
       // get:  no dedicated function today; implied by list access.
       allow get, list: if isAdmin()
-                       || (isActive() && resource.data.recipientId == appUserId());
+                       || (isActive()
+                           && (resource.data.recipientId == appUserId()
+                               || resource.data.get('senderId', '') == appUserId()));
 
       // create: addNotification - one user notifying another (approval
       //         requests, decisions, team assignments), so the recipient is
@@ -1235,9 +1241,27 @@ service cloud.firestore {
                     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
 
       // delete: deleteNotification, from the recipient's own notification list
-      //         in the Header.
+      //         in the Header - and deleteNotificationsForPlan, which clears a
+      //         deleted annual plan's notifications so that "awaiting your
+      //         approval" does not outlive the plan it points at, on the bell
+      //         that every page carries.
+      //
+      //         THE SENDER CLAUSE IS WHAT MAKES THAT CLEANUP POSSIBLE. The plan's
+      //         approver is nobody fixed: the quality manager picks them from the
+      //         user list on each plan (approverId), so the approval request the
+      //         manager sent is addressed to a person the manager is not, and
+      //         with the recipient clause alone the manager could delete the plan
+      //         but never the notification about it. What is widened is narrow
+      //         and symmetric: you may withdraw a notification YOU sent, exactly
+      //         as you may dismiss one you received. Nothing here lets anyone
+      //         read, alter or remove a notification between two other people -
+      //         senderId is written on create and can never be changed (the
+      //         update rule permits only `read`), so it cannot be pointed at
+      //         somebody else's traffic after the fact.
       allow delete: if isAdmin()
-                    || (isActive() && resource.data.recipientId == appUserId());
+                    || (isActive()
+                        && (resource.data.recipientId == appUserId()
+                            || resource.data.get('senderId', '') == appUserId()));
     }
 
     // -------------------------------------------------------------------
