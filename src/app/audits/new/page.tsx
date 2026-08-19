@@ -55,6 +55,25 @@ const auditTypes = [
   { value: 'certification', labelAr: 'شهادة', labelEn: 'Certification', descAr: 'مراجعة للحصول على شهادة', descEn: 'Certification audit' },
 ];
 
+// أسماء الأشهر الميلادية - نفس ترتيب صفحة الخطة السنوية. تُستعمل في العنوان
+// المولَّد وفي حدود التاريخ داخل الشهر المخطط. لا نشتقّها من toLocaleDateString
+// لأن ar-SA يعيد التقويم الهجري، والخطة السنوية ميلادية.
+// اسم نوع المراجعة كما يُقرأ داخل عنوان: «مراجعة داخلية» لا «مراجعة داخلي».
+// تسميات auditTypes صفات لقائمة اختيار، وتركيبها في جملة يكسر المطابقة.
+const auditTypeTitles: Record<string, { ar: string; en: string }> = {
+  internal: { ar: 'مراجعة داخلية', en: 'Internal Audit' },
+  external: { ar: 'مراجعة خارجية', en: 'External Audit' },
+  surveillance: { ar: 'مراجعة مراقبة', en: 'Surveillance Audit' },
+  certification: { ar: 'مراجعة شهادة', en: 'Certification Audit' },
+};
+
+const monthNames = [
+  { ar: 'يناير', en: 'January' }, { ar: 'فبراير', en: 'February' }, { ar: 'مارس', en: 'March' },
+  { ar: 'أبريل', en: 'April' }, { ar: 'مايو', en: 'May' }, { ar: 'يونيو', en: 'June' },
+  { ar: 'يوليو', en: 'July' }, { ar: 'أغسطس', en: 'August' }, { ar: 'سبتمبر', en: 'September' },
+  { ar: 'أكتوبر', en: 'October' }, { ar: 'نوفمبر', en: 'November' }, { ar: 'ديسمبر', en: 'December' },
+];
+
 // Duration options for audit end date
 const durationOptions = [
   { value: 'same_day', days: 0, labelAr: 'نفس اليوم', labelEn: 'Same Day' },
@@ -169,8 +188,12 @@ export default function NewAuditPage() {
     planId: string;
     planItemId: string;
     year: number;
+    month: number;   // 1-12, الشهر الذي اعتُمد في الخطة
   }
   const [planLink, setPlanLink] = useState<PlanLink | null>(null);
+
+  // العنوان يُكتب يدوياً فقط إذا اختار المستخدم ذلك؛ وإلا فهو مولَّد من الخطة
+  const [editingTitle, setEditingTitle] = useState(false);
 
   // The audit was created but its id could not be written onto the plan line.
   // Kept on screen with a retry so the operator is never left believing the plan
@@ -201,7 +224,12 @@ export default function NewAuditPage() {
     ));
     const type = params.get('type');
 
-    setPlanLink({ planId, planItemId, year: Number.isFinite(year) ? year : 0 });
+    setPlanLink({
+      planId,
+      planItemId,
+      year: Number.isFinite(year) ? year : 0,
+      month: month >= 1 && month <= 12 ? month : 0,
+    });
 
     setFormData(prev => {
       const next = { ...prev };
@@ -253,6 +281,59 @@ export default function NewAuditPage() {
   // Helper functions
   const getDepartment = (id: string) => allDepartments.find(d => d.id === id);
   const getSection = (id: string) => allSections.find(s => s.id === id);
+
+  // ===========================================
+  // مراجعة مُنشأة من بند خطة معتمدة: ما لا يُعاد إدخاله
+  // ===========================================
+  //
+  // البند المعتمد يحمل الإدارة والقسم ونوع المراجعة والشهر والفريق. إعادة كتابة
+  // عنوان لها بعد ذلك عملٌ بلا معنى: المراجعة معرَّفة تماماً بما اعتُمد - مراجعة
+  // كذا لإدارة كذا في شهر كذا من سنة كذا - فيُولَّد العنوان من هذه العناصر نفسها،
+  // ويبقى للمستخدم ما لا تعرفه الخطة: اليوم بالضبط داخل الشهر المخطط، والفريق.
+  // ومن أراد عنواناً مختلفاً يفتحه بزر واحد؛ نحن نرفع عنه العمل، لا نمنعه منه.
+  const plannedMonthLabel = (): string => {
+    if (!planLink?.month) return '';
+    const m = monthNames[planLink.month - 1];
+    return `${language === 'ar' ? m.ar : m.en} ${planLink.year || ''}`.trim();
+  };
+
+  const generatedTitle = (lang: 'ar' | 'en'): string => {
+    const department = getDepartment(formData.departmentId);
+    const section = formData.sectionId ? getSection(formData.sectionId) : undefined;
+    const type = auditTypes.find(t => t.value === formData.type);
+    if (!department || !planLink) return '';
+
+    const monthIndex = planLink.month ? planLink.month - 1 : Number((formData.startDate || '').split('-')[1] || 0) - 1;
+    const month = monthIndex >= 0 && monthIndex < 12 ? monthNames[monthIndex] : null;
+    const year = planLink.year || Number((formData.startDate || '').split('-')[0]) || '';
+
+    const place = lang === 'ar'
+      ? `${department.nameAr}${section ? ` / ${section.nameAr}` : ''}`
+      : `${department.nameEn}${section ? ` / ${section.nameEn}` : ''}`;
+    const kind = auditTypeTitles[formData.type]
+      ? auditTypeTitles[formData.type][lang]
+      : (lang === 'ar' ? 'مراجعة' : `${type?.labelEn || ''} Audit`.trim());
+    const when = month ? ` - ${lang === 'ar' ? month.ar : month.en} ${year}` : '';
+
+    return `${kind} - ${place}${when}`;
+  };
+
+  // العنوان الفعلي: ما كتبه المستخدم إن كتب، وإلا المولَّد من بند الخطة
+  const effectiveTitle = (lang: 'ar' | 'en'): string => {
+    const typed = lang === 'ar' ? formData.titleAr.trim() : formData.titleEn.trim();
+    return typed || generatedTitle(lang);
+  };
+
+  // حدود اليوم داخل الشهر المخطط - الخطة اعتمدت الشهر، فلا يُنقل منه هنا
+  const plannedMonthRange = (): { min: string; max: string } | null => {
+    if (!planLink?.month || !planLink.year) return null;
+    const month = String(planLink.month).padStart(2, '0');
+    const lastDay = new Date(planLink.year, planLink.month, 0).getDate();
+    return {
+      min: `${planLink.year}-${month}-01`,
+      max: `${planLink.year}-${month}-${String(lastDay).padStart(2, '0')}`,
+    };
+  };
   const getUser = (id: string) => allUsers.find(u => u.id === id);
   const getSectionsByDepartment = (deptId: string) => allSections.filter(s => s.departmentId === deptId && s.isActive);
 
@@ -434,10 +515,11 @@ export default function NewAuditPage() {
 
     switch (step) {
       case 1: // Basic info
-        if (!formData.titleAr.trim()) {
+        // العنوان مطلوب فقط حين لا يكون هناك عنوان مولَّد من بند الخطة
+        if (!effectiveTitle('ar')) {
           newErrors.titleAr = language === 'ar' ? 'عنوان المراجعة مطلوب' : 'Audit title is required';
         }
-        if (!formData.titleEn.trim()) {
+        if (!effectiveTitle('en')) {
           newErrors.titleEn = language === 'ar' ? 'العنوان بالإنجليزية مطلوب' : 'English title is required';
         }
         break;
@@ -452,6 +534,14 @@ export default function NewAuditPage() {
       case 3: // Schedule
         if (!formData.startDate) {
           newErrors.startDate = language === 'ar' ? 'تاريخ البدء مطلوب' : 'Start date is required';
+        } else {
+          // الشهر اعتُمد في الخطة؛ اليوم وحده هو المتروك للاختيار
+          const range = plannedMonthRange();
+          if (range && (formData.startDate < range.min || formData.startDate > range.max)) {
+            newErrors.startDate = language === 'ar'
+              ? `التاريخ خارج الشهر المخطط (${plannedMonthLabel()}). لنقل المراجعة إلى شهر آخر عدّل بند الخطة نفسه.`
+              : `The date is outside the planned month (${plannedMonthLabel()}). To move the audit to another month, amend the plan line itself.`;
+          }
         }
         break;
       case 5: // Questions
@@ -505,8 +595,8 @@ export default function NewAuditPage() {
       const audit = {
         id: `${Date.now()}`,
         number: `AUD-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 9999)).padStart(4, '0')}`,
-        titleAr: formData.titleAr,
-        titleEn: formData.titleEn,
+        titleAr: effectiveTitle('ar'),
+        titleEn: effectiveTitle('en'),
         type: formData.type,
         departmentId: formData.departmentId,
         sectionId: formData.sectionId || undefined,
@@ -531,7 +621,7 @@ export default function NewAuditPage() {
           userId: currentUser?.id || '',
           timestamp: new Date().toISOString(),
           details: {
-            description: `تم إنشاء المراجعة "${formData.titleAr}"`,
+            description: `تم إنشاء المراجعة "${effectiveTitle('ar')}"`,
           },
         }],
       };
@@ -588,8 +678,8 @@ export default function NewAuditPage() {
             type: 'audit_approval_request',
             title: language === 'ar' ? 'طلب موافقة على مراجعة جديدة' : 'New Audit Approval Request',
             message: language === 'ar'
-              ? `طلب موافقة على مراجعة: ${formData.titleAr}`
-              : `Approval request for audit: ${formData.titleEn}`,
+              ? `طلب موافقة على مراجعة: ${effectiveTitle('ar')}`
+              : `Approval request for audit: ${effectiveTitle('en')}`,
             recipientId: qm.id,
             senderId: currentUser?.id,
             auditId: auditId,
@@ -615,8 +705,8 @@ export default function NewAuditPage() {
             type: 'audit_team_assignment',
             title: language === 'ar' ? 'تم إضافتك لفريق مراجعة' : 'Added to Audit Team',
             message: language === 'ar'
-              ? `تم إضافتك كعضو في فريق المراجعة: ${formData.titleAr}`
-              : `You have been added as a team member in audit: ${formData.titleEn}`,
+              ? `تم إضافتك كعضو في فريق المراجعة: ${effectiveTitle('ar')}`
+              : `You have been added as a team member in audit: ${effectiveTitle('en')}`,
             recipientId: memberId,
             senderId: currentUser?.id,
             auditId: auditId,
@@ -822,7 +912,33 @@ export default function NewAuditPage() {
             {/* Step 1: Basic Info */}
             {currentStep === 1 && (
               <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* مراجعة من بند خطة: العنوان مولَّد ولا يُطلب من المستخدم */}
+                {planLink && !editingTitle && (
+                  <div className="rounded-lg border border-[var(--border)] bg-[var(--background-secondary)] p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs text-[var(--foreground-secondary)] mb-1">
+                          {language === 'ar' ? 'عنوان المراجعة - مولَّد من بند الخطة' : 'Audit title - generated from the plan line'}
+                        </p>
+                        {/* الإدارات تُحمَّل بعد التركيب، فقد يسبق العرضُ وصولَها */}
+                        <p className="font-medium">
+                          {effectiveTitle(language === 'ar' ? 'ar' : 'en')
+                            || (language === 'ar' ? 'يُولَّد بمجرد تحميل بيانات الإدارة…' : 'Generated as soon as the department data loads…')}
+                        </p>
+                        <p className="text-xs text-[var(--foreground-muted)] mt-1">
+                          {language === 'ar'
+                            ? 'الإدارة والقسم ونوع المراجعة والشهر مأخوذة من الخطة المعتمدة - يبقى عليك اليوم بالضبط وفريق المراجعة.'
+                            : 'Department, section, type and month come from the approved plan - what is left for you is the exact day and the audit team.'}
+                        </p>
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => setEditingTitle(true)}>
+                        {language === 'ar' ? 'تعديل العنوان' : 'Edit title'}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <div className={`grid grid-cols-1 md:grid-cols-2 gap-6${planLink && !editingTitle ? ' hidden' : ''}`}>
                   <div>
                     <label className="block text-sm font-medium mb-2">
                       {language === 'ar' ? 'عنوان المراجعة (عربي) *' : 'Audit Title (Arabic) *'}
@@ -1073,9 +1189,20 @@ export default function NewAuditPage() {
                       type="date"
                       value={formData.startDate}
                       onChange={(e) => handleStartDateChange(e.target.value)}
+                      min={plannedMonthRange()?.min}
+                      max={plannedMonthRange()?.max}
                       className={`w-full rounded-lg border px-4 py-3 text-sm ${errors.startDate ? 'border-red-500' : 'border-[var(--border)]'
                         } bg-[var(--background)]`}
                     />
+                    {/* الشهر جاء من الخطة المعتمدة؛ المتاح هنا اليوم داخله */}
+                    {plannedMonthRange() && !errors.startDate && (
+                      <p className="text-xs text-[var(--foreground-secondary)] mt-1 flex items-center gap-1">
+                        <Calendar className="h-3 w-3" />
+                        {language === 'ar'
+                          ? `اختر اليوم داخل الشهر المخطط: ${plannedMonthLabel()}`
+                          : `Pick the day inside the planned month: ${plannedMonthLabel()}`}
+                      </p>
+                    )}
                     {errors.startDate && (
                       <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
                         <AlertCircle className="h-3 w-3" />
@@ -1420,7 +1547,7 @@ export default function NewAuditPage() {
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                       <div>
                         <span className="text-[var(--foreground-secondary)]">{language === 'ar' ? 'العنوان:' : 'Title:'}</span>
-                        <p className="font-medium">{language === 'ar' ? formData.titleAr : formData.titleEn}</p>
+                        <p className="font-medium">{language === 'ar' ? effectiveTitle('ar') : effectiveTitle('en')}</p>
                       </div>
                       <div>
                         <span className="text-[var(--foreground-secondary)]">{language === 'ar' ? 'الإدارة:' : 'Department:'}</span>
@@ -1528,7 +1655,7 @@ export default function NewAuditPage() {
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span className="text-[var(--foreground-secondary)]">{language === 'ar' ? 'العنوان:' : 'Title:'}</span>
-                      <span className="font-medium">{language === 'ar' ? formData.titleAr : formData.titleEn}</span>
+                      <span className="font-medium">{language === 'ar' ? effectiveTitle('ar') : effectiveTitle('en')}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-[var(--foreground-secondary)]">{language === 'ar' ? 'النوع:' : 'Type:'}</span>
