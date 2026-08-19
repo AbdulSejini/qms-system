@@ -11,8 +11,9 @@ Firestore المنشورة.
 
 ## Credentials | بيانات الدخول
 
-Both scripts take the same credentials, and never store them. Use an account that is
-allowed to read everything — a `system_admin`.
+Every script takes the same credentials, and none of them store the password. Use an
+account that is allowed to read everything — a `system_admin`. `seed-org.mjs` **requires**
+one: under the deployed rules only a `system_admin` may create `users` documents.
 
 ```bash
 QMS_OPERATOR_EMAIL=admin@example.com QMS_OPERATOR_PASSWORD='...' \
@@ -92,6 +93,80 @@ Options:
 Anything non-zero means *do not proceed*. The script abandons the report rather than
 printing an incomplete one, because a report that says "everyone is migrated" only because
 a read failed is worse than no report at all.
+
+## `seed-org.mjs`
+
+Creates the organisational structure — 8 departments, 42 sections and one employee record
+per person named in `src/data/org-structure.json`, including its `auditors` roster of the
+16 ISO 9001 internal auditors. **Run it once, when the directory is still empty**, to save
+typing 50 records into the Users page by hand. It is the only script here that writes.
+
+يُنشئ الهيكل التنظيمي: الإدارات والأقسام وسجلاً لكل موظف. يعمل بشكل تجريبي افتراضياً ولا
+يكتب شيئاً إلا مع `--commit`.
+
+```bash
+# 1. look — this changes nothing:
+QMS_OPERATOR_EMAIL=... QMS_OPERATOR_PASSWORD='...' node scripts/seed-org.mjs
+
+# 2. then, only when the printed plan is right:
+QMS_OPERATOR_EMAIL=... QMS_OPERATOR_PASSWORD='...' node scripts/seed-org.mjs --commit
+```
+
+**A dry run is the default.** Without `--commit` it signs in, reads, prints the exact plan
+and exits having written nothing.
+
+Document ids are the org-structure codes (`departments/OPS`, `sections/OPS-PROD-LV`) and a
+slug of the person's name (`users/user-ajmal-khan`), so **re-running never duplicates
+anything**. A document that already exists is reported `EXISTS` and left completely alone —
+the script only ever adds. Correcting a record afterwards is the Users and Departments
+pages' job, not this script's.
+
+### The email addresses are guesses
+
+The company gave us one verified address, `mabahwairith@saudicable.com`, which is
+first-initial + middle-initial + surname. Every other address is that rule applied to a
+transliterated name, and a transliterated name has several defensible spellings.
+
+- Each guessed address is written with **`emailIsGuessed: true`** on the user document, so
+  nobody later mistakes it for a verified one. Bahwairith's is written with `false`.
+- The script prints a table of every guess with the alternatives it considered and why each
+  is uncertain. **Correct them on the Users page before onboarding anyone** — nothing
+  verifies these and there is no email service that would bounce a wrong one.
+- Once you know a real address, add it to `CONFIRMED_EMAILS` at the top of the script and
+  re-run; a confirmed address does not have to match the rule.
+- If two guesses collide, the script refuses to write anything and exits `1`. It will not
+  pick a winner: a wrong address is a sign-in that lands on somebody else's account.
+
+### What it will not do
+
+- **No Firebase Auth accounts, no passwords.** The records it creates are directory
+  entries with no way to sign in. Onboarding stays on the Users page, which creates the
+  Auth account and issues the one-time access code handed to the employee in person.
+- **It never touches `users/system-admin-root`**, and never creates a second record for the
+  person that document describes, even though the workbook names him as head and auditee of
+  Governance, Risk & Compliance. Those two fields are left unset instead.
+
+### Roles
+
+`quality_manager` for Mohammed A. Bahwairith, `auditor` (with `canBeAuditor: true`) for the
+other 15 people on the roster, `department_manager` for anyone the workbook names as a
+department head, `employee` for the remaining section auditees. The auditor role wins over
+any other hat a person wears, and every such overlap is printed under **NEEDS AN OPERATOR
+DECISION** — along with unresolvable auditees, departments with no single named head, and
+the auditors whose department had to be guessed from their position. Read that section.
+
+`auditableDepartmentIds` / `auditableSectionIds` are left empty for everybody: who may
+audit what is the quality manager's per-audit decision, and an auditor must not be handed
+their own area by a seeding script.
+
+| Exit | Meaning |
+| ---- | ------- |
+| `0` | the plan was printed (dry run), or every planned write succeeded |
+| `1` | refused or incomplete — a guessed address collided, or a write failed |
+| `2` | could not start (bad config, sign-in refused, `org-structure.json` unusable) |
+
+Nothing is rolled back on a partial failure; re-running is safe and retries only what is
+missing.
 
 ## The migration in order | ترتيب الخطوات
 

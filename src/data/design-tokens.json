@@ -1,0 +1,109 @@
+{
+  "source": "QMS Redesign.dc.html - the QA department's approved redesign",
+  "note": "Design tokens extracted verbatim. The app's globals.css should map onto these.",
+  "light": {
+    "--bg": "#FAFBFC",
+    "--surface": "#FFFFFF",
+    "--surface-2": "#F1F5F9",
+    "--surface-3": "#F8FAFC",
+    "--fg": "#1E293B",
+    "--fg-2": "#64748B",
+    "--fg-3": "#94A3B8",
+    "--line": "#E2E8F0",
+    "--line-2": "#CBD5E1",
+    "--brand": "#E8850A",
+    "--brand-hover": "#D47A09",
+    "--brand-soft": "#FFF8F0",
+    "--ok": "#10B981",
+    "--ok-soft": "#ECFDF5",
+    "--warn": "#F59E0B",
+    "--warn-soft": "#FFFBEB",
+    "--err": "#EF4444",
+    "--err-soft": "#FEF2F2",
+    "--info": "#3B82F6",
+    "--info-soft": "#EFF6FF",
+    "--crit": "#EF4444",
+    "--crit-soft": "#FEF2F2",
+    "--high": "#F97316",
+    "--high-soft": "#FFF7ED",
+    "--med": "#EAB308",
+    "--med-soft": "#FEFCE8",
+    "--low": "#22C55E",
+    "--low-soft": "#F0FDF4",
+    "--shadow": "0 1px 2px rgba(15,23,42,.04),0 1px 3px rgba(15,23,42,.05)",
+    "--shadow-lg": "0 10px 30px -12px rgba(15,23,42,.22)"
+  },
+  "dark": {
+    "--bg": "#0F172A",
+    "--surface": "#1E293B",
+    "--surface-2": "#334155",
+    "--surface-3": "#243147",
+    "--fg": "#F1F5F9",
+    "--fg-2": "#94A3B8",
+    "--fg-3": "#64748B",
+    "--line": "#334155",
+    "--line-2": "#475569",
+    "--brand": "#F59E0B",
+    "--brand-hover": "#E8850A",
+    "--brand-soft": "#431407",
+    "--ok-soft": "#052E16",
+    "--warn-soft": "#422006",
+    "--err-soft": "#450A0A",
+    "--info-soft": "#1E3A5A",
+    "--crit-soft": "#450A0A",
+    "--high-soft": "#431407",
+    "--med-soft": "#422006",
+    "--low-soft": "#052E16",
+    "--shadow": "0 1px 2px rgba(0,0,0,.3)",
+    "--shadow-lg": "0 10px 30px -12px rgba(0,0,0,.6)"
+  },
+  "sidebar": {
+    "width": "246px",
+    "headerHeight": "57px",
+    "groups": [
+      {
+        "label": {
+          "en": "Overview",
+          "ar": "نظرة عامة"
+        },
+        "items": [
+          "dashboard"
+        ]
+      },
+      {
+        "label": {
+          "en": "Auditing",
+          "ar": "المراجعة"
+        },
+        "items": [
+          "audits",
+          "findings",
+          "followup",
+          "calendar"
+        ]
+      },
+      {
+        "label": {
+          "en": "Analytics",
+          "ar": "التحليلات"
+        },
+        "items": [
+          "performance",
+          "reports"
+        ]
+      },
+      {
+        "label": {
+          "en": "Administration",
+          "ar": "الإدارة"
+        },
+        "items": [
+          "users",
+          "departments",
+          "settings"
+        ]
+      }
+    ]
+  },
+  "logo": "magnifier - circle cx44 cy44 r32 stroke brand w8, path M54 54 79 79 stroke fg w9 round"
+}

@@ -38,6 +38,7 @@ import {
   AlertCircle,
   ShieldAlert,
   KeyRound,
+  Copy,
   Check,
   Loader2,
   UserPlus,
@@ -118,6 +119,10 @@ export default function UsersPage() {
   // إنشاء حساب دخول لموظف قائم - نافذة التأكيد ونتيجتها
   const [showCreateAccountConfirm, setShowCreateAccountConfirm] = useState(false);
   const [createAccountSuccess, setCreateAccountSuccess] = useState(false);
+  // رمز الوصول لمرة واحدة. هذه هي اللحظة الوحيدة التي يوجد فيها: لا يُكتب في Firestore
+  // ولا يمكن استرجاعه لاحقاً، فإن ضاع فالحساب لا يفتحه أحد ولا بد من حساب جديد.
+  const [accessCode, setAccessCode] = useState('');
+  const [codeCopied, setCodeCopied] = useState(false);
   const [createAccountError, setCreateAccountError] = useState('');
 
   // Filter users
@@ -148,6 +153,7 @@ export default function UsersPage() {
       department_manager: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
       section_head: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
       employee: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400',
+      external_auditor: 'bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-200',
     };
     const roleName = language === 'ar' ? getRoleNameAr(role) : getRoleNameEn(role);
     return (
@@ -324,6 +330,16 @@ export default function UsersPage() {
           }));
           return;
         }
+
+        // نجح الإنشاء: رمز الوصول موجود في هذه اللحظة فقط ولا يمكن استرجاعه لاحقاً،
+        // فيُعرض للمسؤول قبل إغلاق أي شيء بدل أن يُطوى مع النافذة.
+        setAccessCode(accountResult.accessCode);
+        setCodeCopied(false);
+        setShowFormModal(false);
+        setSelectedUser(newUser);
+        setCreateAccountSuccess(true);
+        setShowCreateAccountConfirm(true);
+        return;
       }
 
       setShowFormModal(false);
@@ -401,10 +417,10 @@ export default function UsersPage() {
         return language === 'ar'
           ? 'تعذّر كتابة ربط الصلاحيات أو تأكيده، فأُلغي الحساب الذي أُنشئ للتو ولم يبقَ أثر له - أعد المحاولة مباشرة. إن تكرر الفشل فالمشكلة في صلاحيات قاعدة البيانات.'
           : 'The authorization link could not be written or confirmed, so the account that had just been created was removed again and nothing was left behind - you can retry straight away. If it keeps failing the problem is in the database rules.';
-      case 'reset_email_failed':
+      case 'flag_not_set':
         return language === 'ar'
-          ? 'أُنشئ الحساب وربطه بنجاح، لكن رسالة تعيين كلمة المرور لم تُرسل. استخدم "إعادة تعيين كلمة المرور" لإرسالها مرة أخرى.'
-          : 'The account and its link were created, but the password setup email was not sent. Use "Reset Password" to send it again.';
+          ? 'أُنشئ الحساب وربطه، لكن تعذّر وسم الموظف بأنه مطالب بتغيير كلمة المرور - وهذا يترك رمز الوصول صالحاً إلى الأبد، فأُلغي الحساب. أعد المحاولة.'
+          : 'The account and its link were created, but the employee could not be marked as owing a password change - that would leave the access code working forever, so the account was rolled back. Try again.';
       case 'inactive':
         return language === 'ar'
           ? 'هذا المستخدم معطّل، فلم يُنشأ له حساب دخول. فعّل المستخدم أولاً.'
@@ -450,15 +466,17 @@ export default function UsersPage() {
 
       // إعادة تحميل القائمة عند كل نتيجة غيّرت حالة الخادم، لا عند النجاح وحده:
       //   ok                 صار للموظف حساب دخول
-      //   reset_email_failed الحساب والربط قائمان فعلاً، والصف كان يبقى "بلا حساب دخول"
+      //   account_exists     الحساب قائم فعلاً، والصف كان يبقى "بلا حساب دخول"
       //                      ويعرض زر الإنشاء الذي سيصطدم بأن البريد مستخدم مسبقاً
       //   not_linked         أُلغي الحساب وأُزيل المؤشر من وثيقة المستخدم، فالصف يجب
       //                      أن يعود ليعرض زر الإنشاء من جديد
-      if (result.ok || result.reason === 'reset_email_failed' || result.reason === 'not_linked') {
+      if (result.ok || result.reason === 'account_exists' || result.reason === 'not_linked') {
         await loadData();
       }
 
       if (result.ok) {
+        setAccessCode(result.accessCode);
+        setCodeCopied(false);
         setCreateAccountSuccess(true);
       } else {
         setCreateAccountError(describeCreateAccountReason(result.reason));
@@ -1518,16 +1536,58 @@ export default function UsersPage() {
                   </h3>
                   <p className="text-sm text-[var(--foreground-secondary)] text-center">
                     {language === 'ar'
-                      ? 'أُنشئ الحساب وربط بصلاحيات المستخدم، وأُرسلت رسالة تعيين كلمة المرور إلى:'
-                      : 'The account was created and linked to the user’s permissions, and a password setup email was sent to:'}
+                      ? 'أُنشئ الحساب وربط بصلاحيات المستخدم. سلّم الموظف رمز الوصول التالي مباشرة، وسيُطلب منه استبداله بكلمة مرور يختارها عند أول دخول:'
+                      : 'The account was created and linked to the user’s permissions. Hand the employee the access code below in person; they will be required to replace it with a password of their own at first sign-in:'}
                   </p>
                   <p className="mt-1 text-sm font-medium text-[var(--foreground)]" dir="ltr">
                     {selectedUser.email}
                   </p>
+
+                  {/* رمز الوصول - يُعرض مرة واحدة ولا يمكن استرجاعه */}
+                  <div className="mt-4 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <code
+                        className="select-all font-mono text-xl font-bold tracking-[0.2em] text-[var(--foreground)]"
+                        dir="ltr"
+                      >
+                        {accessCode}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(accessCode);
+                            setCodeCopied(true);
+                          } catch {
+                            setCodeCopied(false);
+                          }
+                        }}
+                        className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground-secondary)] transition-colors hover:bg-[var(--card-hover)]"
+                      >
+                        {codeCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                        {codeCopied
+                          ? language === 'ar' ? 'نُسخ' : 'Copied'
+                          : language === 'ar' ? 'نسخ' : 'Copy'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-amber-500" />
+                    <span className="text-xs text-amber-700 dark:text-amber-300">
+                      {language === 'ar'
+                        ? 'لن يظهر هذا الرمز مرة أخرى، وهو غير محفوظ في قاعدة البيانات. إن أُغلقت هذه النافذة قبل تسليمه فلن يستطيع أحد فتح الحساب، وسيلزم حذف الموظف وإنشاؤه من جديد.'
+                        : 'This code will not be shown again and is not stored in the database. If you close this window before handing it over, nobody can open the account and the employee must be deleted and created again.'}
+                    </span>
+                  </div>
+
                   <button
                     onClick={() => {
                       setShowCreateAccountConfirm(false);
                       setCreateAccountSuccess(false);
+                      setAccessCode('');
+                      setCodeCopied(false);
+                      setSelectedUser(null);
                     }}
                     className="mt-6 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--primary-hover)]"
                   >

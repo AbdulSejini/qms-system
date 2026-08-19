@@ -17,6 +17,22 @@
 // the hardened rules deny, so it could only ever fail - and it reported the denial as a
 // wrong password. It is gone.
 //
+// ONBOARDING IS A SPOKEN ACCESS CODE, NOT AN EMAIL
+// This installation has no working email service, so a password-setup email cannot be the
+// way anybody gets in. createSignInAccountForUser therefore creates the Auth account with
+// a one-time ACCESS CODE (generateAccessCode) as its password, returns that code to the
+// caller so the Users page can show it to the administrator ONCE, and sets
+// mustChangePassword on the user document. The code is never stored anywhere - not here,
+// not in Firestore - and no mail is sent.
+//
+// The flag is what makes the code single-use in practice: checkPendingPasswordChange below
+// refuses to let the login page open an application session while it is set, so an employee
+// holding a code can do exactly one thing with it - hand it back in exchange for a password
+// of their own (setPasswordWithAccessCode). Note the order that gate implies: the check runs
+// on the SECONDARY Firebase app instance, so a user who still owes a password change never
+// becomes the primary session at all. Gating after a real sign-in would race the
+// AuthContext listener, which navigates the moment it resolves a session.
+//
 // THE ONE EXCEPTION IS THE FIRST ACCOUNT
 // An administrator has to exist before an administrator can onboard anybody, so
 // bootstrapSystemAdmin below writes the very first mapping as the account it has just
@@ -34,7 +50,6 @@
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  sendPasswordResetEmail,
   signOut,
   updatePassword,
   reauthenticateWithCredential,
@@ -55,9 +70,12 @@ import {
   Timestamp,
   type Firestore,
 } from 'firebase/firestore';
-import { auth, db, firebaseConfig } from './firebase';
+import { auth, db, firebaseConfig, connectEmulators } from './firebase';
+import { generateAccessCode, setMustChangePassword } from './firestore';
+import { recordActivity } from './activity-log';
+import { getRoleNameAr, getRoleNameEn } from '@/data/mock-data';
 import { logger } from './logger';
-import { User, UserRole } from '@/types';
+import { ActivityEntry, User, UserRole } from '@/types';
 
 // ===========================================
 // Collection Names
@@ -82,7 +100,13 @@ const getSecondaryApp = () => {
   return existingApp ?? initializeApp(firebaseConfig, SECONDARY_APP_NAME);
 };
 
-const getSecondaryAuth = () => getAuth(getSecondaryApp());
+const getSecondaryAuth = () => {
+  const secondary = getSecondaryApp();
+  // The secondary instance needs the same routing as the primary one, or onboarding a
+  // test employee under emulator mode would create a real account in the live project.
+  connectEmulators(getAuth(secondary), getFirestore(secondary));
+  return getAuth(secondary);
+};
 
 // Firestore bound to the SECONDARY app, so its writes are made as whoever is signed in
 // on that instance rather than as the primary session. Only the first-run bootstrap
@@ -160,16 +184,19 @@ export type ResolveUserResult =
 // Outcome of an administrator creating a sign-in account for an existing employee.
 //   account_exists       an Auth account already uses this email. The employee may
 //                        already be able to sign in and only need the mapping written -
-//                        which needs their uid, so it is reported, never guessed at
+//                        which needs their uid, so it is reported, never guessed at.
+//                        This is also the answer when a REPLACEMENT code is asked for:
+//                        the client SDK cannot set another account's password
 //   not_linked           the account exists now but the authorization mapping could not
 //                        be written or confirmed - the employee still cannot work
-//   reset_email_failed   account and mapping are in place but the password-setup email
-//                        did not go out - resend it with Reset Password
+//   flag_not_set         account and mapping are in place, but the user document could
+//                        not be marked as owing a password change, which would leave the
+//                        access code working forever. Rolled back like not_linked
 //   inactive / no_email  refused before anything was created
 export type CreateSignInAccountReason =
   | 'account_exists'
   | 'not_linked'
-  | 'reset_email_failed'
+  | 'flag_not_set'
   | 'inactive'
   | 'no_email'
   | 'auth_not_enabled'
@@ -178,11 +205,12 @@ export type CreateSignInAccountReason =
   | 'network_error'
   | 'error';
 
-export type CreateSignInAccountResult = {
-  ok: boolean;
-  reason?: CreateSignInAccountReason;
-  message?: string;
-};
+// On success the ONE-TIME ACCESS CODE comes back, because this is the only moment it
+// exists: it is not written to Firestore and cannot be read back afterwards. A caller
+// that drops it has left the employee with an account nobody can open.
+export type CreateSignInAccountResult =
+  | { ok: true; accessCode: string }
+  | { ok: false; reason: CreateSignInAccountReason; message?: string };
 
 // ===========================================
 // Helper Functions
@@ -238,6 +266,26 @@ const infrastructureReason = (code: string): SignInReason | null => {
 // the auth listener tested truthiness - let such a user log in and then be signed out
 // again immediately.
 export const isUserActive = (user: User): boolean => user.isActive !== false;
+
+// ===========================================
+// Activity log helpers
+// ===========================================
+
+// The four denormalised actor fields every entry carries. The log has to stay readable
+// years after the employee's user document is gone, so the name, email and role are
+// copied into the entry rather than referenced.
+const actorFields = (user: User) => ({
+  actorUserId: user.id,
+  actorName: user.fullNameEn || user.fullNameAr,
+  actorEmail: user.email ?? '',
+  actorRole: user.role,
+});
+
+// recordActivity never rejects and never blocks the operation it describes, so nothing
+// here is awaited. Kept as one helper so every call site in this file reads the same.
+const logActivity = (entry: Omit<ActivityEntry, 'id' | 'at'>): void => {
+  void recordActivity(entry);
+};
 
 // ===========================================
 // Mapping Operations
@@ -311,11 +359,16 @@ const toDateIfPossible = (value: unknown): unknown => {
 // resolveAppUser has to tell those apart: the first means an administrator must onboard
 // this person, the second means Firestore was unreachable for a moment and the session
 // must be left alone. Hence the direct read here.
+//
+// `database` selects which Firebase app instance the read is made on, and with it WHICH
+// SESSION the rules see. It is the primary one everywhere except in
+// checkPendingPasswordChange, which deliberately works on the secondary instance.
 const readUserDoc = async (
-  userId: string
+  userId: string,
+  database: Firestore = db
 ): Promise<{ ok: true; user: User | null } | { ok: false; message: string }> => {
   try {
-    const snapshot = await getDoc(doc(db, COLLECTIONS.USERS, userId));
+    const snapshot = await getDoc(doc(database, COLLECTIONS.USERS, userId));
     if (!snapshot.exists()) {
       return { ok: true, user: null };
     }
@@ -346,15 +399,20 @@ const readUserDoc = async (
 // The three failures are kept apart because they call for opposite handling: 'not_linked'
 // and 'inactive' are answers about the account and end the session, 'unavailable' is a
 // statement about Firestore and must not.
+//
+// `database` is the Firebase app instance to read through, which is also the session the
+// rules will judge: the primary one by default, the secondary one for the pre-sign-in
+// onboarding check.
 export const resolveAppUser = async (
   authUid: string,
-  email: string | null
+  email: string | null,
+  database: Firestore = db
 ): Promise<ResolveUserResult> => {
   const who = `${authUid}${email ? ` (${email})` : ''}`;
 
   let mappingDoc;
   try {
-    mappingDoc = await getDoc(doc(db, COLLECTIONS.AUTH_USERS, authUid));
+    mappingDoc = await getDoc(doc(database, COLLECTIONS.AUTH_USERS, authUid));
   } catch (error) {
     // A permission denial here is indistinguishable from an outage - both are the rules
     // or the network, neither is proof that the mapping is absent.
@@ -388,7 +446,7 @@ export const resolveAppUser = async (
     };
   }
 
-  const read = await readUserDoc(userId);
+  const read = await readUserDoc(userId, database);
   if (!read.ok) {
     return { ok: false, reason: 'unavailable', message: read.message };
   }
@@ -412,18 +470,6 @@ export const resolveAppUser = async (
 // ===========================================
 // Administrator-driven onboarding
 // ===========================================
-
-// A throwaway password for an account whose owner will set their own within minutes.
-// Cryptographically random, never shown to the administrator, never stored anywhere: the
-// only way into the account is the password-setup email sent immediately afterwards.
-// The alphabet is 64 characters, so a byte maps onto it without modulo bias.
-const PASSWORD_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-
-const randomThrowawayPassword = (): string => {
-  const bytes = new Uint8Array(32);
-  globalThis.crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => PASSWORD_ALPHABET[byte % PASSWORD_ALPHABET.length]).join('');
-};
 
 // Undo an account creation whose follow-up steps failed.
 //
@@ -488,22 +534,26 @@ const rollbackCreatedAccount = async (
 // which is exactly what the rules require, and why nothing here needs an anonymous read.
 //
 // The steps, in order:
-//   1. create the Auth account on the secondary instance, so the administrator's own
-//      session is untouched, with a random password nobody ever sees or needs,
+//   1. generate a one-time ACCESS CODE and create the Auth account with it as the
+//      password, on the secondary instance so the administrator's own session is untouched,
 //   2. write authUsers/{uid} + users/{id}.authUid and read the mapping back,
-//   3. send a password-reset email so the employee chooses their own password,
+//   3. set mustChangePassword on the user document, which is what stops the code from
+//      being a permanent password,
 //   4. sign the secondary instance out - in a finally block, so a failure at any step
-//      cannot leave that session live.
+//      cannot leave that session live,
+//   5. return the code to the caller, which must show it to the administrator once and
+//      never store it. NO EMAIL IS SENT: there is no mail service on this project, and a
+//      code read out to the employee in person is what replaces it.
 //
-// Success is only reported once the mapping has been confirmed on the server. An account
-// without one is authenticated and authorized for nothing, so calling that "done" would
-// hand the administrator a finished-looking task and the employee a broken login.
+// Success is only reported once the mapping has been confirmed on the server AND the flag
+// is set. An account without a mapping is authenticated and authorized for nothing; an
+// account without the flag holds a code that keeps working forever. Either one would hand
+// the administrator a finished-looking task and the employee a broken - or unsafe - login.
 //
-// If step 2 fails the account from step 1 is DELETED again (rollbackCreatedAccount): a
-// half-created account cannot be repaired from the browser and would block every retry,
-// so the only safe outcome of a failed attempt is no account at all. A failure at step 3
-// is different - account and authorization are both real and the email can be resent -
-// so nothing is undone there.
+// If step 2 or step 3 fails the account from step 1 is DELETED again
+// (rollbackCreatedAccount): a half-created account cannot be repaired from the browser and
+// would block every retry, so the only safe outcome of a failed attempt is no account at
+// all, and the administrator can simply press the button again.
 export const createSignInAccountForUser = async (
   user: User
 ): Promise<CreateSignInAccountResult> => {
@@ -533,11 +583,11 @@ export const createSignInAccountForUser = async (
   let createdAccount: FirebaseAuthUser | null = null;
 
   try {
-    const credential = await createUserWithEmailAndPassword(
-      secondaryAuth,
-      email,
-      randomThrowawayPassword()
-    );
+    // The code is generated here and returned at the end. It is never written to
+    // Firestore and never logged - the administrator on screen is the only copy.
+    const accessCode = generateAccessCode();
+
+    const credential = await createUserWithEmailAndPassword(secondaryAuth, email, accessCode);
     createdAccount = credential.user;
     const authUid = credential.user.uid;
 
@@ -558,21 +608,28 @@ export const createSignInAccountForUser = async (
       };
     }
 
-    try {
-      await sendPasswordResetEmail(secondaryAuth, email);
-    } catch (error) {
-      // Account and authorization are both in place - only the email failed, and the
-      // administrator can resend it. Reported as its own outcome rather than as success.
-      logger.error('Could not send the password setup email:', error);
+    // Without this flag the access code is simply the employee's password, for good, and
+    // it has been spoken out loud and probably written on a piece of paper. An account in
+    // that state is worse than no account, so the failure is rolled back like the one
+    // above rather than reported as a partial success.
+    const flagged = await setMustChangePassword(user.id, true);
+
+    if (!flagged) {
+      const leftBehind = await rollbackCreatedAccount(credential.user, user.id);
+      createdAccount = null;
+
       return {
         ok: false,
-        reason: 'reset_email_failed',
-        message: `Account and mapping are in place for ${email}, but the password setup email failed: ${errorMessage(error)}`,
+        reason: 'flag_not_set',
+        message:
+          `Auth account ${authUid} was created for ${email}, but user document ${user.id} could` +
+          ' not be marked as owing a password change, which would have left the access code' +
+          ` working forever, so the account was removed again.${leftBehind}`,
       };
     }
 
     createdAccount = null;
-    return { ok: true };
+    return { ok: true, accessCode };
   } catch (error) {
     const code = errorCode(error);
 
@@ -616,6 +673,26 @@ export const createSignInAccountForUser = async (
     }
   }
 };
+
+// Issue a REPLACEMENT access code for an employee who lost theirs before using it.
+//
+// It is the same operation as creating the account - a fresh code, a fresh
+// mustChangePassword - and it is deliberately the same function, so a re-issued code can
+// never differ in kind from a first one.
+//
+// WHAT IT CAN AND CANNOT DO, because the difference decides what the operator has to do
+// next. If the employee has no Auth account (their user document has no authUid, or the
+// account was deleted from the Firebase console), this creates it and returns a code, and
+// the employee is onboarded normally. If the Auth account still exists, this returns
+// 'account_exists' and nothing changes: setting an existing account's password needs the
+// Admin SDK or the Firebase console, and this project has neither - the client SDK can
+// only ever set a password for the account it is signed in as. There is no way around
+// that from the browser, so the Users page states the two remaining routes outright
+// (the password-reset link, or deleting the Auth account in the console and creating it
+// again here) instead of pretending the code was replaced.
+export const issueNewAccessCodeForUser = async (
+  user: User
+): Promise<CreateSignInAccountResult> => createSignInAccountForUser(user);
 
 // ===========================================
 // First-run bootstrap
@@ -878,7 +955,22 @@ export const signIn = async (email: string, password: string): Promise<SignInRes
     const resolved = await resolveAppUser(credential.user.uid, credential.user.email);
 
     if (resolved.ok) {
-      return { ok: true, user: resolved.user, migrated: false };
+      // Recorded here rather than at the call site: this is the one place where a session
+      // is known to have been both authenticated AND authorized, and the write is made by
+      // that very session, which is what the activityLog rule requires.
+      const user = resolved.user;
+      const name = user.fullNameEn || user.fullNameAr;
+      logActivity({
+        ...actorFields(user),
+        action: 'login',
+        entity: 'session',
+        entityId: user.id,
+        entityLabel: name,
+        summaryEn: `${name} (${user.email}) signed in to the quality management system as ${getRoleNameEn(user.role)}.`,
+        summaryAr: `سجّل ${user.fullNameAr || name} (${user.email}) الدخول إلى نظام إدارة الجودة بصفة ${getRoleNameAr(user.role)}.`,
+      });
+
+      return { ok: true, user, migrated: false };
     }
 
     if (resolved.reason === 'unavailable') {
@@ -922,9 +1014,132 @@ export const signIn = async (email: string, password: string): Promise<SignInRes
   }
 };
 
+// Is this employee still holding a one-time access code rather than a password of their
+// own? Answered BEFORE any application session exists.
+//
+//   required      the credentials are correct and users/{id}.mustChangePassword is set.
+//                 The caller must put them through the choose-a-password step and must
+//                 NOT sign them in
+//   not_required  the credentials are correct and nothing is owed - sign in normally
+//   refused       the credentials, the account or Firestore said no. `reason` is the same
+//                 vocabulary signIn speaks, so the login page renders it with the message
+//                 it already has for that case
+//
+// WHY THIS IS A SEPARATE PRE-FLIGHT AND NOT A BRANCH INSIDE signIn.
+// The whole point is that a user who owes a password change never becomes the primary
+// session. Signing in on the primary instance and signing out again after reading the
+// flag does not achieve that: AuthContext's onAuthStateChanged listener resolves the same
+// session concurrently, and ProtectedRoute navigates to the dashboard the moment it does -
+// a race this code would lose about as often as it won. Authenticating on the SECONDARY
+// app instance instead means that listener never fires at all, so there is no window in
+// which the application is reachable. The cost is one extra Auth round trip and two extra
+// document reads per sign-in, which for an internal directory of this size is a fair price
+// for a gate that cannot be raced.
+//
+// The secondary session is signed out again in every case, including success.
+export type PendingPasswordChangeCheck =
+  | { status: 'required'; user: User }
+  | { status: 'not_required'; user: User }
+  | { status: 'refused'; reason: SignInReason; message?: string };
+
+export const checkPendingPasswordChange = async (
+  email: string,
+  password: string
+): Promise<PendingPasswordChangeCheck> => {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (!normalizedEmail || !password) {
+    return { status: 'refused', reason: 'invalid_credentials' };
+  }
+
+  const secondaryAuth = getSecondaryAuth();
+  const secondaryDb = getSecondaryDb();
+
+  try {
+    const credential = await signInWithEmailAndPassword(secondaryAuth, normalizedEmail, password);
+
+    // Read through the secondary instance: the rules judge whichever session made the
+    // request, and the primary one is still signed out (or signed in as somebody else).
+    const resolved = await resolveAppUser(credential.user.uid, credential.user.email, secondaryDb);
+
+    if (!resolved.ok) {
+      // 'unavailable' says nothing about the account - but it also means the flag could
+      // not be read, and letting somebody in on an unknown flag is exactly the hole this
+      // check exists to close. So it is refused, with the "try again" message.
+      if (resolved.reason === 'unavailable') {
+        return { status: 'refused', reason: 'service_unavailable', message: resolved.message };
+      }
+
+      return { status: 'refused', reason: resolved.reason, message: resolved.message };
+    }
+
+    return resolved.user.mustChangePassword === true
+      ? { status: 'required', user: resolved.user }
+      : { status: 'not_required', user: resolved.user };
+  } catch (error) {
+    const code = errorCode(error);
+
+    if (isUnknownOrWrongCredential(code) || code === 'auth/invalid-email') {
+      return { status: 'refused', reason: 'invalid_credentials' };
+    }
+
+    if (code === 'auth/user-disabled') {
+      return { status: 'refused', reason: 'inactive' };
+    }
+
+    const infrastructure = infrastructureReason(code);
+    if (infrastructure) {
+      logger.error('Infrastructure failure while checking for a pending password change:', code);
+      return { status: 'refused', reason: infrastructure, message: code };
+    }
+
+    logger.error('Error checking for a pending password change:', error);
+    return { status: 'refused', reason: 'error', message: errorMessage(error) };
+  } finally {
+    try {
+      await signOut(secondaryAuth);
+    } catch (signOutError) {
+      logger.error('Could not sign the secondary app instance out:', signOutError);
+    }
+  }
+};
+
 // Sign out of Firebase Auth. Callers still clean up their own session bookkeeping
 // (activeSessions) separately.
-export const signOutUser = async (): Promise<void> => {
+//
+// `actor` is who is leaving, for the activity log. Callers that already hold the
+// application user should pass it; when they do not, it is resolved from the session about
+// to end, and an unidentifiable session (no mapping - the auth listener's own reason for
+// calling this) is signed out without a log entry rather than one naming nobody.
+//
+// The entry is recorded BEFORE the sign-out on purpose: after it, the write would be made
+// by an anonymous caller and the rules would refuse it. It is also AWAITED, which the rest
+// of this file's activity logging deliberately is not - firing it and moving on left the
+// write racing signOut() for the auth token, and the token usually won: every logout was
+// refused with PERMISSION_DENIED and the one event the log most needs to show - when
+// somebody left - was never recorded at all.
+export const signOutUser = async (actor?: User): Promise<void> => {
+  const current = auth.currentUser;
+  let who: User | null = actor ?? null;
+
+  if (!who && current) {
+    const resolved = await resolveAppUser(current.uid, current.email);
+    if (resolved.ok) who = resolved.user;
+  }
+
+  if (who) {
+    const name = who.fullNameEn || who.fullNameAr;
+    await recordActivity({
+      ...actorFields(who),
+      action: 'logout',
+      entity: 'session',
+      entityId: who.id,
+      entityLabel: name,
+      summaryEn: `${name} (${who.email}) signed out of the quality management system, ending the session held as ${getRoleNameEn(who.role)}.`,
+      summaryAr: `سجّل ${who.fullNameAr || name} (${who.email}) الخروج من نظام إدارة الجودة، وأُنهيت الجلسة التي كانت بصفة ${getRoleNameAr(who.role)}.`,
+    });
+  }
+
   try {
     await signOut(auth);
   } catch (error) {
@@ -935,6 +1150,95 @@ export const signOutUser = async (): Promise<void> => {
 // ===========================================
 // Password Operations
 // ===========================================
+
+// Why a first-sign-in password could not be set.
+//   invalid_credentials  the access code (or current password) did not open the account
+//   password_too_short   Firebase's minimum, or ours, refused the new password
+//   same_as_code         the new password is the code that was just handed over. Refused
+//                        here as well as in the form, because a code that has been spoken
+//                        out loud and written down is not a password
+export type SetPasswordReason =
+  | 'invalid_credentials'
+  | 'password_too_short'
+  | 'same_as_code'
+  | 'inactive'
+  | 'too_many_requests'
+  | 'network_error'
+  | 'auth_not_enabled'
+  | 'auth_not_configured'
+  | 'error';
+
+export type SetPasswordResult = { ok: true } | { ok: false; reason: SetPasswordReason; message?: string };
+
+// Exchange a one-time access code for a password of the employee's own choosing.
+//
+// This is changeOwnPassword's twin for the one moment when there is no application
+// session: checkPendingPasswordChange refuses to open one while the flag is set, so the
+// employee doing this is signed in nowhere. It runs on the SECONDARY app instance, where
+// signing in with the code IS the reauthentication Firebase demands before updatePassword -
+// and the freshest one possible, since it happened a moment ago, so
+// 'auth/requires-recent-login' cannot arise here.
+//
+// It does NOT clear mustChangePassword. That write has to be made by the employee's own
+// primary session (the rules resolve the caller through authUsers/{uid}), so the caller
+// signs in normally afterwards and clears it then - which also makes the order matter:
+// the password is changed first, the session opened second, the flag cleared last. If the
+// tab is closed anywhere in the middle the flag is still set, the access code no longer
+// opens anything, and the next sign-in with the NEW password lands back on the same step.
+export const setPasswordWithAccessCode = async (
+  email: string,
+  accessCode: string,
+  newPassword: string
+): Promise<SetPasswordResult> => {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (newPassword.length < MIN_PASSWORD_LENGTH) {
+    return { ok: false, reason: 'password_too_short' };
+  }
+
+  if (newPassword === accessCode) {
+    return { ok: false, reason: 'same_as_code' };
+  }
+
+  const secondaryAuth = getSecondaryAuth();
+
+  try {
+    const credential = await signInWithEmailAndPassword(secondaryAuth, normalizedEmail, accessCode);
+    await updatePassword(credential.user, newPassword);
+    return { ok: true };
+  } catch (error) {
+    const code = errorCode(error);
+
+    if (isUnknownOrWrongCredential(code) || code === 'auth/invalid-email') {
+      return { ok: false, reason: 'invalid_credentials' };
+    }
+
+    if (code === 'auth/user-disabled') {
+      return { ok: false, reason: 'inactive' };
+    }
+
+    if (code === 'auth/weak-password') {
+      return { ok: false, reason: 'password_too_short' };
+    }
+
+    const infrastructure = infrastructureReason(code);
+    if (infrastructure) {
+      logger.error('Infrastructure failure while setting a first-sign-in password:', code);
+      return { ok: false, reason: infrastructure as SetPasswordReason, message: code };
+    }
+
+    logger.error('Error setting a first-sign-in password:', error);
+    return { ok: false, reason: 'error', message: errorMessage(error) };
+  } finally {
+    // The employee's account must not stay signed in on the secondary instance - the next
+    // administrator action on this browser would run as it.
+    try {
+      await signOut(secondaryAuth);
+    } catch (signOutError) {
+      logger.error('Could not sign the secondary app instance out:', signOutError);
+    }
+  }
+};
 
 // Change the signed-in user's own password. Firebase requires a recent login before
 // updatePassword, so we reauthenticate first and map the failure modes to reasons the

@@ -6,6 +6,7 @@ import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
+import { isIndependentOf } from '@/lib/audit-workflow';
 import {
   ArrowRight,
   ArrowLeft,
@@ -70,13 +71,6 @@ export default function NewAuditPage() {
   const { t, language } = useTranslation();
   const { currentUser, departments: allDepartments, sections: allSections, users: allUsers, dataLoaded } = useAuth();
 
-  // Get auditors from users
-  const auditors = useMemo(() => {
-    console.log('All users:', allUsers.length, 'Data loaded:', dataLoaded);
-    const filtered = allUsers.filter(u => u.canBeAuditor && u.isActive);
-    console.log('Auditors:', filtered.length, filtered.map(a => a.fullNameEn));
-    return filtered;
-  }, [allUsers, dataLoaded]);
 
   // Current step in the wizard
   const [currentStep, setCurrentStep] = useState(1);
@@ -125,6 +119,21 @@ export default function NewAuditPage() {
     objective: '',
     questions: [] as AuditQuestion[],
   });
+
+  // المراجعون المتاحون لهذه المراجعة - المستقلون عن الإدارة محل المراجعة فقط.
+  // The audited department's own people are filtered out here rather than merely warned
+  // about: the list used to offer the section's own manager as lead auditor, and a name
+  // that appears in a dropdown is a name somebody will eventually pick.
+  const auditors = useMemo(
+    () =>
+      allUsers.filter(
+        u =>
+          u.canBeAuditor &&
+          u.isActive &&
+          isIndependentOf(u, formData.departmentId, formData.sectionId)
+      ),
+    [allUsers, formData.departmentId, formData.sectionId]
+  );
 
   // Question form state
   const [newQuestion, setNewQuestion] = useState({ questionAr: '', questionEn: '', clause: '' });

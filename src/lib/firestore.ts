@@ -16,12 +16,14 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { logger } from './logger';
-import { User, Department, Section, AnnualPlan } from '@/types';
+import { User, Department, Section, AnnualPlan, Audit } from '@/types';
 
 // ===========================================
 // Collection Names
 // ===========================================
-const COLLECTIONS = {
+// Exported so src/lib/activity-log.ts names the same collections this file does
+// rather than repeating the strings.
+export const COLLECTIONS = {
   USERS: 'users',
   AUTH_USERS: 'authUsers',
   PASSWORDS: 'passwords',
@@ -29,8 +31,8 @@ const COLLECTIONS = {
   SECTIONS: 'sections',
   AUDITS: 'audits',
   ANNUAL_PLANS: 'annualPlans',
-  ACTIVE_SESSIONS: 'activeSessions',
   NOTIFICATIONS: 'notifications',
+  ACTIVITY_LOG: 'activityLog',
 };
 
 // ===========================================
@@ -417,6 +419,96 @@ export const resetPassword = async (userId: string): Promise<boolean> => {
 };
 
 // ===========================================
+// Onboarding - رمز الوصول لمرة واحدة
+// ===========================================
+//
+// There is no working email service on this project, so a password-reset email cannot be
+// the way a new employee gets in. Instead the administrator (or quality manager) creating
+// the account is shown a random one-time ACCESS CODE on screen, reads it out to the
+// employee in person, and the employee signs in with their email plus that code. The code
+// IS the Firebase Auth password at creation time; mustChangePassword is set on the user
+// document so the application forces a real password before anything else can be used.
+//
+// The code is deliberately NOT stored anywhere - not in Firestore, not in a field on the
+// user document. Storing it would recreate exactly the known-password problem this
+// replaces: a value that is readable by whoever can read the collection and that keeps
+// working forever. Once it has been handed over and used it is gone; an employee who
+// loses it gets a newly generated one from an administrator.
+
+// Alphabet chosen for reading a code out loud and writing it down: no 0/O, no 1/I/L.
+// 31 symbols, so 8 symbols carry log2(31^8) ≈ 39.6 bits - far past guessing, and Firebase
+// Auth's 6-character minimum is met with room to spare (the code is 9 characters with the
+// separator, 8 without).
+const ACCESS_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const ACCESS_CODE_GROUPS = 2;
+const ACCESS_CODE_GROUP_SIZE = 4;
+
+// Generate a one-time access code, e.g. "K7RM-P2XD".
+// Rejection sampling rather than a plain modulo: 256 is not a multiple of 31, so taking
+// the remainder of a random byte would make the first few letters of the alphabet more
+// likely than the last few. Bytes at or above the largest whole multiple of 31 are thrown
+// away instead, which leaves every symbol exactly equally likely.
+export const generateAccessCode = (): string => {
+  const cryptoObj = globalThis.crypto;
+
+  if (!cryptoObj?.getRandomValues) {
+    // Falling back to Math.random here would produce a predictable code, which is the one
+    // thing this must never be, so it refuses instead. Every browser this application
+    // supports has Web Crypto.
+    throw new Error('Cannot generate an access code: crypto.getRandomValues is unavailable');
+  }
+
+  const total = ACCESS_CODE_GROUPS * ACCESS_CODE_GROUP_SIZE;
+  const limit = Math.floor(256 / ACCESS_CODE_ALPHABET.length) * ACCESS_CODE_ALPHABET.length;
+  const symbols: string[] = [];
+
+  while (symbols.length < total) {
+    // Ask for what is still missing, plus headroom for the bytes that will be discarded
+    const bytes = new Uint8Array(total - symbols.length + 8);
+    cryptoObj.getRandomValues(bytes);
+
+    for (let i = 0; i < bytes.length && symbols.length < total; i++) {
+      if (bytes[i] >= limit) continue;
+      symbols.push(ACCESS_CODE_ALPHABET[bytes[i] % ACCESS_CODE_ALPHABET.length]);
+    }
+  }
+
+  const groups: string[] = [];
+  for (let g = 0; g < ACCESS_CODE_GROUPS; g++) {
+    groups.push(symbols.slice(g * ACCESS_CODE_GROUP_SIZE, (g + 1) * ACCESS_CODE_GROUP_SIZE).join(''));
+  }
+
+  return groups.join('-');
+};
+
+// Set or clear the "must set a real password before using anything" flag on a user.
+// Set to true when the account is created with an access code, and to false by the
+// forced-password screen once the employee has chosen their own password - which is also
+// when onboarding is finished, so onboardedAt is stamped in the same write.
+//
+// NOTE for whoever wires the forced-password screen: firestore.rules currently allows
+// `update` on users/{userId} to a system_admin only (plus the one-time bootstrap link-back),
+// so an employee clearing their OWN flag is refused and this returns false. The rules need a
+// self-update clause limited to exactly these two fields before the employee-side call can
+// work; the administrator-side call (setting it to true at creation) is already permitted.
+export const setMustChangePassword = async (userId: string, value: boolean): Promise<boolean> => {
+  try {
+    const userRef = doc(db, COLLECTIONS.USERS, userId);
+    await updateDoc(userRef, prepareForFirestore({
+      mustChangePassword: value,
+      // Only meaningful when the flag is being cleared - that is the moment the employee
+      // stopped being a half-created account and became a working one.
+      ...(value ? {} : { onboardedAt: new Date().toISOString() }),
+      updatedAt: new Date().toISOString(),
+    }));
+    return true;
+  } catch (error) {
+    console.error('Error setting mustChangePassword for user:', userId, error);
+    return false;
+  }
+};
+
+// ===========================================
 // Department Operations
 // ===========================================
 
@@ -529,104 +621,19 @@ export const deleteSection = async (sectionId: string): Promise<boolean> => {
 };
 
 // ===========================================
-// Active Sessions Operations
+// Active Sessions Operations - REMOVED
 // ===========================================
-
-// Add active session
-export const addActiveSession = async (userId: string, sessionData: any): Promise<boolean> => {
-  try {
-    const sessionRef = doc(db, COLLECTIONS.ACTIVE_SESSIONS, userId);
-    await setDoc(sessionRef, prepareForFirestore({
-      ...sessionData,
-      userId,
-      lastActivity: new Date().toISOString(),
-    }));
-    return true;
-  } catch (error) {
-    console.error('Error adding active session:', error);
-    return false;
-  }
-};
-
-// Remove active session
-export const removeActiveSession = async (userId: string): Promise<boolean> => {
-  try {
-    const sessionRef = doc(db, COLLECTIONS.ACTIVE_SESSIONS, userId);
-    await deleteDoc(sessionRef);
-    return true;
-  } catch (error) {
-    console.error('Error removing active session:', error);
-    return false;
-  }
-};
-
-// Get all active sessions
-export const getActiveSessions = async (): Promise<any[]> => {
-  try {
-    const sessionsRef = collection(db, COLLECTIONS.ACTIVE_SESSIONS);
-    const snapshot = await getDocs(sessionsRef);
-
-    return snapshot.docs.map(doc => convertTimestamps({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error('Error getting active sessions:', error);
-    return [];
-  }
-};
-
-// Update last activity for a session (v2 - fixed to use setDoc with merge)
-export const updateSessionActivity = async (userId: string): Promise<boolean> => {
-  try {
-    const sessionRef = doc(db, COLLECTIONS.ACTIVE_SESSIONS, userId);
-    // Use setDoc with merge to create or update the session (prevents "No document to update" error)
-    await setDoc(sessionRef, {
-      userId: userId,
-      lastActivity: new Date().toISOString(),
-    }, { merge: true });
-    logger.log('Session activity updated for:', userId);
-    return true;
-  } catch (error) {
-    console.error('Error updating session activity:', error);
-    return false;
-  }
-};
-
-// Subscribe to active sessions changes (real-time listener)
-export const subscribeToActiveSessions = (
-  callback: (sessions: any[]) => void
-): Unsubscribe => {
-  const sessionsRef = collection(db, COLLECTIONS.ACTIVE_SESSIONS);
-
-  return onSnapshot(sessionsRef, (snapshot) => {
-    const sessions = snapshot.docs.map(doc =>
-      convertTimestamps({ id: doc.id, ...doc.data() })
-    );
-    callback(sessions);
-  }, (error) => {
-    console.error('Error listening to active sessions:', error);
-    callback([]);
-  });
-};
-
-// Clean up stale sessions (older than 30 minutes)
-export const cleanupStaleSessions = async (): Promise<void> => {
-  try {
-    const sessionsRef = collection(db, COLLECTIONS.ACTIVE_SESSIONS);
-    const snapshot = await getDocs(sessionsRef);
-    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
-
-    const deletePromises = snapshot.docs
-      .filter(doc => {
-        const data = doc.data();
-        const lastActivity = data.lastActivity ? new Date(data.lastActivity) : new Date(0);
-        return lastActivity < thirtyMinutesAgo;
-      })
-      .map(doc => deleteDoc(doc.ref));
-
-    await Promise.all(deletePromises);
-  } catch (error) {
-    console.error('Error cleaning up stale sessions:', error);
-  }
-};
+//
+// The "who is online" feature is gone. Knowing that somebody has a tab open answered no
+// question the business actually had, and the once-a-minute heartbeat it needed wrote to
+// Firestore for every signed-in user all day long. What the owner wanted instead is a
+// permanent record of what people DID: see src/lib/activity-log.ts, whose 'session'
+// entries ('login' / 'logout' / 'login_failed') cover sign-in history properly.
+//
+// addActiveSession, removeActiveSession, getActiveSessions, updateSessionActivity,
+// subscribeToActiveSessions and cleanupStaleSessions no longer exist, and nothing in the
+// application reads or writes the activeSessions collection any more. The existing
+// activeSessions documents in Firestore are deliberately left untouched.
 
 // ===========================================
 // Notifications Operations
@@ -639,7 +646,13 @@ export interface Notification {
   'audit_modification_requested' | 'audit_modification_submitted' | 'audit_team_assignment' |
   'audit_scheduled' | 'corrective_action_response_required' | 'new_finding' |
   // الخطة السنوية - يرسلها مدير الجودة للمعتمِد الذي اختاره، ويعود قراره إليه
-  'plan_approval_request' | 'plan_approved' | 'plan_rejected' | 'general';
+  'plan_approval_request' | 'plan_approved' | 'plan_rejected' |
+  // تأكيد الموعد - يذهب للمراجع وللمراجَع عليه، ويعود ردّهما لمدير الجودة
+  'schedule_confirmation_request' | 'schedule_accepted' | 'schedule_reschedule_requested' |
+  // اعتماد قائمة الأسئلة ثم اعتماد الأجوبة - كلاهما من مدير الجودة
+  'questions_approval_request' | 'questions_approved' | 'questions_rejected' |
+  'answers_approval_request' | 'answers_approved' | 'answers_rejected' |
+  'general';
   title: string;
   message: string;
   recipientId: string; // User ID who should receive this notification
@@ -760,40 +773,12 @@ export const deleteNotification = async (notificationId: string): Promise<boolea
 // Audit Operations
 // ===========================================
 
-// Audit interface
-export interface Audit {
-  id: string;
-  number?: string; // Display number (e.g. AUD-1712345678901) - see getAuditNumber
-  titleAr: string;
-  titleEn: string;
-  type: 'internal' | 'external' | 'surveillance' | 'certification';
-  status: 'draft' | 'pending_approval' | 'approved' | 'in_progress' | 'completed' | 'cancelled' | 'postponed' | 'planning' | 'execution' | 'qms_review' | 'corrective_actions' | 'verification';
-  currentStage?: number; // 0=planning, 1=execution, 2=qms_review, 3=corrective_actions, 4=verification, 5=completed
-  departmentId: string;
-  sectionId?: string;
-  leadAuditorId: string;
-  teamMemberIds: string[];
-  startDate: string;
-  endDate: string;
-  objectives?: string;
-  scope?: string;
-  criteria?: string;
-  questions?: any[]; // Audit questions with answers
-  findings?: any[];
-  qmsApproval?: any; // QMS approval data
-  qmsApprovalData?: any; // Detailed QMS approval data
-  activityLog?: any[]; // Activity log
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-  approvedBy?: string;
-  approvedAt?: string;
-  rejectedBy?: string;
-  rejectedAt?: string;
-  rejectionReason?: string;
-  postponedTo?: string;
-  postponeReason?: string;
-}
+// Audit, AuditQuestion and AuditFinding are DEFINED IN src/types/index.ts and re-exported
+// here. There used to be a second, subtly different `Audit` declared in this file - it
+// disagreed with the one in @/types about whether `currentStage` was a number or a string,
+// and nothing caught it because nothing imported the other one. Callers that already say
+// `import { Audit } from '@/lib/firestore'` keep working unchanged.
+export type { Audit, AuditQuestion, AuditFinding, AuditStoredStatus } from '@/types';
 
 // Get the audit display number - audits created without a number field fall back to
 // the same synthesis everywhere, so every page renders the identical value

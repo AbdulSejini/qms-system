@@ -12,7 +12,11 @@ export type UserRole =
   | 'auditor'           // مراجع داخلي - يمكنه إجراء المراجعات
   | 'department_manager' // مدير إدارة - صلاحيات على إدارته فقط
   | 'section_head'      // رئيس قسم - صلاحيات على قسمه فقط
-  | 'employee';         // موظف عادي - صلاحيات محدودة
+  | 'employee'          // موظف عادي - صلاحيات محدودة
+  // مراجع خارجي - جهة المنح. قراءة فقط، ولا يرى إلا ما اعتُمد رسمياً.
+  // A certification-body assessor. Read-only everywhere, and shown only what has been
+  // formally approved - never a draft, never an unapproved answer.
+  | 'external_auditor';
 
 // صلاحيات المستخدم
 export interface Permission {
@@ -88,6 +92,21 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permission> = {
     canApproveAudits: false,
     canDeleteAudits: false,
   },
+  // المراجع الخارجي يرى كل شيء ولا يغيّر أي شيء.
+  // canViewAllData is the only true here, and that is the entire role: a certification
+  // body has to be able to see the programme whole - it just may never touch it. Every
+  // write in firestore.rules is denied to this role outright, so the flags below are a
+  // description of that, not the thing enforcing it.
+  external_auditor: {
+    canManageUsers: false,
+    canManageDepartments: false,
+    canManageAudits: false,
+    canConductAudits: false,
+    canManageDocuments: false,
+    canViewAllData: true,
+    canApproveAudits: false,
+    canDeleteAudits: false,
+  },
 };
 
 // ===========================================
@@ -154,6 +173,14 @@ export interface User {
 
   isActive: boolean;
   isSystemAccount?: boolean; // حساب نظام مخفي - لا يظهر في الإحصائيات والقوائم
+
+  // التهيئة برمز وصول لمرة واحدة - لا يوجد بريد إلكتروني للنظام
+  // Code-based onboarding. There is no working email service, so a new employee signs in
+  // with the one-time ACCESS CODE their manager handed them in person; while this flag is
+  // true they may do nothing but set a real password. Cleared by setMustChangePassword.
+  mustChangePassword?: boolean;
+  onboardedAt?: string;    // ISO - when the employee set their own password and finished onboarding
+
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -218,96 +245,293 @@ export type AuditType = 'internal' | 'external' | 'surveillance' | 'certificatio
 export type FindingSeverity = 'observation' | 'minor' | 'major' | 'critical';
 export type FindingStatus = 'open' | 'in_progress' | 'closed' | 'verified';
 
-// سؤال المراجعة
+// ===========================================
+// Schedule confirmation - تأكيد موعد المراجعة
+// ===========================================
+//
+// A planned date is a PROPOSAL until both the auditor and the auditee have said yes.
+// Either side may instead ask for a different date, with a reason - which is the point:
+// an audit forced onto a date the auditee cannot make is an audit that does not happen,
+// and one that nobody recorded as having been refused.
+
+export type ScheduleResponseStatus =
+  | 'pending'                // لم يرد بعد
+  | 'accepted'               // وافق على الموعد
+  | 'reschedule_requested';  // طلب موعداً آخر
+
+export interface SchedulePartyResponse {
+  status: ScheduleResponseStatus;
+  respondedAt?: string;          // ISO
+  comment?: string;              // سبب طلب التغيير
+  proposedStartDate?: string;    // ISO - الموعد البديل المقترح
+}
+
+export interface AuditScheduleConfirmation {
+  auditor: SchedulePartyResponse;
+  auditee: SchedulePartyResponse;
+}
+
+// ===========================================
+// Approval gate - بوابة اعتماد
+// ===========================================
+//
+// One shape for both points where the quality manager signs off inside an audit: the
+// question list before the audit runs, and the answers before the auditee is shown them.
+// Deliberately the same structure as the AnnualPlan approval fields, so the two read alike.
+
+export type ApprovalGateStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
+
+export interface ApprovalGate {
+  status: ApprovalGateStatus;
+  submittedBy?: string;     // user id
+  submittedAt?: string;     // ISO
+  decidedBy?: string;       // user id - مدير الجودة الذي اعتمد أو رفض
+  decidedAt?: string;       // ISO
+  comment?: string;         // سبب الرفض أو تعليق الاعتماد
+}
+
+// THE SHAPES BELOW DESCRIBE WHAT IS ACTUALLY STORED.
+//
+// There used to be two different `Audit` interfaces - an aspirational one here and the real
+// one in src/lib/firestore.ts - and they disagreed about `currentStage` (a string union here,
+// a number there). Nothing imported this one, so the disagreement was invisible until
+// something tried to write through both. These are now the single definition, matched to the
+// documents in Firestore, and firestore.ts re-exports them rather than declaring its own.
+
+// مرفق - ملف محلي أو من OneDrive
+export interface AttachmentFile {
+  type: 'local' | 'onedrive';
+  name: string;
+  size?: number;
+  webUrl?: string;   // OneDrive فقط
+  id?: string;       // OneDrive فقط
+}
+
+// قيد في سجل نشاط المراجعة - سجل داخل مستند المراجعة، منفصل عن activityLog العام
+export interface AuditActivityLogEntry {
+  id: string;
+  type: string;
+  userId: string;
+  timestamp: string;
+  details: {
+    description?: string;
+    previousValue?: string;
+    newValue?: string;
+    questionId?: string;
+    findingId?: string;
+    stageFrom?: number;
+    stageTo?: number;
+    comment?: string;
+  };
+}
+
+// موافقة إدارة الجودة - الهيكل القديم المحفوظ للتوافق
+export interface QMSApprovalLegacy {
+  approved: boolean;
+  comment: string;
+  date: string;
+  approvedBy: string;
+}
+
+// ===========================================
+// Finding categories - تصنيف الملاحظات
+// ===========================================
+//
+// ONE definition, because there were two and they disagreed. The audit screen wrote
+// `noteworthy` and the audit list rendered `opportunity`, so every "جهد ملحوظ" finding
+// showed up on the list with a blank category. Both screens now read this.
+
+export const FINDING_CATEGORY_A = [
+  { value: 'quality',     labelAr: 'الجودة',                  labelEn: 'Quality' },
+  { value: 'ohsas',       labelAr: 'السلامة والصحة المهنية',  labelEn: 'OHSAS' },
+  { value: 'environment', labelAr: 'البيئة',                  labelEn: 'Environment' },
+] as const;
+
+export const FINDING_CATEGORY_B = [
+  { value: 'major_nc',    labelAr: 'عدم مطابقة رئيسي', labelEn: 'Major Non-Conformity' },
+  { value: 'minor_nc',    labelAr: 'عدم مطابقة ثانوي', labelEn: 'Minor Non-Conformity' },
+  { value: 'observation', labelAr: 'ملاحظة',           labelEn: 'Observation' },
+  { value: 'noteworthy',  labelAr: 'جهد ملحوظ',        labelEn: 'Noteworthy Effort' },
+] as const;
+
+export type FindingCategoryA = (typeof FINDING_CATEGORY_A)[number]['value'];
+export type FindingCategoryB = (typeof FINDING_CATEGORY_B)[number]['value'];
+
+// عدم المطابقة وحدها هي ما يُحتسب NCR؛ الملاحظة والجهد الملحوظ ليسا كذلك.
+export const isNonConformity = (categoryB: string): boolean =>
+  categoryB === 'major_nc' || categoryB === 'minor_nc';
+
+// تعليق على ملاحظة - نقاش بين المراجع والإدارة
+export interface FindingComment {
+  id: string;
+  findingId: string;
+  userId: string;
+  comment: string;
+  createdAt: string;
+  attachments?: AttachmentFile[];
+}
+
+// رد الإدارة على الإجراء التصحيحي
+export interface DepartmentResponse {
+  approvedBy: string;
+  approvedAt: string;
+  closingDate: string;
+  comment?: string;
+  attachments?: AttachmentFile[];
+}
+
+// سؤال في قائمة المراجعة
 export interface AuditQuestion {
   id: string;
-  auditId: string;
   questionAr: string;
   questionEn: string;
-  clause?: string;          // بند المعيار المرتبط
+  clause: string;               // بند المعيار المرتبط
   answer?: string;
-  status: 'pending' | 'answered' | 'finding_raised';
-  findingId?: string;       // معرف الملاحظة إذا تم رفعها
-  answeredBy?: string;
-  answeredAt?: Date;
-  createdAt: Date;
+  status: 'pending' | 'compliant' | 'non_compliant' | 'not_applicable';
+  findingId?: string;           // معرف الملاحظة إذا رُفعت من هذا السؤال
+  notes?: string;
+  attachments?: AttachmentFile[];
 }
+
+// طلب تمديد - يُستخدم لمواعيد الإغلاق ولمواعيد المراجعة
+export interface ExtensionRequest {
+  id: string;
+  requestedDate: string;
+  newDate: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedBy: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewComment?: string;
+}
+
+// ملاحظة المراجعة - عدم مطابقة أو ملاحظة أو فرصة تحسين
+//
+// التصنيف على محورين: المجال (جودة/سلامة/بيئة) ونوع الملاحظة.
+// Two axes, both stored as the raw option values the audit screen writes:
+//   categoryA  quality | ohsas | environment
+//   categoryB  major_nc | minor_nc | observation | noteworthy
+export interface AuditFinding {
+  id: string;
+  reportNumber: string;
+  departmentId: string;
+  sectionId?: string;
+  focusArea?: string;
+  clause: string;
+  finding: string;              // نص الملاحظة
+  evidence: string;             // الدليل الموضوعي
+  categoryA: string;
+  categoryB: string;
+  estimatedClosingDate: string;
+  rootCause?: string;
+  correctiveAction?: string;
+  actionEvidence?: string;
+  status: 'open' | 'in_progress' | 'pending_verification' | 'closed' | 'pending_department_approval';
+  createdAt: string;
+  closedAt?: string;
+  extensionRequests?: ExtensionRequest[];
+  attachments?: AttachmentFile[];
+  comments?: FindingComment[];
+  departmentResponse?: DepartmentResponse;
+  qmsApprovedCorrectiveAction?: boolean;
+  qmsApprovalDate?: string;
+  qmsApprovalComment?: string;
+}
+
+// الحالة المخزَّنة للمراجعة
+export type AuditStoredStatus =
+  | 'draft' | 'pending_approval' | 'approved' | 'in_progress' | 'completed'
+  | 'cancelled' | 'postponed' | 'planning' | 'execution' | 'qms_review'
+  | 'corrective_actions' | 'verification';
 
 // المراجعة
 export interface Audit {
   id: string;
-  number: string;
+  number?: string;
   titleAr: string;
   titleEn: string;
   type: AuditType;
-  currentStage: AuditWorkflowStage;
+  status: AuditStoredStatus;
 
-  // الإدارة/القسم المدقق عليه
+  // المرحلة مخزَّنة كرقم، لا كنص - انظر AUDIT_STAGE_ORDER أدناه
+  currentStage?: number;
+
   departmentId: string;
   sectionId?: string;
 
-  // فريق المراجعة
+  // فريق المراجعة. teamMemberIds هو الحقل المخزَّن؛ صفحة تفاصيل المراجعة تحمّله
+  // إلى auditorIds في الذاكرة وتحفظه إليه مرة أخرى. كلاهما مذكور هنا لأن كليهما موجود فعلاً.
   leadAuditorId: string;
-  auditorIds: string[];     // المراجعين المشاركين
+  teamMemberIds?: string[];
+  auditorIds?: string[];
 
-  // المواعيد
-  plannedStartDate: Date;
-  plannedEndDate: Date;
-  actualStartDate?: Date;
-  actualEndDate?: Date;
+  // الجهة المُراجَع عليها
+  auditeeId?: string;
 
-  // تفاصيل المراجعة
-  scopeAr?: string;
-  scopeEn?: string;
-  objectivesAr?: string;
-  objectivesEn?: string;
+  startDate: string;
+  endDate: string;
 
-  // مراجعة الإدارة
-  managementReviewNotes?: string;
-  managementApprovedBy?: string;
-  managementApprovedAt?: Date;
+  scope?: string;
+  objectives?: string;
+  objective?: string;
+  criteria?: string;
 
-  // إحصائيات
-  questionsCount: number;
-  answeredCount: number;
-  findingsCount: number;
+  questions?: AuditQuestion[];
+  findings?: AuditFinding[];
 
-  createdAt: Date;
-  updatedAt: Date;
+  // البوابات الثلاث - انظر src/lib/audit-workflow.ts
+  schedule?: AuditScheduleConfirmation;
+  questionsGate?: ApprovalGate;
+  answersGate?: ApprovalGate;
+
+  qmsApproval?: QMSApprovalLegacy;
+  qmsApprovalData?: QMSApprovalData;
+  activityLog?: AuditActivityLogEntry[];
+
+  createdBy?: string;
+  createdAt: string;
+  updatedAt?: string;
+
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
+  rejectionReason?: string;
+  postponedTo?: string;
+  postponeReason?: string;
+
+  executionConfirmed?: boolean;
+  executionConfirmedAt?: string;
+  executionConfirmedBy?: string;
+
+  correctiveActionsApproved?: boolean;
+  correctiveActionsApprovedAt?: string;
+  correctiveActionsApprovedBy?: string;
+  correctiveActionsApprovalComment?: string;
 }
 
-export interface AuditFinding {
-  id: string;
-  auditId: string;
-  questionId?: string;      // السؤال المرتبط
-  number: string;
-  titleAr: string;
-  titleEn: string;
-  descriptionAr: string;
-  descriptionEn: string;
-  severity: FindingSeverity;
-  status: FindingStatus;
-  clause?: string;
+// ترتيب المراحل كما تخزَّن: currentStage هو فهرس في هذه القائمة.
+// The audit screen and the audit list each hard-coded their own stage array, of six and
+// seven entries. This is the one order both should read.
+export const AUDIT_STAGE_ORDER = [
+  'planning',
+  'execution',
+  'qms_review',
+  'corrective_actions',
+  'verification',
+  'completed',
+] as const;
 
-  // المسؤول عن الإجراء التصحيحي
-  responsibleId: string;
-  responsibleDepartmentId: string;
-  responsibleSectionId?: string;
+export type AuditStageId = (typeof AUDIT_STAGE_ORDER)[number];
 
-  // الإجراء التصحيحي
-  correctiveActionAr?: string;
-  correctiveActionEn?: string;
-  rootCauseAr?: string;
-  rootCauseEn?: string;
+export const stageIdFromIndex = (index: number | undefined): AuditStageId =>
+  AUDIT_STAGE_ORDER[index ?? 0] ?? 'planning';
 
-  dueDate: Date;
-  closedAt?: Date;
-  verifiedBy?: string;
-  verifiedAt?: Date;
-
-  createdAt: Date;
-  updatedAt: Date;
-}
+export const stageIndexFromId = (id: string): number => {
+  const found = AUDIT_STAGE_ORDER.indexOf(id as AuditStageId);
+  return found === -1 ? 0 : found;
+};
 
 // ===========================================
 // Annual Audit Plan Types - خطة المراجعة الداخلية السنوية
@@ -409,4 +633,44 @@ export interface QMSApprovalData {
   comments: QMSComment[];
   history: QMSModificationEntry[];
   lastUpdated: string;
+}
+
+// ===========================================
+// System Activity Log Types - سجل نشاط النظام
+// ===========================================
+//
+// A complete record of who signed in and who created, changed or deleted anything.
+// Readable by the system administrator only. Append-only: entries are never updated
+// and never deleted, which is the whole point of keeping them.
+
+// نوع الإجراء المسجل
+export type ActivityAction =
+  | 'login'
+  | 'logout'
+  | 'login_failed'
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'approve'
+  | 'reject'
+  | 'submit'
+  | 'password_change';
+
+// قيد واحد في سجل النشاط
+export interface ActivityEntry {
+  id: string;
+  at: string;                 // ISO
+  actorUserId: string;        // Firestore user doc id, '' when sign-in failed before identification
+  // The actor's details are denormalised on purpose: the log has to stay readable years
+  // later, including for an employee whose user document has since been deleted.
+  actorName: string;
+  actorEmail: string;
+  actorRole: string;
+  action: ActivityAction;
+  entity: string;             // 'audit' | 'finding' | 'annualPlan' | 'user' | 'department' | 'section' | 'session'
+  entityId?: string;
+  entityLabel?: string;       // human-readable name of the thing acted on
+  summaryAr: string;          // a full sentence describing exactly what happened
+  summaryEn: string;
+  changes?: { field: string; from?: string; to?: string }[];  // field-level diff for updates
 }

@@ -23,10 +23,12 @@ rules_version = '2';
 //       authUsers/{authUid} = { userId, role, isActive }
 //
 //   That document CANNOT be created or modified by the person it describes.
-//   Only an already-authenticated system_admin may write it - with ONE exception,
-//   the one-time bootstrap described below, which is how the very first mapping
-//   comes into existence without any Firebase Console work, and which closes
-//   itself permanently the moment it is used. A stranger who signs up lands with
+//   Only an already-authenticated system_admin or quality_manager may write it,
+//   and neither may write their own or the administrator's (see WHO MAY CREATE
+//   PEOPLE below) - with ONE exception, the one-time bootstrap described below,
+//   which is how the very first mapping comes into existence without any Firebase
+//   Console work, and which closes itself permanently the moment it is used.
+//   A stranger who signs up lands with
 //   no mapping, and every rule below denies them - including the read of the
 //   `users` directory.
 //
@@ -162,6 +164,34 @@ rules_version = '2';
 //   needs a query - "is there another document with this year?" - and rules can
 //   only get() a known path. See the annualPlans block and SECURITY.md 3.2.
 //
+// WHO MAY CREATE PEOPLE - AND THE CEILING ON IT
+//   The quality manager runs this system day to day, so `users` and the
+//   `authUsers` mapping are no longer system_admin-only: isQualityStaff() may
+//   create, edit and delete employees, and may issue the mapping that lets them
+//   sign in. Issuing a mapping IS the privilege grant in this system, so the
+//   widened half carries an explicit ceiling, spelled out on each rule below:
+//     - nobody but a system_admin may write the role 'system_admin', on a user
+//       document or on a mapping, on create or on update. Without that clause
+//       the widening reads "a quality_manager may promote themselves";
+//     - a quality_manager may not touch users/system-admin-root, nor any user
+//       document or mapping that currently holds the system_admin role - not to
+//       edit it, not to deactivate it, not to delete it, not to unlink it. The
+//       owner's account is out of reach of the role the owner delegates to,
+//       including out of reach of being locked out of it;
+//     - a quality_manager may not change their OWN role, may not delete their
+//       own directory entry, and may not create, overwrite or delete a mapping
+//       that points at themselves. Nobody issues their own authorization.
+//   A system_admin is unaffected by all of it: isAdmin() keeps the older,
+//   unconstrained path on every one of these rules. See SECURITY.md section 2.2.
+//
+// THE ACTIVITY LOG
+//   activityLog (src/lib/activity-log.ts) is the permanent record of who signed
+//   in and who created, changed or deleted what. It is readable by the SYSTEM
+//   ADMINISTRATOR ALONE - not by the quality manager - it is created by every
+//   active employee, because each person's own actions are what fill it, and it
+//   can never be updated or deleted by anybody, the administrator included. See
+//   the activityLog block below and SECURITY.md section 2.3.
+//
 // DEPLOY
 //   firebase-tools is not installed on this machine and this repo has no
 //   .firebaserc (only .firebaserc.example), so `firebase deploy` on its own
@@ -185,8 +215,9 @@ service cloud.firestore {
     }
 
     // The mapping document. Written by linkAuthUser (src/lib/auth.ts) and kept
-    // in step by saveUser (src/lib/firestore.ts:272-291) - both of which only
-    // ever succeed when an administrator is the caller.
+    // in step by saveUser (src/lib/firestore.ts) - both of which only ever
+    // succeed when a system_admin or a quality_manager is the caller, and never
+    // on the caller's own mapping.
     function mappingPath() {
       return /databases/$(database)/documents/authUsers/$(request.auth.uid);
     }
@@ -255,6 +286,16 @@ service cloud.firestore {
       return appRole() in ['system_admin', 'quality_manager'];
     }
 
+    // المراجع الخارجي - قراءة فقط في كل مكان.
+    // A certification-body assessor is given a real account so they can see the programme
+    // as it stands, and no write anywhere. This is checked at every `allow` that writes
+    // rather than trusted to the role checks below, because most of those ask "is this
+    // person on the audit team", and an external assessor legitimately is not - which
+    // would deny them anyway, right up until somebody adds a branch where it would not.
+    function isReadOnlyRole() {
+      return appRole() == 'external_auditor';
+    }
+
     // appUserId() is '' for an unauthorized caller and a document id is never
     // '', so this cannot accidentally match.
     function isSelf(userId) {
@@ -308,27 +349,142 @@ service cloud.firestore {
       allow get: if isActive() || bootstrapReadIsOpen();
       allow list: if isActive();
 
+      // --- THE CEILING ON THE WIDENED HALF --------------------------------
+      // Everything below applies to a quality_manager only. A system_admin goes
+      // through isAdmin() and is constrained by none of it.
+
+      // The system administrator's own directory entry. Out of reach of the
+      // quality manager entirely: editing it, deactivating it or deleting it are
+      // all ways of taking the owner's account away from the owner, and the role
+      // that the owner delegates work to must not be able to do that.
+      function isSystemAdminDocument() {
+        return userId == 'system-admin-root';
+      }
+
+      // The same protection for anyone else who holds the top role: a mapping is
+      // only accepted when it matches the role on the user document, so a
+      // quality_manager who could edit an administrator's document could demote
+      // them - or deactivate them - and then have the mapping follow.
+      // resource is never null on update or delete; the null guard is there so
+      // this cannot raise if it is ever reused on a create.
+      function targetHoldsSystemAdminRole() {
+        return resource != null && resource.data.get('role', '') == 'system_admin';
+      }
+
+      // THE self-promotion clause. The mapping's role must equal the role on the
+      // user document (claimMatchesUserDocument, in the authUsers block below),
+      // so writing 'system_admin' here is step one of granting oneself - or a
+      // confederate - the top role. Only an administrator may do it, on create
+      // and on update alike: a promotion is an update.
+      function writesSystemAdminRole() {
+        return request.resource.data.get('role', '') == 'system_admin';
+      }
+
+      // --- THE FORCED-PASSWORD STEP ---------------------------------------
+      // The ONE write an ordinary employee makes on their own user document, and
+      // the last step of onboarding.
+      //
+      // There is no mail service on this project, so a new employee is given a
+      // one-time ACCESS CODE in person, which is the Auth password their account
+      // is created with, and users/{id}.mustChangePassword is set by whoever
+      // created it (setMustChangePassword, src/lib/firestore.ts). While that flag
+      // stands, checkPendingPasswordChange (src/lib/auth.ts) refuses to open an
+      // application session at all: the holder of a code can do exactly one thing
+      // with it - exchange it for a password of their own. Clearing the flag
+      // afterwards is a write only THEY can make, from their own new session, so
+      // without this clause the last step of every onboarding is denied and no
+      // employee onboarded after these rules go live can ever use the system.
+      //
+      // It is pinned to the three fields setMustChangePassword writes and to
+      // clearing only - never setting. Imposing the flag on somebody is an
+      // administrator's act and goes through the branches below; lifting it off
+      // yourself is the employee finishing their own onboarding. Nothing else on
+      // the document moves: not role, not isActive, not email, not authUid.
+      //
+      // WHAT THIS DOES NOT PROVE, stated plainly: a rule cannot see what the Auth
+      // password now is, so this clause attests that the employee cleared the
+      // flag, not that they replaced the code. Somebody who called it directly
+      // instead of using the screen could keep the code as their password. That
+      // is a person choosing a weak password of their own, not a way into anyone
+      // else's account, and it is the price of having no server side at all.
+      // SECURITY.md section 5.2.
+      function clearsOwnPasswordChangeFlag() {
+        return isSelf(userId)
+               && request.resource.data.diff(resource.data).affectedKeys()
+                    .hasOnly(['mustChangePassword', 'onboardedAt', 'updatedAt'])
+               && request.resource.data.get('mustChangePassword', true) == false;
+      }
+
+      // A caller may not change their own role. Not an escalation on its own -
+      // appRole() is read from the mapping, not from here - but the role on this
+      // document is what the mapping is checked against, and a directory in which
+      // people rewrite their own job is not a record of anything. Rewriting the
+      // same value is not a change, so an ordinary self-edit still passes.
+      function ownRoleUnchanged() {
+        return !isSelf(userId)
+               || request.resource.data.get('role', '') == resource.data.get('role', '');
+      }
+
       // create: saveUser for a new user (Users page), initializeSystemAdmin.
       // update: saveUser for an existing user, and the { authUid } merge that
       //         linkAuthUser writes back onto the user document.
       // delete: deleteUser (Users page).
-      // All administrator-only, because the role and isActive fields on this
-      // document are what an administrator later mirrors onto the mapping.
-      // NOTE: the Users page currently shows the add/edit/delete controls to a
-      // quality_manager as well (its `hasAccess` check in
-      // src/app/users/page.tsx admits both roles), but
-      // DEFAULT_PERMISSIONS grants canManageUsers to system_admin only, so those
-      // writes are refused here. The page is what needs correcting, not this
-      // rule - a quality_manager who could edit users could promote themselves.
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || bootstrapLinkBack();
+      // A quality_manager may now do all three - the Users page has always
+      // admitted both roles (`hasAccess` in src/app/users/page.tsx) and the owner
+      // wants the QMS lead to onboard employees without going through him. What
+      // that must never become is a way up, so the widened branch carries the
+      // clauses above; read the CEILING block in the header for why each one is
+      // there. The page and these rules now agree: `hasAccess` admits both roles,
+      // and its role dropdown already excludes 'system_admin' for everybody, so
+      // the writes it offers are exactly the writes permitted here.
+      // (DEFAULT_PERMISSIONS in src/types/index.ts still grants canManageUsers to
+      // system_admin alone, but the Users page does not gate on that flag - it
+      // reads it and never uses it. That inconsistency is a UI matter and is
+      // recorded in SECURITY.md section 2.2, not worked around here.)
+      // Self-delete is refused for the same reason a mapping may not be
+      // self-issued: this document is what the caller's own authorization is
+      // resolved through, and deleting it is an unrecoverable self-lockout that
+      // leaves an orphan mapping behind.
+      allow create: if isAdmin()
+                    || (isQualityStaff()
+                        && !isSystemAdminDocument()
+                        && !writesSystemAdminRole());
+
+      //         clearsOwnPasswordChangeFlag() is listed here on purpose. It was
+      //         written, documented and then never referenced, which meant an
+      //         employee onboarded with an access code could set a password but
+      //         could NEVER clear the flag that says they still owe one - so
+      //         every later sign-in demanded the change again, forever. The
+      //         function itself already confines the write to the three
+      //         onboarding fields on the caller's OWN document, and only in the
+      //         direction of clearing the flag, never setting it.
+      allow update: if isAdmin()
+                    || bootstrapLinkBack()
+                    || clearsOwnPasswordChangeFlag()
+                    || (isQualityStaff()
+                        && !isSystemAdminDocument()
+                        && !targetHoldsSystemAdminRole()
+                        && !writesSystemAdminRole()
+                        && ownRoleUnchanged());
+
+      allow delete: if isAdmin()
+                    || (isQualityStaff()
+                        && !isSystemAdminDocument()
+                        && !targetHoldsSystemAdminRole()
+                        && !isSelf(userId));
     }
 
     // -------------------------------------------------------------------
     // authUsers/{authUid} = { userId, role, isActive }
     // The mapping every other rule is keyed on, so writing it is THE privilege
-    // operation in this system. Administrator-only: a caller may read their own
-    // mapping (sign-in needs that) and nothing more. The single exception is
+    // operation in this system. READING it stays as tight as it ever was: a
+    // caller may get their own mapping, because sign-in has to resolve the
+    // application user, and only an administrator may list the collection - it is
+    // the register of who can get in.
+    // WRITING it is now open to isQualityStaff() rather than isAdmin() alone, so
+    // that the quality manager can actually onboard the people they are allowed
+    // to create; the ceiling that keeps that from being a promotion path is
+    // immediately below the well-formedness helpers. The other exception is
     // bootstrap (b) below - the one-time creation of the FIRST mapping, for the
     // system administrator account only, which stops being possible the moment
     // it succeeds. See the BOOTSTRAP WINDOW block in the header and SECURITY.md
@@ -355,10 +511,12 @@ service cloud.firestore {
       }
 
       // The mapping may not invent a user or a role: the user document has to
-      // exist and to carry the same role. saveUser writes the user document
-      // first and the mapping second (src/lib/firestore.ts:264-283), so the two
-      // already agree by the time this is evaluated. This is what keeps the
-      // directory an honest record of who holds which role.
+      // exist and to carry the same role. saveUser (src/lib/firestore.ts) writes
+      // the user document first and the mapping second, so the two already agree
+      // by the time this is evaluated. This is what keeps the directory an honest
+      // record of who holds which role - and, since the users block refuses to
+      // write 'system_admin' for a quality_manager, it is half of what keeps the
+      // top role out of reach.
       function claimMatchesUserDocument() {
         return exists(claimedUserPath())
                && get(claimedUserPath()).data.get('role', '') == request.resource.data.role;
@@ -393,6 +551,54 @@ service cloud.firestore {
                && get(systemAdminUserPath()).data.get('authUid', '') == '';
       }
 
+      // --- THE CEILING ON THE WIDENED HALF --------------------------------
+      // A quality_manager may now issue mappings, because creating a user is
+      // worthless without one - the employee would authenticate and be refused
+      // by every rule in this file. But a mapping is not paperwork, it IS the
+      // privilege, so the widened branch is fenced three ways. None of this
+      // applies to a system_admin, who reaches every rule through isAdmin().
+      //
+      //   (i)   never the top role. claimMatchesUserDocument() ties the mapping's
+      //         role to the user document's, and the users block above already
+      //         refuses to write 'system_admin' there for a quality_manager; this
+      //         is the same wall on the other side of the join, so neither half
+      //         of the pair can be built alone.
+      //   (ii)  never the system administrator's mapping, and never a mapping
+      //         that currently grants system_admin - in either direction. An
+      //         update that lowers the owner's role, or flips isActive to false,
+      //         is a lockout of the owner performed by the role the owner
+      //         delegates to. `resource` covers the mapping as it stands, and
+      //         `request.resource` the mapping as it would become.
+      //   (iii) never their own mapping - neither by uid nor by the userId it
+      //         points at, and neither an existing one nor a second one minted
+      //         for another Auth account they control. Nobody issues their own
+      //         authorization, and a caller who cannot rewrite their own mapping
+      //         cannot quietly widen it later.
+      // resource is null on create and non-null on update, so every clause that
+      // reads it is guarded.
+      function existingGrantIsSystemAdmin() {
+        return resource != null && resource.data.get('role', '') == 'system_admin';
+      }
+
+      function touchesSystemAdminUser() {
+        return request.resource.data.get('userId', '') == 'system-admin-root'
+               || (resource != null
+                   && resource.data.get('userId', '') == 'system-admin-root');
+      }
+
+      function isOwnMapping() {
+        return authUid == request.auth.uid
+               || request.resource.data.get('userId', '') == appUserId()
+               || (resource != null && resource.data.get('userId', '') == appUserId());
+      }
+
+      function qualityManagerMayWriteMapping() {
+        return request.resource.data.get('role', '') != 'system_admin'
+               && !existingGrantIsSystemAdmin()
+               && !touchesSystemAdminUser()
+               && !isOwnMapping();
+      }
+
       // get: resolveAppUser and confirmAuthMapping (src/lib/auth.ts), on the
       //      caller's own mapping. Readable by its subject so that sign-in can
       //      resolve the application user, and by an administrator.
@@ -404,28 +610,49 @@ service cloud.firestore {
       allow list: if isAdmin();
 
       // create/update: linkAuthUser, called from the Users page while an
-      //       administrator is signed in - the employee's account is created on
-      //       a secondary Firebase app instance, so request.auth on this
-      //       connection is still the administrator's.
-      //       The second create branch is the one-time bootstrap, which is the
-      //       only path in this file that does not require an administrator, and
-      //       which permanently closes itself. There is deliberately no such
-      //       branch on update: a mapping that exists is only an administrator's
-      //       to change.
-      allow create: if (isAdmin()
+      //       administrator or the quality manager is signed in - the employee's
+      //       account is created on a secondary Firebase app instance, so
+      //       request.auth on this connection is still the onboarding staff
+      //       member's.
+      //       claimIsWellFormed() and claimMatchesUserDocument() hold for
+      //       everybody; qualityManagerMayWriteMapping() is the extra ceiling on
+      //       the widened half.
+      //       The last create branch is the one-time bootstrap, which is the
+      //       only path in this file that does not require an already-authorized
+      //       caller, and which permanently closes itself. There is deliberately
+      //       no such branch on update: a mapping that exists is nobody's to
+      //       self-claim.
+      allow create: if (isQualityStaff()
                         && claimIsWellFormed()
-                        && claimMatchesUserDocument())
+                        && claimMatchesUserDocument()
+                        && (isAdmin() || qualityManagerMayWriteMapping()))
                        || bootstrapMappingClaim();
 
-      allow update: if isAdmin()
+      allow update: if isQualityStaff()
                     && claimIsWellFormed()
-                    && claimMatchesUserDocument();
+                    && claimMatchesUserDocument()
+                    && (isAdmin() || qualityManagerMayWriteMapping());
 
       // delete: unlinking an account. deleteUser does NOT do this today, which
       //         is why isActive() also checks that the user document still
-      //         exists - see the header. An administrator can clean the orphan
-      //         up from the app or the console.
-      allow delete: if isAdmin();
+      //         exists - see the header. The live caller is
+      //         rollbackCreatedAccount (src/lib/auth.ts), which undoes a failed
+      //         onboarding, so it has to be available to whoever performed that
+      //         onboarding or a quality_manager's failed attempt would leave a
+      //         mapping nobody but the administrator can clear.
+      //         The same three protections apply, read off the stored document
+      //         because there is no request.resource on a delete. A delete of a
+      //         document that is not there is permitted rather than refused:
+      //         rollbackCreatedAccount deletes the mapping whether or not it was
+      //         ever written, and refusing that would turn a clean rollback into
+      //         a logged failure.
+      allow delete: if isAdmin()
+                    || (isQualityStaff()
+                        && authUid != request.auth.uid
+                        && (resource == null
+                            || (resource.data.get('role', '') != 'system_admin'
+                                && resource.data.get('userId', '') != 'system-admin-root'
+                                && resource.data.get('userId', '') != appUserId())));
     }
 
     // -------------------------------------------------------------------
@@ -464,9 +691,13 @@ service cloud.firestore {
       // The single operation that survives, and only because deleteUser deletes
       // users/{id} and then passwords/{id} in one call: denying this would make
       // every user deletion report failure after having already deleted the
-      // user. It destroys a hash, it never exposes one, and it is the same
-      // administrator-only gate as the user document itself.
-      allow delete: if isAdmin();
+      // user. It destroys a hash, it never exposes one, and it is the same gate
+      // as the user document itself - which is why it moves to isQualityStaff()
+      // together with the users block above. A quality_manager who may delete an
+      // employee has to be able to finish the call; leaving this at isAdmin()
+      // would reproduce the exact defect the paragraph above describes, on every
+      // deletion the quality manager performs.
+      allow delete: if isQualityStaff();
     }
 
     // -------------------------------------------------------------------
@@ -512,6 +743,7 @@ service cloud.firestore {
       //         createdBy: currentUser?.id || '', so the author field can at
       //         least be held honest.
       allow create: if isActive()
+                    && !isReadOnlyRole()
                     && request.resource.data.createdBy == appUserId();
 
       // update: updateAudit - answers, findings, corrective actions, QMS
@@ -520,7 +752,27 @@ service cloud.firestore {
       //         teamMemberIds, findings[].responsibleId), which a rule cannot
       //         check reliably, so this stays at "any active employee" and the
       //         workflow gates stay in the app.
-      allow update: if isActive();
+      // update: WAS `if isActive()` - every one of the company's employees could rewrite
+      //         any audit in the system, including its findings and its answers. In an
+      //         audit system of record that is the whole asset. Now it is the quality
+      //         department, the audit team, and the auditee whose department is being
+      //         audited - nobody else, and never the external assessor.
+      //
+      //         The caller is resolved once and passed down, for the reason spelled out
+      //         over /annualPlans: re-deriving it per branch is what blew the
+      //         1000-expression ceiling there.
+      function belongsToAudit(uid, role) {
+        return role in ['system_admin', 'quality_manager']
+               || uid == resource.data.get('leadAuditorId', '')
+               || uid in resource.data.get('teamMemberIds', [])
+               || uid in resource.data.get('auditorIds', [])
+               || uid == resource.data.get('auditeeId', '');
+      }
+
+      allow update: if isActive()
+                    && !isReadOnlyRole()
+                    && belongsToAudit(mapping().get('userId', ''),
+                                      mapping().get('role', ''));
 
       // delete: deleteAudit, gated in the UI on canDeleteAudits, which only
       //         system_admin and quality_manager have.
@@ -610,6 +862,14 @@ service cloud.firestore {
         return request.resource.data.diff(resource.data).affectedKeys();
       }
 
+      // isSelf() without the lookup. Every branch below is reached only after
+      // isActive() has passed at the allow, so the caller's id is already known
+      // and re-deriving it is pure cost. The != '' guard is kept: appUserId()
+      // returns '' for an unauthorized caller and a document id is never ''.
+      function isSelfId(uid, personId) {
+        return uid != '' && uid == personId;
+      }
+
       function currentStatus() { return resource.data.get('status', ''); }
       function nextStatus()    { return request.resource.data.get('status', ''); }
 
@@ -643,17 +903,20 @@ service cloud.firestore {
       // gains by clearing a stamp is the erasure of a rejection of their own
       // plan, on a plan they are about to resubmit anyway; forging an approval
       // stays impossible, which is the property that matters.
-      function stampNotForged(field) {
-        return !changedKeys().hasAny([field]) || isClearedValue(field);
+      function stampNotForged(changed, field) {
+        return !changed.hasAny([field]) || isClearedValue(field);
       }
 
-      function stampsNotForged() {
-        return stampNotForged('approvedBy')
-               && stampNotForged('approvedAt')
-               && stampNotForged('rejectedBy')
-               && stampNotForged('rejectedAt')
-               && stampNotForged('rejectionReason')
-               && stampNotForged('approverComment');
+      // `changed` is passed in rather than recomputed: changedKeys() is a diff
+      // over two whole documents, and calling it once per stamp made this one
+      // function six diffs deep.
+      function stampsNotForged(changed) {
+        return stampNotForged(changed, 'approvedBy')
+               && stampNotForged(changed, 'approvedAt')
+               && stampNotForged(changed, 'rejectedBy')
+               && stampNotForged(changed, 'rejectedAt')
+               && stampNotForged(changed, 'rejectionReason')
+               && stampNotForged(changed, 'approverComment');
       }
 
       // (1) The author works on the plan - items, titles, anything but the
@@ -662,12 +925,12 @@ service cloud.firestore {
       //     so what the approver decides on is what they were shown.
       //     Matches canEditPlan on the plans page (author or system_admin,
       //     status draft or rejected).
-      function authorEditsContent() {
-        return isQualityStaff()
-               && (isSelf(author()) || isAdmin())
+      function authorEditsContent(uid, role, changed) {
+        return role in ['system_admin', 'quality_manager']
+               && (isSelfId(uid, author()) || role == 'system_admin')
                && currentStatus() in ['draft', 'rejected']
                && nextStatus() == currentStatus()
-               && stampsNotForged()
+               && stampsNotForged(changed)
                && identityUnchanged();
       }
 
@@ -681,16 +944,16 @@ service cloud.firestore {
       //     has no approval step, which is the defect this rule exists for -
       //     and the check has to live here, because the plans page excludes
       //     only the submitter from the approver list, not the author.
-      function authorSubmits() {
-        return isQualityStaff()
-               && (isSelf(author()) || isAdmin())
+      function authorSubmits(uid, role, changed) {
+        return role in ['system_admin', 'quality_manager']
+               && (isSelfId(uid, author()) || role == 'system_admin')
                && currentStatus() in ['draft', 'rejected']
                && nextStatus() == 'pending_approval'
-               && changedKeys().hasOnly(authorFields())
-               && stampsNotForged()
+               && changed.hasOnly(authorFields())
+               && stampsNotForged(changed)
                && request.resource.data.get('approverId', '') != ''
                && request.resource.data.get('approverId', '') != author()
-               && request.resource.data.get('approverId', '') != appUserId();
+               && request.resource.data.get('approverId', '') != uid;
       }
 
       // (3) The approver NAMED ON THIS PLAN records the decision, once, and
@@ -701,17 +964,16 @@ service cloud.firestore {
       //     `appUserId() != author()` repeats the guarantee at decision time,
       //     because plans written before these rules were deployed may already
       //     name their own author as approver.
-      function approverDecides() {
-        return isActive()
-               && approver() != ''
-               && approver() == appUserId()
-               && appUserId() != author()
+      function approverDecides(uid, changed) {
+        return approver() != ''
+               && approver() == uid
+               && uid != author()
                && currentStatus() == 'pending_approval'
-               && changedKeys().hasOnly(decisionFields())
+               && changed.hasOnly(decisionFields())
                && ((nextStatus() == 'approved'
-                    && request.resource.data.get('approvedBy', '') == appUserId())
+                    && request.resource.data.get('approvedBy', '') == uid)
                    || (nextStatus() == 'rejected'
-                       && request.resource.data.get('rejectedBy', '') == appUserId()));
+                       && request.resource.data.get('rejectedBy', '') == uid));
       }
 
       // (4) The author WITHDRAWS a submission and the plan goes back to 'draft'.
@@ -731,14 +993,14 @@ service cloud.firestore {
       //     and an author who has since changed roles must still be able to take
       //     their own request back. The approver has no branch here - a decision
       //     is theirs to record, not to duck.
-      function authorRecalls() {
-        return (isSelf(author()) || isAdmin())
+      function authorRecalls(uid, role, changed) {
+        return (isSelfId(uid, author()) || role == 'system_admin')
                && currentStatus() == 'pending_approval'
                && nextStatus() == 'draft'
-               && changedKeys().hasOnly(authorFields())
+               && changed.hasOnly(authorFields())
                && (request.resource.data.get('approverId', '') == ''
                    || request.resource.data.get('approverId', '') == approver())
-               && stampsNotForged();
+               && stampsNotForged(changed);
       }
 
       // (5) An audit was created from a planned line, and its id is written back
@@ -768,12 +1030,11 @@ service cloud.firestore {
         return resource.data.items.removeAll(request.resource.data.items);
       }
 
-      function linksCreatedAuditToItem() {
-        return isActive()
-               && currentStatus() == 'approved'
+      function linksCreatedAuditToItem(changed) {
+        return currentStatus() == 'approved'
                && nextStatus() == 'approved'
-               && changedKeys().hasOnly(['items', 'updatedAt'])
-               && changedKeys().hasAny(['items'])
+               && changed.hasOnly(['items', 'updatedAt'])
+               && changed.hasAny(['items'])
                && 'items' in resource.data
                && 'items' in request.resource.data
                && resource.data.items is list
@@ -817,11 +1078,30 @@ service cloud.firestore {
       //         editing or re-deciding an approved one beyond the auditId
       //         write-back, anyone but the author returning a plan to 'draft',
       //         and anyone but the named approver deciding.
-      allow update: if authorEditsContent()
-                    || authorSubmits()
-                    || authorRecalls()
-                    || approverDecides()
-                    || linksCreatedAuditToItem();
+      //         THE CALLER IS RESOLVED ONCE, HERE, AND PASSED DOWN.
+      //         Firestore evaluates at most 1000 expressions per request. The
+      //         earlier shape had five branches that each re-derived the caller
+      //         through isQualityStaff() / isSelf() / isAdmin() / appUserId(),
+      //         every one of which re-runs isActive() and its four document
+      //         reads. That blew past the ceiling, and Firestore reports the
+      //         overrun as PERMISSION_DENIED - so every legitimate submission
+      //         was refused, indistinguishably from a real authorization
+      //         failure. isActive() is checked once here; once it has passed,
+      //         reading userId and role straight off the mapping is precisely
+      //         what appUserId() and appRole() would have returned.
+      function canUpdate(uid, role, changed) {
+        return authorEditsContent(uid, role, changed)
+               || authorSubmits(uid, role, changed)
+               || authorRecalls(uid, role, changed)
+               || approverDecides(uid, changed)
+               || linksCreatedAuditToItem(changed);
+      }
+
+      allow update: if isActive()
+                    && !isReadOnlyRole()
+                    && canUpdate(mapping().get('userId', ''),
+                                 mapping().get('role', ''),
+                                 changedKeys());
 
       // delete: deleteAnnualPlan. The plans page offers it under the same
       //         condition as editing (author or system_admin, draft or
@@ -834,25 +1114,94 @@ service cloud.firestore {
     }
 
     // -------------------------------------------------------------------
-    // activeSessions/{userId} - doc id == user id (the Firestore user id).
+    // activeSessions/{userId} - CLOSED. The "who is online" feature is gone.
+    //
+    // Knowing that somebody has a tab open answered no question the business
+    // had, and the once-a-minute heartbeat it needed wrote to Firestore for
+    // every signed-in user all day. What replaces it is the activity log below:
+    // a permanent record of what people DID, not of which tabs are open.
+    //
+    // addActiveSession, removeActiveSession, getActiveSessions,
+    // updateSessionActivity, subscribeToActiveSessions and cleanupStaleSessions
+    // no longer exist in src/lib/firestore.ts, and no screen reads or writes
+    // this collection - so nothing is denied here that anything still calls.
+    //
+    // The documents already in the collection are untouched by this change.
+    // They are stale data - a snapshot of who had a tab open the day the feature
+    // was removed - and the operator may delete them from the Firebase Console
+    // whenever it suits them; rules do not apply to the Console. There is no
+    // hurry and nothing depends on it. SECURITY.md section 3.4.
     // -------------------------------------------------------------------
     match /activeSessions/{userId} {
-      // list: getActiveSessions, subscribeToActiveSessions, cleanupStaleSessions -
-      //       the Sidebar effect that uses them returns early for anyone who is
-      //       not a system_admin (src/components/layout/Sidebar.tsx:126-130).
-      // get:  no caller today; permitted for the owner because a user reading
-      //       their own session row learns nothing new.
-      allow get: if isAdmin() || isSelf(userId);
-      allow list: if isAdmin();
+      allow read, write: if false;
+    }
 
-      // create/update: addActiveSession at login and the once-a-minute
-      //       heartbeat updateSessionActivity, both always on the caller's own id.
-      allow create, update: if isSelf(userId);
+    // -------------------------------------------------------------------
+    // activityLog/{entryId} - the system activity log (src/lib/activity-log.ts).
+    //
+    // Who signed in, and who created, changed or deleted what, kept for as long
+    // as the database lives. This is the owner's private record: an auditor's
+    // system is expected to be able to say who did what long after the fact, and
+    // the person it answers to is the system administrator.
+    //
+    // Entry shape: ActivityEntry in src/types/index.ts. actorName, actorEmail and
+    // actorRole are denormalised onto every entry on purpose, so the log stays
+    // readable after the employee's user document is gone.
+    // -------------------------------------------------------------------
+    match /activityLog/{entryId} {
 
-      // delete: removeActiveSession at logout (own row) and cleanupStaleSessions,
-      //         which deletes other people's stale rows and only ever runs from
-      //         the system_admin-only Sidebar effect.
-      allow delete: if isAdmin() || isSelf(userId);
+      // get/list: getActivityLog and subscribeToActivityLog - SYSTEM ADMINISTRATOR
+      //      ONLY. Not the quality manager, not a department manager, nobody
+      //      else, and not even the author of an entry reading their own row.
+      //      This is the one collection in the file whose read gate is narrower
+      //      than isQualityStaff(): a log of everyone's actions that the people
+      //      being logged can read is a different object with a different effect
+      //      on their behaviour. Both readers return [] when denied, so a
+      //      non-administrator who reaches a screen that calls them sees an empty
+      //      log rather than an error.
+      allow get, list: if isAdmin();
+
+      // create: recordActivity, called from wherever something happens - so the
+      //      writer is whichever active employee performed the action, not an
+      //      administrator. That is the whole point: every user's own actions are
+      //      what fill this collection.
+      //
+      //      The one constraint is identity. Without it any signed-in user could
+      //      write an entry naming somebody else as the actor, and a log that can
+      //      be written in another person's name is worse than no log - it is
+      //      evidence pointing at the wrong employee. actorUserId on the incoming
+      //      document must therefore be the caller's own application user id.
+      //      A missing or empty actorUserId yields '' from the get() default and
+      //      appUserId() is never '' for an active caller, so an unattributed
+      //      entry is refused too.
+      //
+      //      TWO CONSEQUENCES, both deliberate and both worth knowing before
+      //      someone reads the log as complete:
+      //        - a FAILED sign-in cannot be recorded. The caller is not
+      //          authenticated, or has no mapping, so isActive() is false and
+      //          there is no honest actorUserId to write. Recording it would mean
+      //          letting an unauthenticated stranger append to the log, which is
+      //          a worse trade. Failed sign-ins live in the Firebase Auth console.
+      //        - a 'logout' entry has to be written BEFORE signOut() is called.
+      //          Afterwards there is no request.auth and the write is denied.
+      //      recordActivity is fire-and-forget and swallows failures, so neither
+      //      case can ever surface as an error in front of a user.
+      allow create: if isActive()
+                    && request.resource.data.get('actorUserId', '') == appUserId();
+
+      // update, delete: NOBODY. Not the quality manager, not the author of the
+      //      entry, and deliberately NOT the system administrator either.
+      //      An audit trail its own owner can rewrite is not an audit trail: the
+      //      value of this collection rests entirely on nobody being able to
+      //      revise it after the fact, and "nobody" has to include the one person
+      //      with the strongest motive and the broadest access. src/lib/
+      //      activity-log.ts exports no update and no delete helper for the same
+      //      reason; this rule is what makes that a guarantee rather than a
+      //      convention, because it holds no matter what code is shipped next.
+      //      Correcting or pruning the log is an operator act in the Firebase
+      //      Console, which rules do not govern - visible, deliberate, and
+      //      outside the application. SECURITY.md section 2.3.
+      allow update, delete: if false;
     }
 
     // -------------------------------------------------------------------
@@ -893,9 +1242,13 @@ service cloud.firestore {
 
     // -------------------------------------------------------------------
     // Catch-all: any collection or document not listed above is denied. The
-    // application touches Firestore only through src/lib/firestore.ts and
-    // src/lib/auth.ts, and between them they use exactly the nine collections
-    // matched above.
+    // application touches Firestore only through src/lib/firestore.ts,
+    // src/lib/activity-log.ts and src/lib/auth.ts, and between them they use
+    // exactly the nine collections named in COLLECTIONS (src/lib/firestore.ts),
+    // every one of which has a block above. The tenth block, activeSessions, is
+    // a collection nothing calls any more and is closed rather than removed, so
+    // that a leftover caller is denied here rather than falling through to a
+    // rule that no longer describes anything.
     // -------------------------------------------------------------------
     match /{document=**} {
       allow read, write: if false;

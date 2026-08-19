@@ -52,19 +52,18 @@ import {
   Lock,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import type { QMSDecision, QMSComment, QMSModificationEntry, QMSApprovalData } from '@/types';
+import type {
+  QMSDecision, QMSComment, QMSModificationEntry, QMSApprovalData,
+  // موحَّدة في @/types بدل نسخ محلية كانت تختلف عنها في التفاصيل
+  AttachmentFile, AuditQuestion, ExtensionRequest, AuditActivityLogEntry as ActivityLogEntry,
+  AuditFinding as Finding, FindingComment, DepartmentResponse,
+} from '@/types';
+import { FINDING_CATEGORY_A, FINDING_CATEGORY_B } from '@/types';
 import { OneDrivePicker } from '@/components/ui/OneDrivePicker';
 import type { OneDriveFile } from '@/lib/onedrive';
 import { Cloud } from 'lucide-react';
 
 // Type for attachments (local files or OneDrive files)
-interface AttachmentFile {
-  type: 'local' | 'onedrive';
-  name: string;
-  size?: number;
-  webUrl?: string; // For OneDrive files
-  id?: string; // For OneDrive files
-}
 
 // ===========================================
 // Workflow stages
@@ -146,114 +145,17 @@ const workflowStages = [
 ];
 
 // Finding categories
-const findingCategories = {
-  A: [
-    { value: 'quality', labelAr: 'الجودة', labelEn: 'Quality' },
-    { value: 'ohsas', labelAr: 'السلامة والصحة المهنية', labelEn: 'OHSAS' },
-    { value: 'environment', labelAr: 'البيئة', labelEn: 'Environment' },
-  ],
-  B: [
-    { value: 'major_nc', labelAr: 'عدم مطابقة رئيسي', labelEn: 'Major Non-Conformity' },
-    { value: 'minor_nc', labelAr: 'عدم مطابقة ثانوي', labelEn: 'Minor Non-Conformity' },
-    { value: 'observation', labelAr: 'ملاحظة', labelEn: 'Observation' },
-    { value: 'noteworthy', labelAr: 'جهد ملحوظ', labelEn: 'Noteworthy Effort' },
-  ],
-};
+const findingCategories = { A: FINDING_CATEGORY_A, B: FINDING_CATEGORY_B };
 
 // Interfaces
-interface AuditQuestion {
-  id: string;
-  questionAr: string;
-  questionEn: string;
-  clause: string;
-  answer?: string;
-  status: 'pending' | 'compliant' | 'non_compliant' | 'not_applicable';
-  findingId?: string; // معرف الملاحظة إذا تم رفعها من هذا السؤال
-  notes?: string;
-  attachments?: { id: string; name: string; size: number; webUrl: string }[]; // OneDrive attachments
-}
 
-interface ExtensionRequest {
-  id: string;
-  requestedDate: string;
-  newDate: string;
-  reason: string;
-  status: 'pending' | 'approved' | 'rejected';
-  requestedBy: string;
-  reviewedBy?: string;
-  reviewedAt?: string;
-  reviewComment?: string;
-}
 
 // Comment interface for discussions
-interface FindingComment {
-  id: string;
-  findingId: string;
-  userId: string;
-  comment: string;
-  createdAt: string;
-  attachments?: AttachmentFile[];
-}
 
 // Department response to corrective action
-interface DepartmentResponse {
-  approvedBy: string;
-  approvedAt: string;
-  closingDate: string;
-  comment?: string;
-  attachments?: AttachmentFile[];
-}
 
-interface Finding {
-  id: string;
-  reportNumber: string;
-  departmentId: string;
-  sectionId?: string;
-  focusArea?: string;
-  clause: string;
-  finding: string;
-  evidence: string;
-  categoryA: string;
-  categoryB: string;
-  estimatedClosingDate: string;
-  rootCause?: string;
-  correctiveAction?: string;
-  actionEvidence?: string;
-  status: 'open' | 'in_progress' | 'pending_verification' | 'closed' | 'pending_department_approval';
-  createdAt: string;
-  closedAt?: string;
-  extensionRequests?: ExtensionRequest[];
-  attachments?: AttachmentFile[];
-  // New fields for department approval and discussion
-  comments?: FindingComment[];
-  departmentResponse?: DepartmentResponse;
-  qmsApprovedCorrectiveAction?: boolean;
-  qmsApprovalDate?: string;
-  qmsApprovalComment?: string;
-}
 
 // Activity Log Entry for tracking all actions
-interface ActivityLogEntry {
-  id: string;
-  type: 'audit_created' | 'audit_submitted' | 'audit_approved' | 'audit_rejected' | 'audit_postponed' |
-  'modification_requested' | 'stage_changed' | 'question_added' | 'question_answered' |
-  'question_edited' | 'question_deleted' |
-  'finding_added' | 'finding_updated' | 'corrective_action_added' | 'extension_requested' |
-  'extension_approved' | 'extension_rejected' | 'execution_confirmed' | 'comment_added' |
-  'department_response' | 'corrective_actions_approved';
-  userId: string;
-  timestamp: string;
-  details: {
-    description?: string;
-    previousValue?: string;
-    newValue?: string;
-    questionId?: string;
-    findingId?: string;
-    stageFrom?: number;
-    stageTo?: number;
-    comment?: string;
-  };
-}
 
 interface Audit {
   id: string;
@@ -876,12 +778,15 @@ export default function AuditDetailPage() {
           answer: questionAnswer.answer,
           status: questionAnswer.status,
           notes: questionAnswer.notes || undefined,
+          // يُحفظ حقل type مع كل مرفق. كان يسقط هنا، فتُحفظ مرفقات OneDrive بلا المميِّز
+          // الذي يعتمد عليه العرض لاحقاً - فتظهر كأنها ملفات محلية لا رابط لها.
           attachments: questionAnswer.attachments.map(f => ({
+            type: 'onedrive' as const,
             id: f.id,
             name: f.name,
             size: f.size,
             webUrl: f.webUrl,
-          })), // Save OneDrive attachments
+          })),
         };
       }
       return q;

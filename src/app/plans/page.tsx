@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
+import { isIndependentOf } from '@/lib/audit-workflow';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   subscribeToAnnualPlans,
@@ -259,10 +260,18 @@ function PlansPageContent() {
     return found ? (language === 'ar' ? found.labelAr : found.labelEn) : type;
   };
 
-  // المراجعون المتاحون لبنود الخطة
+  // المراجعون المتاحون لبند الخطة الجاري تحريره - المستقلون عن إدارته فقط.
+  // نفس الحارس المطبّق في معالج إنشاء المراجعة، لأن البند هنا هو ما يُعبّئ ذلك المعالج:
+  // اختيار غير مستقل هنا يصل إلى المراجعة نفسها.
   const auditors = useMemo(
-    () => allUsers.filter(u => u.canBeAuditor && u.isActive),
-    [allUsers]
+    () =>
+      allUsers.filter(
+        u =>
+          u.canBeAuditor &&
+          u.isActive &&
+          isIndependentOf(u, newItem.departmentId, newItem.sectionId)
+      ),
+    [allUsers, newItem.departmentId, newItem.sectionId]
   );
 
   // من ترفضه القواعد معتمِداً، فلا يُعرض في القائمة أصلاً. قاعدة authorSubmits في

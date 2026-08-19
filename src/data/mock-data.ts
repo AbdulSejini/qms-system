@@ -172,6 +172,7 @@ export const getRoleNameAr = (role: UserRole): string => {
     department_manager: 'مدير إدارة',
     section_head: 'رئيس قسم',
     employee: 'موظف',
+    external_auditor: 'مراجع خارجي',
   };
   return roleNames[role];
 };
@@ -185,6 +186,7 @@ export const getRoleNameEn = (role: UserRole): string => {
     department_manager: 'Department Manager',
     section_head: 'Section Head',
     employee: 'Employee',
+    external_auditor: 'External Auditor',
   };
   return roleNames[role];
 };

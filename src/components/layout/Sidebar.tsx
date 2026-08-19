@@ -1,12 +1,11 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { useTranslation, useLanguage } from '@/contexts/LanguageContext';
+import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { subscribeToActiveSessions, cleanupStaleSessions } from '@/lib/firestore';
 import {
   LayoutDashboard,
   ClipboardCheck,
@@ -23,20 +22,12 @@ import {
   CalendarRange,
   ListChecks,
   TrendingUp,
-  Wifi,
-  ChevronUp,
-  ChevronDown,
+  History,
 } from 'lucide-react';
 
-// Types for active sessions
-interface ActiveSession {
-  id: string;
-  userId: string;
-  userName: string;
-  userRole: string;
-  loginAt: string;
-  lastActivity?: string;
-}
+// The "who is online" list that used to sit at the bottom of this sidebar is gone, together
+// with its Firestore subscription. What people DID is recorded permanently instead - see the
+// system activity log at /activity, reachable from the entry below.
 
 interface NavItem {
   href: string;
@@ -101,6 +92,13 @@ const navItems: NavItem[] = [
     icon: Building2,
   },
   {
+    // سجل نشاط النظام - مدير النظام فقط. الصفحة نفسها ترفض غيره أيضاً
+    href: '/activity',
+    labelKey: 'navigation.activity',
+    icon: History,
+    requiresRole: ['system_admin'],
+  },
+  {
     href: '/settings',
     labelKey: 'navigation.settings',
     icon: Settings,
@@ -117,52 +115,7 @@ interface SidebarProps {
 export function Sidebar({ isCollapsed, onToggle, isMobileOpen, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
   const { t, isRTL } = useTranslation();
-  const { language } = useLanguage();
   const { currentUser } = useAuth();
-
-  // State للمستخدمين المتصلين
-  const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
-  const [showActiveSessions, setShowActiveSessions] = useState(true);
-  const isSystemAdmin = currentUser?.role === 'system_admin';
-
-  // تحميل الجلسات النشطة من Firestore في الوقت الحقيقي
-  useEffect(() => {
-    if (!isSystemAdmin) return;
-
-    // تنظيف الجلسات القديمة
-    cleanupStaleSessions();
-
-    // الاشتراك في تحديثات الجلسات النشطة
-    const unsubscribe = subscribeToActiveSessions((firestoreSessions) => {
-      const sessions: ActiveSession[] = firestoreSessions.map((session: any) => ({
-        id: session.id,
-        userId: session.userId,
-        userName: session.userName || session.userEmail || 'مستخدم',
-        userRole: session.userRole || 'employee',
-        loginAt: session.loginAt,
-        lastActivity: session.lastActivity,
-      }));
-
-      // ترتيب حسب آخر نشاط
-      sessions.sort((a, b) => {
-        const aTime = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
-        const bTime = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
-        return bTime - aTime;
-      });
-
-      setActiveSessions(sessions);
-    });
-
-    // تنظيف الجلسات القديمة كل 5 دقائق
-    const cleanupInterval = setInterval(() => {
-      cleanupStaleSessions();
-    }, 5 * 60 * 1000);
-
-    return () => {
-      unsubscribe();
-      clearInterval(cleanupInterval);
-    };
-  }, [isSystemAdmin]);
 
   // تصفية عناصر القائمة بناءً على صلاحيات المستخدم
   const filteredNavItems = useMemo(() => {
@@ -280,70 +233,6 @@ export function Sidebar({ isCollapsed, onToggle, isMobileOpen, onMobileClose }: 
             })}
           </ul>
         </nav>
-
-        {/* Active Users - لمدير النظام فقط */}
-        {isSystemAdmin && !isCollapsed && (
-          <div className="px-3 pb-2 border-t border-[var(--border)] pt-2">
-            <button
-              onClick={() => setShowActiveSessions(!showActiveSessions)}
-              className="flex items-center justify-between w-full px-2 py-1.5 text-xs font-medium text-[var(--foreground-secondary)] hover:text-[var(--foreground)] transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <div className="relative">
-                  <Wifi className="h-3.5 w-3.5 text-green-500" />
-                  <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-                </div>
-                <span>{language === 'ar' ? 'المتصلين' : 'Online'}</span>
-                <span className="text-[10px] text-green-600 dark:text-green-400">({activeSessions.length})</span>
-              </div>
-              {showActiveSessions ? (
-                <ChevronUp className="h-3 w-3" />
-              ) : (
-                <ChevronDown className="h-3 w-3" />
-              )}
-            </button>
-
-            {showActiveSessions && (
-              <div className="mt-1 space-y-1 max-h-32 overflow-y-auto">
-                {activeSessions.map((session) => (
-                  <div
-                    key={session.id}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-[var(--background-tertiary)]"
-                  >
-                    <div className="relative shrink-0">
-                      <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-semibold">
-                        {session.userName.charAt(0)}
-                      </div>
-                      <span className="absolute bottom-0 right-0 h-1.5 w-1.5 rounded-full bg-green-500 ring-1 ring-[var(--background-tertiary)]" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[11px] font-medium text-[var(--foreground)] truncate">
-                        {session.userName}
-                        {session.id === 'current' && (
-                          <span className="text-[9px] text-green-600 dark:text-green-400 ms-1">
-                            ({language === 'ar' ? 'أنت' : 'You'})
-                          </span>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Active Users Icon - للوضع المصغر */}
-        {isSystemAdmin && isCollapsed && (
-          <div className="px-3 pb-2 border-t border-[var(--border)] pt-2 flex justify-center">
-            <div className="relative" title={language === 'ar' ? `${activeSessions.length} متصل` : `${activeSessions.length} online`}>
-              <Wifi className="h-5 w-5 text-green-500" />
-              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-green-500 text-[9px] text-white font-bold">
-                {activeSessions.length}
-              </span>
-            </div>
-          </div>
-        )}
 
         {/* Collapse Toggle */}
         <div className="p-3 border-t border-[var(--border)]">

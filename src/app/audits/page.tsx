@@ -3,6 +3,9 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout';
+// موحَّدة في @/types - كانت نسخاً محلية تختلف عن المخزَّن فعلاً
+import type { AuditFinding as Finding, AuditQuestion } from '@/types';
+import { FINDING_CATEGORY_A, FINDING_CATEGORY_B } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui';
@@ -113,51 +116,10 @@ const workflowStages = [
   },
 ];
 
-// ISO 9001 Finding Categories
-const findingCategories = {
-  A: [
-    { value: 'quality', labelAr: 'الجودة', labelEn: 'Quality' },
-    { value: 'ohsas', labelAr: 'السلامة والصحة المهنية', labelEn: 'OHSAS' },
-    { value: 'environment', labelAr: 'البيئة', labelEn: 'Environment' },
-  ],
-  B: [
-    { value: 'major_nc', labelAr: 'عدم مطابقة رئيسي', labelEn: 'Major NC' },
-    { value: 'minor_nc', labelAr: 'عدم مطابقة ثانوي', labelEn: 'Minor NC' },
-    { value: 'observation', labelAr: 'ملاحظة', labelEn: 'Observation' },
-    { value: 'opportunity', labelAr: 'فرصة تحسين', labelEn: 'Improvement Opportunity' },
-  ],
-};
-
-// Finding interface
-interface Finding {
-  id: string;
-  reportNumber: string;
-  departmentId: string;
-  sectionId?: string;
-  clause: string; // ISO clause
-  finding: string;
-  evidence: string;
-  categoryA: string;
-  categoryB: string;
-  estimatedClosingDate: string;
-  rootCause?: string;
-  correctiveAction?: string;
-  actionEvidence?: string;
-  status: 'open' | 'in_progress' | 'pending_verification' | 'closed';
-  createdAt: string;
-  closedAt?: string;
-}
+// ISO 9001 Finding Categories - من @/types، مصدر واحد للصفحتين
+const findingCategories = { A: FINDING_CATEGORY_A, B: FINDING_CATEGORY_B };
 
 // Question interface
-interface AuditQuestion {
-  id: string;
-  questionAr: string;
-  questionEn: string;
-  clause: string; // ISO clause reference
-  answer?: string;
-  status: 'pending' | 'compliant' | 'non_compliant' | 'not_applicable';
-  notes?: string;
-}
 
 // Audit interface
 interface Audit {
@@ -556,6 +518,8 @@ export default function AuditsPage() {
       open: { color: 'bg-red-100 text-red-700', labelAr: 'مفتوح', labelEn: 'Open' },
       in_progress: { color: 'bg-yellow-100 text-yellow-700', labelAr: 'قيد العمل', labelEn: 'In Progress' },
       pending_verification: { color: 'bg-blue-100 text-blue-700', labelAr: 'بانتظار التحقق', labelEn: 'Pending Verification' },
+      // كانت ناقصة هنا، فتظهر الملاحظات المنتظرة لرد الإدارة بشارة فارغة
+      pending_department_approval: { color: 'bg-purple-100 text-purple-700', labelAr: 'بانتظار رد الإدارة', labelEn: 'Awaiting Department' },
       closed: { color: 'bg-green-100 text-green-700', labelAr: 'مغلق', labelEn: 'Closed' },
     };
     const c = config[status];

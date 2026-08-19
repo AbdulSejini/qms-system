@@ -107,5 +107,24 @@
         { "code": "GRC-RISK", "nameEn": "Risk Management", "nameAr": "إدارة المخاطر", "auditee": "Abdulelah Sejini" }
       ]
     }
+  ],
+  "auditorsSource": "The 16 qualified ISO 9001 internal auditors held by the QA department. 'aliases' lists the spellings the 'List of Auditee with concerened Area' workbook uses for the same person, so an auditee name in a section above can be matched back to this roster instead of creating a second record for one employee.",
+  "auditors": [
+    { "nameEn": "Lowi A. Bukhsh", "nameAr": "لوي أ. بخش", "positionEn": "Chief of Staff", "positionAr": "رئيس الديوان", "aliases": ["Lowi Bukhsh"] },
+    { "nameEn": "Mohammed A. Bahwairith", "nameAr": "محمد أ. باحويرث", "positionEn": "QMS Lead Auditor", "positionAr": "المراجع الرئيسي لنظام إدارة الجودة", "aliases": ["Mohammed Bahwairith"] },
+    { "nameEn": "Babu Jaseen", "nameAr": "بابو جاسين", "positionEn": "Acting Head of Technology Section", "positionAr": "رئيس قسم التقنية بالتكليف", "aliases": [] },
+    { "nameEn": "Abdul Hameed Abdullah", "nameAr": "عبدالحميد عبدالله", "positionEn": "Division Head of Maintenance", "positionAr": "رئيس شعبة الصيانة", "aliases": [] },
+    { "nameEn": "Sony Mathews", "nameAr": "سوني ماثيوز", "positionEn": "Manager of Research & Development Unit", "positionAr": "مدير وحدة البحث والتطوير", "aliases": [] },
+    { "nameEn": "Mohammed K. Al-Ashram", "nameAr": "محمد ك. الأشرم", "positionEn": "Manager MV/HV Manufacturing", "positionAr": "مدير تصنيع الجهد المتوسط والعالي", "aliases": ["M. K. Ashram"] },
+    { "nameEn": "Ajmal Khan", "nameAr": "أجمل خان", "positionEn": "Manager Drawing and Stranding", "positionAr": "مدير السحب والجدل", "aliases": [] },
+    { "nameEn": "Sultan Qahtani", "nameAr": "سلطان قحطاني", "positionEn": "Division Head of Production", "positionAr": "رئيس شعبة الإنتاج", "aliases": [] },
+    { "nameEn": "Mohammed Iqbal", "nameAr": "محمد إقبال", "positionEn": "Team Leader Shipping Management", "positionAr": "قائد فريق إدارة الشحن", "aliases": [] },
+    { "nameEn": "Adel Rose", "nameAr": "عادل روز", "positionEn": "QC Engineer Quality Control", "positionAr": "مهندس مراقبة الجودة", "aliases": [] },
+    { "nameEn": "Mohammad Pacadlack", "nameAr": "محمد باكادلاك", "positionEn": "Manager Company Performance", "positionAr": "مدير أداء الشركة", "aliases": [] },
+    { "nameEn": "Mohammad Baharthah", "nameAr": "محمد باحارثة", "positionEn": "Technician Plant Maintenance", "positionAr": "فني صيانة المصنع", "aliases": ["Mohammed Baharithah"] },
+    { "nameEn": "Turki Abu Taleb", "nameAr": "تركي أبوطالب", "positionEn": "Material Engineer Planning", "positionAr": "مهندس مواد - التخطيط", "aliases": ["Turki Abotaleb"] },
+    { "nameEn": "Ramy A. Yaqoob", "nameAr": "رامي أ. يعقوب", "positionEn": "Executive Office Coordinator", "positionAr": "منسق المكتب التنفيذي", "aliases": [] },
+    { "nameEn": "Tariq H. Balubaid", "nameAr": "طارق ح. بالعبيد", "positionEn": "Manager Preventive Maint. & Utilities", "positionAr": "مدير الصيانة الوقائية والمرافق", "aliases": ["Tariq Balbaid"] },
+    { "nameEn": "Ammar Zamreeq", "nameAr": "عمار زمريق", "positionEn": "Logistics Specialist", "positionAr": "أخصائي لوجستيات", "aliases": [] }
   ]
 }

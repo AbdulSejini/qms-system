@@ -42,3 +42,11 @@ yarn-error.log*
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+
+# Firebase emulator artifacts
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# Local Claude Code settings (per-machine)
+.claude/settings.local.json

@@ -23,9 +23,6 @@ import {
   getVisibleUsers as getVisibleUsersFromFirestore,
   getAllDepartments as getAllDepartmentsFromFirestore,
   getAllSections as getAllSectionsFromFirestore,
-  addActiveSession,
-  removeActiveSession,
-  updateSessionActivity,
 } from '@/lib/firestore';
 import { logger } from '@/lib/logger';
 
@@ -212,21 +209,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentUser, loadData]);
 
-  // تحديث نشاط المستخدم كل دقيقة (heartbeat)
-  useEffect(() => {
-    if (!currentUser) return;
-
-    // تحديث النشاط فوراً
-    updateSessionActivity(currentUser.id);
-
-    // تحديث كل دقيقة
-    const interval = setInterval(() => {
-      updateSessionActivity(currentUser.id);
-    }, 60000); // 60 ثانية
-
-    return () => clearInterval(interval);
-  }, [currentUser]);
-
   const isAuthenticated = currentUser !== null;
 
   // الصلاحيات
@@ -282,12 +264,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     authGenerationRef.current += 1;
     setCurrentUser(user);
     dataLoadedRef.current = false; // Reset to load fresh data
-
-    await addActiveSession(user.id, {
-      loginAt: new Date().toISOString(),
-      userEmail: user.email,
-      userName: user.fullNameAr,
-    });
   }, []);
 
   // تسجيل الدخول - النسخة الكاملة التي تعيد سبب الفشل لصفحة تسجيل الدخول
@@ -330,10 +306,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // تسجيل الخروج
   const logout = useCallback(async () => {
-    if (currentUser) {
-      await removeActiveSession(currentUser.id);
-    }
-
     // رفع رقم الجيل أولاً: أي استدعاء للمستمع لا يزال ينتظر Firestore يصبح قديماً،
     // فلا يستطيع إعادة ضبط المستخدم بعد الخروج
     authGenerationRef.current += 1;
