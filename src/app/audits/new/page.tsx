@@ -297,15 +297,28 @@ export default function NewAuditPage() {
     return `${language === 'ar' ? m.ar : m.en} ${planLink.year || ''}`.trim();
   };
 
+  // العنوان = السنة - الشهر - الإدارة / القسم - نوع المراجعة.
+  //
+  // هذه هي المعلومات نفسها التي أدخلها المستخدم في الحقول أعلاه، فكتابتها مرة
+  // أخرى في سطر عنوان عملٌ مكرر بلا فائدة. والترتيب يبدأ بالسنة والشهر عمداً:
+  // قوائم المراجعات تُقرأ وتُرتَّب زمنياً، فبداية العنوان بالتاريخ تجعل الترتيب
+  // الأبجدي ترتيباً زمنياً في الوقت نفسه.
+  //
+  // يُولَّد في كل الحالات لا في المراجعة المنشأة من الخطة وحدها - الإدارة والقسم
+  // والنوع والشهر معروفة في الحالتين. ومصدر الشهر والسنة هو بند الخطة إن وُجد،
+  // وإلا فتاريخ البدء المختار.
   const generatedTitle = (lang: 'ar' | 'en'): string => {
     const department = getDepartment(formData.departmentId);
+    if (!department) return '';   // لم تُختر الإدارة بعد - الخطوة الثانية
+
     const section = formData.sectionId ? getSection(formData.sectionId) : undefined;
     const type = auditTypes.find(t => t.value === formData.type);
-    if (!department || !planLink) return '';
 
-    const monthIndex = planLink.month ? planLink.month - 1 : Number((formData.startDate || '').split('-')[1] || 0) - 1;
+    const monthIndex = planLink?.month
+      ? planLink.month - 1
+      : Number((formData.startDate || '').split('-')[1] || 0) - 1;
     const month = monthIndex >= 0 && monthIndex < 12 ? monthNames[monthIndex] : null;
-    const year = planLink.year || Number((formData.startDate || '').split('-')[0]) || '';
+    const year = planLink?.year || Number((formData.startDate || '').split('-')[0]) || '';
 
     const place = lang === 'ar'
       ? `${department.nameAr}${section ? ` / ${section.nameAr}` : ''}`
@@ -313,9 +326,11 @@ export default function NewAuditPage() {
     const kind = auditTypeTitles[formData.type]
       ? auditTypeTitles[formData.type][lang]
       : (lang === 'ar' ? 'مراجعة' : `${type?.labelEn || ''} Audit`.trim());
-    const when = month ? ` - ${lang === 'ar' ? month.ar : month.en} ${year}` : '';
+    const when = [year || null, month ? (lang === 'ar' ? month.ar : month.en) : null]
+      .filter(Boolean)
+      .join(' - ');
 
-    return `${kind} - ${place}${when}`;
+    return [when || null, place, kind].filter(Boolean).join(' - ');
   };
 
   // العنوان الفعلي: ما كتبه المستخدم إن كتب، وإلا المولَّد من بند الخطة
@@ -515,13 +530,9 @@ export default function NewAuditPage() {
 
     switch (step) {
       case 1: // Basic info
-        // العنوان مطلوب فقط حين لا يكون هناك عنوان مولَّد من بند الخطة
-        if (!effectiveTitle('ar')) {
-          newErrors.titleAr = language === 'ar' ? 'عنوان المراجعة مطلوب' : 'Audit title is required';
-        }
-        if (!effectiveTitle('en')) {
-          newErrors.titleEn = language === 'ar' ? 'العنوان بالإنجليزية مطلوب' : 'English title is required';
-        }
+        // لا يُطلب عنوان هنا: العنوان يُولَّد من الإدارة والقسم والنوع والشهر،
+        // والإدارة تُختار في الخطوة التالية. يُفحص في الخطوة الأخيرة حين تكون
+        // كل عناصره معروفة - وهو عندها مضمون، فالفحص حارس أخير لا عقبة.
         break;
       case 2: // Department & Team
         if (!formData.departmentId) {
@@ -545,6 +556,11 @@ export default function NewAuditPage() {
         }
         break;
       case 5: // Questions
+        if (!effectiveTitle('ar') || !effectiveTitle('en')) {
+          newErrors.titleAr = language === 'ar'
+            ? 'تعذّر توليد عنوان المراجعة. ارجع للخطوة الثانية واختر الإدارة، أو اكتب عنواناً يدوياً.'
+            : 'The audit title could not be generated. Go back to step two and choose the department, or type a title.';
+        }
         if (formData.questions.length === 0) {
           newErrors.questions = language === 'ar' ? 'يجب إضافة سؤال واحد على الأقل' : 'At least one question is required';
         }
@@ -756,10 +772,10 @@ export default function NewAuditPage() {
     1: {
       titleAr: 'المعلومات الأساسية',
       titleEn: 'Basic Information',
-      instructionAr: 'قم بإدخال المعلومات الأساسية للمراجعة. اختر نوع المراجعة المناسب وأدخل عنواناً واضحاً يصف الغرض من المراجعة.',
-      instructionEn: 'Enter the basic audit information. Choose the appropriate audit type and enter a clear title that describes the purpose of the audit.',
+      instructionAr: 'اختر نوع المراجعة. العنوان يُولَّد تلقائياً من السنة والشهر والإدارة والقسم والنوع، ويمكنك تعديله إن أردت.',
+      instructionEn: 'Choose the audit type. The title is generated from the year, month, department, section and type - you can edit it if you want.',
       tips: [
-        { ar: 'اختر عنواناً يوضح نطاق المراجعة', en: 'Choose a title that clarifies the audit scope' },
+        { ar: 'العنوان يُولَّد تلقائياً - لا حاجة لكتابته', en: 'The title is generated for you - nothing to type' },
         { ar: 'المراجعة الداخلية هي الأكثر شيوعاً', en: 'Internal audit is the most common type' },
       ],
     },
@@ -913,22 +929,30 @@ export default function NewAuditPage() {
             {currentStep === 1 && (
               <div className="space-y-6">
                 {/* مراجعة من بند خطة: العنوان مولَّد ولا يُطلب من المستخدم */}
-                {planLink && !editingTitle && (
+                {!editingTitle && (
                   <div className="rounded-lg border border-[var(--border)] bg-[var(--background-secondary)] p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-xs text-[var(--foreground-secondary)] mb-1">
-                          {language === 'ar' ? 'عنوان المراجعة - مولَّد من بند الخطة' : 'Audit title - generated from the plan line'}
+                          {language === 'ar'
+                            ? (planLink ? 'عنوان المراجعة - مولَّد من بند الخطة' : 'عنوان المراجعة - مولَّد تلقائياً')
+                            : (planLink ? 'Audit title - generated from the plan line' : 'Audit title - generated automatically')}
                         </p>
-                        {/* الإدارات تُحمَّل بعد التركيب، فقد يسبق العرضُ وصولَها */}
+                        {/* الإدارة تُختار في الخطوة الثانية، فالعنوان قد لا يكتمل بعد */}
                         <p className="font-medium">
                           {effectiveTitle(language === 'ar' ? 'ar' : 'en')
-                            || (language === 'ar' ? 'يُولَّد بمجرد تحميل بيانات الإدارة…' : 'Generated as soon as the department data loads…')}
+                            || (language === 'ar'
+                              ? 'يكتمل بعد اختيار الإدارة في الخطوة التالية'
+                              : 'Completed once the department is chosen in the next step')}
                         </p>
                         <p className="text-xs text-[var(--foreground-muted)] mt-1">
                           {language === 'ar'
-                            ? 'الإدارة والقسم ونوع المراجعة والشهر مأخوذة من الخطة المعتمدة - يبقى عليك اليوم بالضبط وفريق المراجعة.'
-                            : 'Department, section, type and month come from the approved plan - what is left for you is the exact day and the audit team.'}
+                            ? (planLink
+                              ? 'الإدارة والقسم ونوع المراجعة والشهر مأخوذة من الخطة المعتمدة - يبقى عليك اليوم بالضبط وفريق المراجعة.'
+                              : 'يتركّب من السنة والشهر والإدارة والقسم ونوع المراجعة - لا حاجة لكتابته.')
+                            : (planLink
+                              ? 'Department, section, type and month come from the approved plan - what is left for you is the exact day and the audit team.'
+                              : 'Built from the year, month, department, section and audit type - there is nothing to type.')}
                         </p>
                       </div>
                       <Button variant="outline" size="sm" onClick={() => setEditingTitle(true)}>
@@ -938,7 +962,7 @@ export default function NewAuditPage() {
                   </div>
                 )}
 
-                <div className={`grid grid-cols-1 md:grid-cols-2 gap-6${planLink && !editingTitle ? ' hidden' : ''}`}>
+                <div className={`grid grid-cols-1 md:grid-cols-2 gap-6${editingTitle ? '' : ' hidden'}`}>
                   <div>
                     <label className="block text-sm font-medium mb-2">
                       {language === 'ar' ? 'عنوان المراجعة (عربي) *' : 'Audit Title (Arabic) *'}
