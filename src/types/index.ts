@@ -43,7 +43,13 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permission> = {
     canDeleteAudits: true,
   },
   quality_manager: {
-    canManageUsers: false,
+    // مدير إدارة الجودة يدير المستخدمين: ينشئهم ويعدّلهم ويصدر لهم حسابات الدخول
+    // ويعيد تعيين كلمات المرور. هذا ما كانت firestore.rules تسمح به أصلاً
+    // (isQualityStaff على users و authUsers، بسقفه المذكور في SECURITY.md 2.2:
+    // لا يكتب دور system_admin، ولا يمسّ حساباً يحمله، ولا يغيّر دوره هو، ولا
+    // يُصدر لنفسه حساب دخول) - وكانت هذه الراية `false` تحجب عنه إعادة تعيين
+    // كلمة المرور وحدها، فيُنشئ الموظف ويصدر دخوله ثم يعجز عن مساعدته إذا نسيها.
+    canManageUsers: true,
     canManageDepartments: true,
     canManageAudits: true,
     canConductAudits: true,
