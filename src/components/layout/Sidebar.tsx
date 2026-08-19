@@ -4,6 +4,7 @@ import React, { useMemo } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import { SaudiCableMark } from '@/components/shared/SaudiCableMark';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -150,13 +151,10 @@ export function Sidebar({ isCollapsed, onToggle, isMobileOpen, onMobileClose }: 
           'flex items-center h-16 px-4 border-b border-[var(--border)]',
           isCollapsed ? 'justify-center' : 'gap-3'
         )}>
-          {/* Logo */}
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--primary)] to-[var(--primary-hover)] shadow-md shrink-0">
-            <svg viewBox="0 0 24 24" className="h-5 w-5 text-white" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M9 12l2 2 4-4" />
-              <path d="M12 3c-1.2 0-2.4.6-3 1.7A3.6 3.6 0 004.6 9c-1 .6-1.7 1.8-1.7 3s.7 2.4 1.7 3c-.3 1.8.5 3.7 2.4 4.3 1.9.7 3.9-.2 4.7-2 .8 1.8 2.8 2.7 4.7 2a3.6 3.6 0 002.4-4.3c1-.6 1.7-1.8 1.7-3s-.7-2.4-1.7-3a3.6 3.6 0 00-4.4-4.3A3.6 3.6 0 0012 3z" />
-            </svg>
-          </div>
+          {/* شعار الشركة - الشعار الرسمي من ترويسة المراسلات، لا أيقونة عامة.
+              What used to sit here was a generic "verified" tick in an amber gradient
+              square: a decoration, not the company's mark. */}
+          <SaudiCableMark size={40} className="shrink-0" />
           {!isCollapsed && (
             <div className="flex flex-col min-w-0">
               <span className="text-sm font-bold text-[var(--foreground)] truncate">

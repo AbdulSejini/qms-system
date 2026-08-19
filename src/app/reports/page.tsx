@@ -32,7 +32,12 @@ import {
   AUDIT_STAGE_ORDER,
   type AuditFinding,
 } from '@/types';
-import { Download, FileBarChart, AlertCircle, ClipboardCheck, TrendingUp, Building2 } from 'lucide-react';
+import { Download, FileBarChart, AlertCircle, ClipboardCheck, TrendingUp, Building2, Printer } from 'lucide-react';
+import {
+  ReportLetterheadHeader,
+  ReportLetterheadFooter,
+  letterheadCsvRows,
+} from '@/components/shared/ReportLetterhead';
 
 // ===========================================
 // CSV
@@ -83,7 +88,7 @@ const STAGE_LABELS: Record<string, { ar: string; en: string }> = {
 
 export default function ReportsPage() {
   const { language } = useTranslation();
-  const { departments } = useAuth();
+  const { departments, currentUser } = useAuth();
   const isRTL = language === 'ar';
 
   const [audits, setAudits] = useState<Audit[]>([]);
@@ -185,8 +190,21 @@ export default function ReportsPage() {
 
   const stamp = () => new Date().toISOString().slice(0, 10);
 
+  // كل ملف مُصدَّر يحمل ترويسته: من أصدره ومتى وتحت أي كيان.
+  // A spreadsheet that leaves this system ends up in an inbox, a shared drive, or an
+  // external auditor's file, detached from the screen that produced it. The provenance
+  // block travels with it so it can still be identified there.
+  const withLetterhead = (titleAr: string, rows: (string | number)[][]) => [
+    ...letterheadCsvRows(
+      titleAr,
+      currentUser?.fullNameAr || currentUser?.fullNameEn || '-',
+      new Date().toLocaleString('ar-SA')
+    ),
+    ...rows,
+  ];
+
   const exportAudits = () => {
-    downloadCsv(`audits-${stamp()}.csv`, [
+    downloadCsv(`audits-${stamp()}.csv`, withLetterhead('تقرير المراجعات', [
       ['رقم المراجعة', 'العنوان', 'الإدارة', 'المرحلة', 'من', 'إلى', 'عدد الأسئلة', 'عدد الملاحظات'],
       ...audits.map(a => [
         getAuditNumber(a),
@@ -200,7 +218,7 @@ export default function ReportsPage() {
         (a.questions ?? []).length,
         (a.findings ?? []).length,
       ]),
-    ]);
+    ]));
   };
 
   const exportFindings = () => {
@@ -209,7 +227,7 @@ export default function ReportsPage() {
     const labelA = (value: string) =>
       FINDING_CATEGORY_A.find(c => c.value === value)?.[isRTL ? 'labelAr' : 'labelEn'] ?? value;
 
-    downloadCsv(`findings-${stamp()}.csv`, [
+    downloadCsv(`findings-${stamp()}.csv`, withLetterhead('تقرير الملاحظات', [
       ['رقم البلاغ', 'المراجعة', 'الإدارة', 'المجال', 'النوع', 'البند', 'الملاحظة', 'الدليل', 'الحالة', 'تاريخ الإغلاق المتوقع', 'متأخرة'],
       ...findingRows.map(r => [
         r.finding.reportNumber ?? '',
@@ -224,11 +242,11 @@ export default function ReportsPage() {
         r.finding.estimatedClosingDate ?? '',
         r.isOverdue ? 'نعم' : 'لا',
       ]),
-    ]);
+    ]));
   };
 
   const exportOverdue = () => {
-    downloadCsv(`overdue-findings-${stamp()}.csv`, [
+    downloadCsv(`overdue-findings-${stamp()}.csv`, withLetterhead('تقرير الملاحظات المتأخرة', [
       ['رقم البلاغ', 'المراجعة', 'الإدارة', 'الملاحظة', 'تاريخ الإغلاق المتوقع', 'الحالة'],
       ...findingRows
         .filter(r => r.isOverdue)
@@ -240,14 +258,14 @@ export default function ReportsPage() {
           r.finding.estimatedClosingDate ?? '',
           r.finding.status,
         ]),
-    ]);
+    ]));
   };
 
   const exportByDepartment = () => {
-    downloadCsv(`findings-by-department-${stamp()}.csv`, [
+    downloadCsv(`findings-by-department-${stamp()}.csv`, withLetterhead('الملاحظات حسب الإدارة', [
       ['الإدارة', 'إجمالي الملاحظات', 'المفتوحة', 'المتأخرة'],
       ...byDepartment.map(d => [departmentName(d.departmentId), d.total, d.open, d.overdue]),
-    ]);
+    ]));
   };
 
   // ===========================================
@@ -282,15 +300,34 @@ export default function ReportsPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">
-            {isRTL ? 'التقارير' : 'Reports'}
-          </h1>
-          <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
-            {isRTL
-              ? 'أرقام محسوبة من المراجعات المسجّلة في النظام الآن، وكل تقرير قابل للتصدير إلى Excel.'
-              : 'Computed from the audits currently in the system. Every report exports to Excel.'}
-          </p>
+        <ReportLetterheadHeader
+          titleAr="تقرير حالة المراجعة الداخلية"
+          titleEn="Internal Audit Status Report"
+          language={language === 'ar' ? 'ar' : 'en'}
+          meta={[
+            `${isRTL ? 'التاريخ' : 'Date'}: ${new Date().toLocaleDateString(isRTL ? 'ar-SA' : 'en-GB')}`,
+            `${isRTL ? 'أُصدر بواسطة' : 'Produced by'}: ${currentUser?.fullNameAr || currentUser?.fullNameEn || '-'}`,
+          ]}
+        />
+
+        <div className="flex items-start justify-between gap-4 print:hidden">
+          <div>
+            <h1 className="text-2xl font-bold text-[var(--foreground)]">
+              {isRTL ? 'التقارير' : 'Reports'}
+            </h1>
+            <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
+              {isRTL
+                ? 'أرقام محسوبة من المراجعات المسجّلة في النظام الآن، وكل تقرير قابل للتصدير إلى Excel أو الطباعة على ترويسة الشركة.'
+                : 'Computed from the audits currently in the system. Every report exports to Excel or prints on the company letterhead.'}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            leftIcon={<Printer className="h-4 w-4" />}
+            onClick={() => window.print()}
+          >
+            {isRTL ? 'طباعة' : 'Print'}
+          </Button>
         </div>
 
         {/* الأرقام */}
@@ -449,6 +486,8 @@ export default function ReportsPage() {
             </Card>
           </>
         )}
+
+        <ReportLetterheadFooter language={language === 'ar' ? 'ar' : 'en'} />
       </div>
     </DashboardLayout>
   );

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <!-- نسخة iOS - خلفية معتمة، لأن أيقونات الشاشة الرئيسية لا تُقص شفافيتها -->
+  <rect width="96" height="96" rx="20" fill="#1C1C1B"/>
+  <circle cx="44" cy="44" r="26" fill="none" stroke="#F29200" stroke-width="9"/>
+  <path d="M53 53 76 76" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round"/>
+</svg>
