@@ -541,6 +541,20 @@ export const stageIndexFromId = (id: string): number => {
 export type AnnualPlanStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
 
 // بند واحد في الخطة السنوية - مراجعة مخططة لإدارة/قسم في شهر معين
+// تعديل مقترح على فريق بند في خطة معتمدة.
+//
+// الخطة المعتمدة ليست حجراً: الشهر يتغيّر مباشرة لأن إعادة الجدولة قرار تشغيلي، أما
+// الفريق فلا - من يراجع من هو جوهر ما اعتمده المعتمِد، فتغييره يمرّ به مرة أخرى.
+// يُكتب المقترح هنا بجانب القيم السارية، فتبقى القيم القديمة عاملة حتى يُبتّ فيه:
+// اعتماد يُحلّ المقترح محلّها، ورفض يمحوه ويُبقيها كما هي.
+export interface AnnualPlanItemTeamChange {
+  leadAuditorId?: string;      // رئيس الفريق المقترح ('' أو غياب = يُحدد لاحقاً)
+  auditorIds?: string[];       // أعضاء الفريق المقترحون
+  requestedBy: string;
+  requestedAt: string;         // ISO
+  reason?: string;
+}
+
 export interface AnnualPlanItem {
   id: string;
   departmentId: string;
@@ -551,6 +565,9 @@ export interface AnnualPlanItem {
   // بقية فريق المراجعة إلى جانب رئيسه. يختارهم مدير الجودة على البند نفسه، فينتقلون
   // مع البند إلى نموذج إنشاء المراجعة. لا يحتوي رئيس الفريق أبداً - هو حقل مستقل.
   auditorIds?: string[];
+  // تعديل فريق مقترح على هذا البند بانتظار قرار معتمِد الخطة. يوجد على البنود
+  // المعتمدة وحدها - فالبند في مسودة يُعدَّل مباشرة بلا وساطة.
+  pendingTeamChange?: AnnualPlanItemTeamChange;
   notes?: string;
   auditId?: string;            // set once the scheduled audit is created from this line
 }

@@ -173,6 +173,23 @@ function PlansPageContent() {
   const [deleteError, setDeleteError] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // نافذة تعديل بند في خطة معتمدة - الشهر يمضي مباشرة، والفريق يمرّ بالمعتمِد
+  const [itemToAmend, setItemToAmend] = useState<AnnualPlanItem | null>(null);
+  const [amend, setAmend] = useState<{
+    plannedMonth: number;
+    leadAuditorId: string;
+    auditorIds: string[];
+    reason: string;
+  }>({ plannedMonth: 1, leadAuditorId: '', auditorIds: [], reason: '' });
+  const [amendError, setAmendError] = useState('');
+  const [isAmending, setIsAmending] = useState(false);
+
+  // قرار المعتمِد على تعديل فريق مقترح
+  const [itemDecision, setItemDecision] = useState<{ item: AnnualPlanItem; approve: boolean } | null>(null);
+  const [itemDecisionReason, setItemDecisionReason] = useState('');
+  const [itemDecisionError, setItemDecisionError] = useState('');
+  const [isDecidingItem, setIsDecidingItem] = useState(false);
+
   // رسالة على مستوى الصفحة - تُستخدم بعد إغلاق النافذة المنبثقة: نتيجة الحذف،
   // أو أن الخطة المطلوبة برابط الإشعار لم تعد موجودة.
   const [pageNotice, setPageNotice] = useState('');
@@ -318,6 +335,25 @@ function PlansPageContent() {
       return !!user && isIndependentOf(user, departmentId, sectionId);
     });
 
+  // مراجعو نافذة التعديل: مستقلون عن إدارة البند نفسه، لا عن إدارة نموذج الإضافة
+  const amendAuditors = useMemo(
+    () => {
+      if (!itemToAmend) return [];
+      return allUsers.filter(
+        u => u.canBeAuditor && u.isActive &&
+          isIndependentOf(u, itemToAmend.departmentId, itemToAmend.sectionId)
+      );
+    },
+    [allUsers, itemToAmend]
+  );
+
+  const availableAmendAuditors = useMemo(
+    () => amendAuditors.filter(
+      a => a.id !== amend.leadAuditorId && !amend.auditorIds.includes(a.id)
+    ),
+    [amendAuditors, amend.leadAuditorId, amend.auditorIds]
+  );
+
   const addTeamMember = (auditorId: string) => {
     if (!auditorId || newItem.auditorIds.includes(auditorId)) return;
     setNewItem({ ...newItem, auditorIds: [...newItem.auditorIds, auditorId] });
@@ -395,6 +431,10 @@ function PlansPageContent() {
   // ولفتح المراجعة المرتبطة ببند سبق تنفيذه
   const showItemActions = (plan: AnnualPlan): boolean =>
     canEditPlan(plan) || plan.status === 'approved' || (plan.items || []).some(i => !!i.auditId);
+
+  // هل على هذه الخطة تعديل فريق معلّق؟ يُستخدم في شريط التنبيه أعلى تفاصيل الخطة
+  const pendingTeamChanges = (plan: AnnualPlan): AnnualPlanItem[] =>
+    (plan.items || []).filter(i => !!i.pendingTeamChange);
 
   // نسبة الإنجاز: كم بنداً صار له مراجعة فعلية
   const getPlanProgress = (plan: AnnualPlan) => {
@@ -572,6 +612,241 @@ function PlansPageContent() {
     }
 
     resetItemForm();
+  };
+
+  // ===========================================
+  // تعديل بند في خطة معتمدة
+  // ===========================================
+  //
+  // الخطة السنوية تُعتمد في يناير وتُنفَّذ على مدى سنة كاملة: يستقيل مراجع، ويُنقل
+  // آخر، ويتعذّر شهر بسبب توقف مصنع. خطة لا تقبل التعديل بعد الاعتماد لا تُتَّبع -
+  // يُتجاوز عنها. والتعديلان ليسا سواء، فمن يقرّرهما ليس واحداً:
+  //   - الشهر: إعادة جدولة داخل سنة الخطة، وهي قرار مدير الجودة التشغيلي. تُكتب
+  //     مباشرة، ويصل المعتمِد إشعارٌ للعلم، ويُسجَّل التغيير في سجل النشاط.
+  //   - الفريق: من يراجع مَن هو جوهر ما اعتمده المعتمِد - وشرط الاستقلالية جزء
+  //     منه - فيُكتب المقترح في pendingTeamChange بجانب القيم السارية، وتبقى هي
+  //     العاملة حتى يبتّ فيه المعتمِد نفسه. هذا ما تفرضه firestore.rules فرعاً
+  //     بفرع: هذه الصفحة لا تستطيع كتابة leadAuditorId ولا auditorIds على خطة
+  //     معتمدة مهما فعلت.
+  const canAmendItems = (plan: AnnualPlan): boolean =>
+    plan.status === 'approved' && canManagePlans;
+
+  // قرار التعديل للمعتمِد المسمّى في الخطة وحده - نفس شرط canDecideOnPlan
+  const canDecideItemChange = (plan: AnnualPlan): boolean =>
+    plan.status === 'approved' &&
+    !!plan.approverId &&
+    plan.approverId === currentUser?.id &&
+    plan.approverId !== plan.createdBy;
+
+  const openAmendModal = (item: AnnualPlanItem) => {
+    // المقترح المعلّق - إن وُجد - هو نقطة البداية، لا القيم السارية: تعديل مقترحٍ
+    // قائم يجب أن يبدأ مما اقتُرح فعلاً وإلا بدا وكأنه سُحب وأُعيد من الصفر.
+    const pending = item.pendingTeamChange;
+    setAmend({
+      plannedMonth: item.plannedMonth,
+      leadAuditorId: (pending ? pending.leadAuditorId : item.leadAuditorId) || '',
+      auditorIds: [...((pending ? pending.auditorIds : item.auditorIds) || [])],
+      reason: pending?.reason || '',
+    });
+    setAmendError('');
+    setItemToAmend(item);
+  };
+
+  const sameTeam = (a: string[], b: string[]): boolean =>
+    a.length === b.length && a.every(id => b.includes(id));
+
+  // كتابة بند واحد معدَّل مكان القديم - وحدها البنية التي تقبلها القواعد
+  const replaceItem = (plan: AnnualPlan, updated: AnnualPlanItem): AnnualPlanItem[] =>
+    (plan.items || []).map(i => (i.id === updated.id ? updated : i));
+
+  const handleSaveAmendment = async () => {
+    if (!selectedPlan || !itemToAmend || isAmending) return;
+    setAmendError('');
+
+    const item = (selectedPlan.items || []).find(i => i.id === itemToAmend.id);
+    if (!item) {
+      setAmendError(t('plans.errors.itemGone'));
+      return;
+    }
+
+    const monthChanged = amend.plannedMonth !== item.plannedMonth;
+    const proposedLead = amend.leadAuditorId || '';
+    const proposedTeam = amend.auditorIds.filter(id => id !== proposedLead);
+    const teamChanged =
+      proposedLead !== (item.leadAuditorId || '') ||
+      !sameTeam(proposedTeam, item.auditorIds || []);
+    const hadProposal = !!item.pendingTeamChange;
+
+    if (!monthChanged && !teamChanged && !hadProposal) {
+      setAmendError(t('plans.errors.nothingChanged'));
+      return;
+    }
+    // سبب التعديل إلزامي حين يُطلب قرار من المعتمِد - قرار بلا سبب ليس قراراً
+    if (teamChanged && !amend.reason.trim()) {
+      setAmendError(t('plans.errors.amendReasonRequired'));
+      return;
+    }
+
+    const updated: AnnualPlanItem = { ...item, plannedMonth: amend.plannedMonth };
+    if (teamChanged) {
+      updated.pendingTeamChange = {
+        leadAuditorId: proposedLead || undefined,
+        auditorIds: proposedTeam.length > 0 ? proposedTeam : undefined,
+        requestedBy: currentUser?.id || '',
+        requestedAt: new Date().toISOString(),
+        reason: amend.reason.trim(),
+      };
+    } else {
+      // الفريق عاد إلى ما هو ساري: المقترح المعلّق - إن وُجد - يُسحب
+      delete updated.pendingTeamChange;
+    }
+
+    setIsAmending(true);
+    const saved = await updateAnnualPlan(selectedPlan.id, {
+      items: replaceItem(selectedPlan, updated),
+    });
+
+    if (!saved) {
+      setIsAmending(false);
+      setAmendError(t('plans.errors.amendFailed'));
+      return;
+    }
+
+    const line = `${getDepartmentName(item.departmentId)}${item.sectionId ? ` / ${getSectionName(item.sectionId)}` : ''}`;
+    const monthNote = monthChanged
+      ? `${getMonthName(item.plannedMonth)} ← ${getMonthName(amend.plannedMonth)}`
+      : '';
+
+    // المعتمِد يسمع الاثنين: التعديل الذي عليه أن يبتّ فيه، والذي عليه أن يعلمه فقط
+    let notified = true;
+    if (selectedPlan.approverId) {
+      notified = !!(await addNotification({
+        type: teamChanged ? 'plan_item_change_request' : 'general',
+        title: teamChanged
+          ? (language === 'ar' ? 'تعديل فريق بانتظار اعتمادك' : 'Team change awaiting your approval')
+          : (language === 'ar' ? 'إعادة جدولة بند في الخطة السنوية' : 'A planned audit was rescheduled'),
+        message: teamChanged
+          ? (language === 'ar'
+            ? `طلب ${getUserName(currentUser?.id)} تغيير فريق مراجعة "${line}" في خطة ${selectedPlan.year}${monthNote ? ` (ومع نقل الشهر ${monthNote})` : ''}. السبب: ${amend.reason.trim()}`
+            : `${getUserName(currentUser?.id)} asked to change the audit team for "${line}" in the ${selectedPlan.year} plan${monthNote ? ` (and to move the month ${monthNote})` : ''}. Reason: ${amend.reason.trim()}`)
+          : (language === 'ar'
+            ? `نقل ${getUserName(currentUser?.id)} مراجعة "${line}" في خطة ${selectedPlan.year}: ${monthNote}. لا يتطلب هذا قراراً منك - إعادة الجدولة داخل السنة من صلاحية إدارة الجودة.`
+            : `${getUserName(currentUser?.id)} moved the audit of "${line}" in the ${selectedPlan.year} plan: ${monthNote}. No decision is needed from you - rescheduling inside the plan year is the quality function's own call.`),
+        recipientId: selectedPlan.approverId,
+        senderId: currentUser?.id,
+        planId: selectedPlan.id,
+      }));
+    }
+    setIsAmending(false);
+
+    if (currentUser) {
+      void recordActivity({
+        actorUserId: currentUser.id,
+        actorName: currentUser.fullNameEn || currentUser.fullNameAr,
+        actorEmail: currentUser.email ?? '',
+        actorRole: currentUser.role,
+        action: 'update',
+        entity: 'annualPlan',
+        entityId: selectedPlan.id,
+        entityLabel: selectedPlan.titleAr || selectedPlan.titleEn || `${selectedPlan.year}`,
+        summaryAr: teamChanged
+          ? `طلب تغيير فريق مراجعة "${line}" في خطة ${selectedPlan.year} بانتظار اعتماد ${getUserName(selectedPlan.approverId)}${monthNote ? `، مع نقل الشهر ${monthNote}` : ''}. السبب: ${amend.reason.trim()}`
+          : `نقل مراجعة "${line}" في خطة ${selectedPlan.year}: ${monthNote}`,
+        summaryEn: teamChanged
+          ? `Requested an audit-team change for "${line}" in the ${selectedPlan.year} plan, awaiting approval${monthNote ? `, and moved the month ${monthNote}` : ''}. Reason: ${amend.reason.trim()}`
+          : `Moved the audit of "${line}" in the ${selectedPlan.year} plan: ${monthNote}`,
+      });
+    }
+
+    setItemToAmend(null);
+    setDetailNotice(
+      notified
+        ? (teamChanged
+          ? (language === 'ar'
+            ? 'أُرسل تغيير الفريق إلى المعتمِد. الفريق الحالي يبقى سارياً حتى يصدر قراره.'
+            : 'The team change was sent to the approver. The current team stands until they decide.')
+          : (language === 'ar' ? 'حُدِّث الشهر المخطط.' : 'The planned month was updated.'))
+        : t('plans.errors.notificationFailed')
+    );
+  };
+
+  // قرار المعتمِد على تغيير الفريق: اعتماد يُحلّ المقترح محلّ الفريق الساري، ورفض
+  // يمحو المقترح ويُبقي الفريق كما هو. الحالتان تستهلكان المقترح - القواعد تشترط
+  // ألا يبقى pendingTeamChange على البند بعد القرار.
+  const handleItemDecision = async () => {
+    if (!selectedPlan || !itemDecision || isDecidingItem) return;
+    setItemDecisionError('');
+
+    const item = (selectedPlan.items || []).find(i => i.id === itemDecision.item.id);
+    const proposal = item?.pendingTeamChange;
+    if (!item || !proposal) {
+      setItemDecisionError(t('plans.errors.itemGone'));
+      return;
+    }
+    if (!itemDecision.approve && !itemDecisionReason.trim()) {
+      setItemDecisionError(t('plans.errors.reasonRequired'));
+      return;
+    }
+
+    const updated: AnnualPlanItem = { ...item };
+    delete updated.pendingTeamChange;
+    if (itemDecision.approve) {
+      updated.leadAuditorId = proposal.leadAuditorId || undefined;
+      updated.auditorIds = (proposal.auditorIds || []).length > 0 ? proposal.auditorIds : undefined;
+    }
+
+    setIsDecidingItem(true);
+    const saved = await updateAnnualPlan(selectedPlan.id, {
+      items: replaceItem(selectedPlan, updated),
+    });
+
+    if (!saved) {
+      setIsDecidingItem(false);
+      setItemDecisionError(t('plans.errors.decisionFailed'));
+      return;
+    }
+
+    const line = `${getDepartmentName(item.departmentId)}${item.sectionId ? ` / ${getSectionName(item.sectionId)}` : ''}`;
+    const notified = !!(await addNotification({
+      type: itemDecision.approve ? 'plan_item_change_approved' : 'plan_item_change_rejected',
+      title: itemDecision.approve
+        ? (language === 'ar' ? 'اعتُمد تغيير فريق المراجعة' : 'Audit team change approved')
+        : (language === 'ar' ? 'رُفض تغيير فريق المراجعة' : 'Audit team change rejected'),
+      message: itemDecision.approve
+        ? (language === 'ar'
+          ? `اعتمد ${getUserName(currentUser?.id)} تغيير فريق مراجعة "${line}" في خطة ${selectedPlan.year}، وصار الفريق الجديد ساري المفعول.`
+          : `${getUserName(currentUser?.id)} approved the team change for "${line}" in the ${selectedPlan.year} plan; the new team is now in force.`)
+        : (language === 'ar'
+          ? `رفض ${getUserName(currentUser?.id)} تغيير فريق مراجعة "${line}" في خطة ${selectedPlan.year}، والفريق المعتمد سابقاً هو الساري. السبب: ${itemDecisionReason.trim()}`
+          : `${getUserName(currentUser?.id)} rejected the team change for "${line}" in the ${selectedPlan.year} plan; the previously approved team stands. Reason: ${itemDecisionReason.trim()}`),
+      recipientId: proposal.requestedBy || selectedPlan.createdBy,
+      senderId: currentUser?.id,
+      planId: selectedPlan.id,
+    }));
+    setIsDecidingItem(false);
+
+    if (currentUser) {
+      void recordActivity({
+        actorUserId: currentUser.id,
+        actorName: currentUser.fullNameEn || currentUser.fullNameAr,
+        actorEmail: currentUser.email ?? '',
+        actorRole: currentUser.role,
+        action: itemDecision.approve ? 'approve' : 'reject',
+        entity: 'annualPlan',
+        entityId: selectedPlan.id,
+        entityLabel: selectedPlan.titleAr || selectedPlan.titleEn || `${selectedPlan.year}`,
+        summaryAr: itemDecision.approve
+          ? `اعتمد تغيير فريق مراجعة "${line}" في خطة ${selectedPlan.year}: رئيس الفريق ${getUserName(proposal.leadAuditorId) || 'يُحدد لاحقاً'}${(proposal.auditorIds || []).length ? `، الأعضاء: ${(proposal.auditorIds || []).map(id => getUserName(id) || id).join('، ')}` : ''}`
+          : `رفض تغيير فريق مراجعة "${line}" في خطة ${selectedPlan.year}. السبب: ${itemDecisionReason.trim()}`,
+        summaryEn: itemDecision.approve
+          ? `Approved the audit-team change for "${line}" in the ${selectedPlan.year} plan`
+          : `Rejected the audit-team change for "${line}" in the ${selectedPlan.year} plan. Reason: ${itemDecisionReason.trim()}`,
+      });
+    }
+
+    setItemDecision(null);
+    setItemDecisionReason('');
+    setDetailNotice(notified ? '' : t('plans.errors.notificationFailed'));
   };
 
   // حذف بند من الخطة
@@ -1307,6 +1582,20 @@ function PlansPageContent() {
                   </div>
                 )}
 
+              {/* تعديلات فريق معلّقة - المعتمِد يصل من الإشعار إلى الخطة كلها، لا إلى
+                  السطر المعنيّ، فيُقال له هنا كم بنداً ينتظره وأين ينظر. ولمدير
+                  الجودة نفس السطر: طلبه لم يُبتّ فيه بعد والفريق القديم ما زال سارياً. */}
+              {pendingTeamChanges(selectedPlan).length > 0 && (
+                <div className="mb-6 flex items-start gap-2 rounded-lg bg-[var(--status-warning-bg)] p-3 text-sm text-[var(--status-warning)]">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    {language === 'ar'
+                      ? `${pendingTeamChanges(selectedPlan).length} من بنود هذه الخطة عليه تغيير فريق مقترح${canDecideItemChange(selectedPlan) ? ' بانتظار قرارك - الأزرار في عمود الإجراءات بجانب البند.' : ' بانتظار قرار المعتمِد. الفريق المعتمد سابقاً هو الساري حتى ذلك الحين.'}`
+                      : `${pendingTeamChanges(selectedPlan).length} planned line(s) in this plan carry a proposed team change${canDecideItemChange(selectedPlan) ? ' awaiting your decision - the buttons are in the actions column beside each line.' : ' awaiting the approver\'s decision. The previously approved team stands until then.'}`}
+                  </span>
+                </div>
+              )}
+
               {/* Items */}
               <Card className="mb-6">
                 <CardHeader>
@@ -1352,19 +1641,44 @@ function PlansPageContent() {
                               <TableCell className="text-sm">{getSectionName(item.sectionId) || '-'}</TableCell>
                               <TableCell className="text-sm">{getMonthName(item.plannedMonth)}</TableCell>
                               <TableCell className="text-sm">{getTypeName(item.auditType)}</TableCell>
-                              <TableCell className="text-sm">{getUserName(item.leadAuditorId) || '-'}</TableCell>
+                              {/* الفريق الساري هو المعروض دائماً؛ المقترح المعلّق يظهر تحته
+                                  موسوماً، فلا يُقرأ اقتراحٌ لم يُعتمد بعد على أنه الواقع. */}
+                              <TableCell className="text-sm">
+                                {getUserName(item.leadAuditorId) || '-'}
+                                {item.pendingTeamChange && (
+                                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                                    {language === 'ar' ? 'مقترح: ' : 'proposed: '}
+                                    {getUserName(item.pendingTeamChange.leadAuditorId) || (language === 'ar' ? 'يُحدد لاحقاً' : 'decide later')}
+                                  </p>
+                                )}
+                              </TableCell>
                               <TableCell className="text-sm">
                                 {(item.auditorIds || []).length === 0
                                   ? '-'
                                   : (item.auditorIds || [])
                                     .map(id => getUserName(id) || id)
                                     .join(language === 'ar' ? '، ' : ', ')}
+                                {item.pendingTeamChange && (
+                                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                                    {language === 'ar' ? 'مقترح: ' : 'proposed: '}
+                                    {(item.pendingTeamChange.auditorIds || []).length === 0
+                                      ? (language === 'ar' ? 'بلا أعضاء' : 'no members')
+                                      : (item.pendingTeamChange.auditorIds || [])
+                                        .map(id => getUserName(id) || id)
+                                        .join(language === 'ar' ? '، ' : ', ')}
+                                  </p>
+                                )}
                               </TableCell>
                               <TableCell>
                                 {item.auditId ? (
                                   <Badge variant="success">{t('plans.detail.auditCreatedYes')}</Badge>
                                 ) : (
                                   <Badge variant="draft">{t('plans.detail.auditCreatedNo')}</Badge>
+                                )}
+                                {item.pendingTeamChange && (
+                                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                                    {t('plans.detail.teamChangePending')}
+                                  </p>
                                 )}
                               </TableCell>
                               {showItemActions(selectedPlan) && (
@@ -1390,6 +1704,49 @@ function PlansPageContent() {
                                           <ClipboardPlus className="h-4 w-4" />
                                         </Button>
                                       )
+                                    )}
+                                    {/* تعديل بند معتمد: الشهر أو الفريق. متاح ولو أُنشئت
+                                        المراجعة - إعادة الجدولة وتغيير الفريق واردان
+                                        في المراحل المتقدمة، وهو ما تفرضه القواعد أيضاً. */}
+                                    {canAmendItems(selectedPlan) && (
+                                      <Button
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        onClick={() => openAmendModal(item)}
+                                        title={t('plans.actions.amendItem')}
+                                      >
+                                        <CalendarRange className="h-4 w-4" />
+                                      </Button>
+                                    )}
+                                    {item.pendingTeamChange && canDecideItemChange(selectedPlan) && (
+                                      <>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon-sm"
+                                          className="text-green-600 hover:text-green-700"
+                                          onClick={() => {
+                                            setItemDecisionReason('');
+                                            setItemDecisionError('');
+                                            setItemDecision({ item, approve: true });
+                                          }}
+                                          title={t('plans.actions.approveTeamChange')}
+                                        >
+                                          <CheckCircle className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon-sm"
+                                          className="text-red-500 hover:text-red-700"
+                                          onClick={() => {
+                                            setItemDecisionReason('');
+                                            setItemDecisionError('');
+                                            setItemDecision({ item, approve: false });
+                                          }}
+                                          title={t('plans.actions.rejectTeamChange')}
+                                        >
+                                          <XCircle className="h-4 w-4" />
+                                        </Button>
+                                      </>
                                     )}
                                     {canEditPlan(selectedPlan) && (
                                       <Button
@@ -1839,6 +2196,220 @@ function PlansPageContent() {
                   isLoading={isRecalling}
                 >
                   {language === 'ar' ? 'سحب الطلب' : 'Recall Request'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* تعديل بند معتمد: الشهر و/أو الفريق */}
+        {itemToAmend && selectedPlan && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center">
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setItemToAmend(null)} />
+            <div className="relative z-[70] w-full max-w-lg rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4 max-h-[90vh] overflow-y-auto">
+              <h2 className="mb-1 text-lg font-semibold">{t('plans.amend.title')}</h2>
+              <p className="mb-4 text-sm text-[var(--foreground-secondary)]">
+                {getDepartmentName(itemToAmend.departmentId)}
+                {itemToAmend.sectionId ? ` / ${getSectionName(itemToAmend.sectionId)}` : ''}
+                {' · '}
+                {getMonthName(itemToAmend.plannedMonth)}
+              </p>
+
+              {/* من يقرّر ماذا - يُقال قبل الحفظ لا بعده */}
+              <div className="mb-4 rounded-lg bg-[var(--background-secondary)] p-3 text-xs text-[var(--foreground-secondary)]">
+                {t('plans.amend.explainer')}
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">{t('plans.table.month')}</label>
+                  <select
+                    value={amend.plannedMonth}
+                    onChange={(e) => setAmend({ ...amend, plannedMonth: Number(e.target.value) })}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                  >
+                    {months.map(month => (
+                      <option key={month.value} value={month.value}>
+                        {language === 'ar' ? month.labelAr : month.labelEn}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">{t('plans.table.leadAuditor')}</label>
+                  <select
+                    value={amend.leadAuditorId}
+                    onChange={(e) => {
+                      const leadAuditorId = e.target.value;
+                      setAmend({
+                        ...amend,
+                        leadAuditorId,
+                        auditorIds: amend.auditorIds.filter(id => id !== leadAuditorId),
+                      });
+                    }}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                  >
+                    <option value="">{t('plans.form.selectLater')}</option>
+                    {amendAuditors.map(auditor => (
+                      <option key={auditor.id} value={auditor.id}>
+                        {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">{t('plans.table.team')}</label>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      if (!id || amend.auditorIds.includes(id)) return;
+                      setAmend({ ...amend, auditorIds: [...amend.auditorIds, id] });
+                    }}
+                    disabled={availableAmendAuditors.length === 0}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm disabled:opacity-50"
+                  >
+                    <option value="">
+                      {availableAmendAuditors.length === 0
+                        ? t('plans.form.noMoreAuditors')
+                        : t('plans.form.addTeamMember')}
+                    </option>
+                    {availableAmendAuditors.map(auditor => (
+                      <option key={auditor.id} value={auditor.id}>
+                        {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
+                      </option>
+                    ))}
+                  </select>
+                  {amend.auditorIds.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {amend.auditorIds.map(id => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 rounded-full bg-[var(--primary)]/10 px-3 py-1 text-xs text-[var(--primary)]"
+                        >
+                          {getUserName(id) || id}
+                          <button
+                            type="button"
+                            onClick={() => setAmend({ ...amend, auditorIds: amend.auditorIds.filter(x => x !== id) })}
+                            className="hover:text-red-500"
+                            aria-label={language === 'ar' ? 'إزالة من الفريق' : 'Remove from the team'}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">{t('plans.amend.reason')}</label>
+                  <textarea
+                    value={amend.reason}
+                    onChange={(e) => setAmend({ ...amend, reason: e.target.value })}
+                    rows={3}
+                    placeholder={t('plans.amend.reasonPlaceholder')}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                  />
+                </div>
+
+                {/* بند نُفِّذت مراجعته: التعديل هنا لا يمسّ المراجعة نفسها */}
+                {itemToAmend.auditId && (
+                  <div className="flex items-start gap-2 rounded-lg bg-[var(--status-warning-bg)] p-3 text-xs text-[var(--status-warning)]">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{t('plans.amend.auditExists')}</span>
+                  </div>
+                )}
+              </div>
+
+              {amendError && (
+                <div className="mt-4 flex items-start gap-2 rounded-lg bg-[var(--status-error-bg)] p-3 text-sm text-[var(--status-error)]">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{amendError}</span>
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setItemToAmend(null)}>
+                  {t('common.cancel')}
+                </Button>
+                <Button onClick={handleSaveAmendment} isLoading={isAmending}>
+                  {t('common.save')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* قرار المعتمِد على تغيير فريق مقترح */}
+        {itemDecision && selectedPlan && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center">
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setItemDecision(null)} />
+            <div className="relative z-[70] w-full max-w-lg rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4 max-h-[90vh] overflow-y-auto">
+              <h2 className="mb-1 text-lg font-semibold">
+                {itemDecision.approve ? t('plans.actions.approveTeamChange') : t('plans.actions.rejectTeamChange')}
+              </h2>
+              <p className="mb-4 text-sm text-[var(--foreground-secondary)]">
+                {getDepartmentName(itemDecision.item.departmentId)}
+                {itemDecision.item.sectionId ? ` / ${getSectionName(itemDecision.item.sectionId)}` : ''}
+              </p>
+
+              {/* القديم مقابل الجديد - القرار يُتخذ على المقارنة لا على الوصف */}
+              <div className="mb-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-[var(--border)] p-3">
+                  <p className="mb-1 text-xs font-medium text-[var(--foreground-muted)]">{t('plans.amend.currentTeam')}</p>
+                  <p className="text-sm">{getUserName(itemDecision.item.leadAuditorId) || '-'}</p>
+                  <p className="text-xs text-[var(--foreground-secondary)]">
+                    {(itemDecision.item.auditorIds || []).map(id => getUserName(id) || id).join(language === 'ar' ? '، ' : ', ') || '-'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-[var(--primary)] p-3">
+                  <p className="mb-1 text-xs font-medium text-[var(--primary)]">{t('plans.amend.proposedTeam')}</p>
+                  <p className="text-sm">{getUserName(itemDecision.item.pendingTeamChange?.leadAuditorId) || '-'}</p>
+                  <p className="text-xs text-[var(--foreground-secondary)]">
+                    {(itemDecision.item.pendingTeamChange?.auditorIds || []).map(id => getUserName(id) || id).join(language === 'ar' ? '، ' : ', ') || '-'}
+                  </p>
+                </div>
+              </div>
+
+              {itemDecision.item.pendingTeamChange?.reason && (
+                <p className="mb-4 text-sm text-[var(--foreground-secondary)]">
+                  <span className="font-medium">{t('plans.amend.reason')}: </span>
+                  {itemDecision.item.pendingTeamChange.reason}
+                </p>
+              )}
+
+              {!itemDecision.approve && (
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">{t('plans.amend.rejectReason')} *</label>
+                  <textarea
+                    value={itemDecisionReason}
+                    onChange={(e) => setItemDecisionReason(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                  />
+                </div>
+              )}
+
+              {itemDecisionError && (
+                <div className="mt-4 flex items-start gap-2 rounded-lg bg-[var(--status-error-bg)] p-3 text-sm text-[var(--status-error)]">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{itemDecisionError}</span>
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setItemDecision(null)}>
+                  {t('common.cancel')}
+                </Button>
+                <Button
+                  variant={itemDecision.approve ? 'primary' : 'danger'}
+                  onClick={handleItemDecision}
+                  isLoading={isDecidingItem}
+                >
+                  {itemDecision.approve ? t('common.approve') : t('common.reject')}
                 </Button>
               </div>
             </div>
