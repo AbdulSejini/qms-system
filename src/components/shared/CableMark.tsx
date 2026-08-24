@@ -50,4 +50,39 @@ export function CableMark({
   );
 }
 
+/**
+ * الشعار مع نصّه كما في هوية إدارة الجودة: العلامة، ثم «إدارة الجودة» وتحتها
+ * QUALITY MANAGEMENT.
+ *
+ * السطران يظهران في الحالتين العربية والإنجليزية معاً لأن هذا هو الشعار نفسه، لا
+ * ترجمة له: الاسم العربي هو الاسم، والسطر اللاتيني تحته جزء من رسم الهوية.
+ * ويبقيان نصاً حياً لا صورة، فيتبعان حجم الخط والثيم ويظلان قابلين للتحديد والبحث.
+ */
+export function QualityMarkLockup({
+  size = 36,
+  className = '',
+  showText = true,
+}: {
+  size?: number;
+  className?: string;
+  /** يُخفى النص حين ينطوي الشريط الجانبي، فتبقى العلامة وحدها. */
+  showText?: boolean;
+}) {
+  return (
+    <div className={`flex items-center gap-3 ${className}`}>
+      <CableMark size={size} className="shrink-0" title="إدارة الجودة" />
+      {showText && (
+        <div className="flex min-w-0 flex-col leading-tight">
+          <span className="truncate text-sm font-bold text-[var(--foreground)]">
+            إدارة الجودة
+          </span>
+          <span className="truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--foreground-secondary)]">
+            Quality Management
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default CableMark;

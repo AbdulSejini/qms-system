@@ -4,7 +4,7 @@ import React, { useMemo } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { SaudiCableMark } from '@/components/shared/SaudiCableMark';
+import { QualityMarkLockup } from '@/components/shared/CableMark';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -151,20 +151,10 @@ export function Sidebar({ isCollapsed, onToggle, isMobileOpen, onMobileClose }: 
           'flex items-center h-16 px-4 border-b border-[var(--border)]',
           isCollapsed ? 'justify-center' : 'gap-3'
         )}>
-          {/* شعار الشركة - الشعار الرسمي من ترويسة المراسلات، لا أيقونة عامة.
-              What used to sit here was a generic "verified" tick in an amber gradient
-              square: a decoration, not the company's mark. */}
-          <SaudiCableMark size={40} className="shrink-0" />
-          {!isCollapsed && (
-            <div className="flex flex-col min-w-0">
-              <span className="text-sm font-bold text-[var(--foreground)] truncate">
-                {t('common.companyName')}
-              </span>
-              <span className="text-xs text-[var(--primary)] font-semibold tracking-wide">
-                QMS
-              </span>
-            </div>
-          )}
+          {/* شعار إدارة الجودة - العلامة نفسها التي في صفحة الدخول وأيقونة التطبيق،
+              فتُقرأ الهوية واحدة أينما ظهرت. هذا نظام إدارة الجودة، والشعار شعارها؛
+              شعار الشركة يبقى في مكانه الصحيح: ترويسة المستندات المطبوعة. */}
+          <QualityMarkLockup size={36} showText={!isCollapsed} />
 
           {/* Mobile Close Button */}
           {isMobileOpen && (
