@@ -650,11 +650,12 @@ export interface Notification {
   'plan_approval_request' | 'plan_approved' | 'plan_rejected' |
   // تعديل بند في خطة معتمدة: تغيير الفريق يمرّ بالمعتمِد نفسه، ويعود قراره لطالبه
   'plan_item_change_request' | 'plan_item_change_approved' | 'plan_item_change_rejected' |
-  // تأكيد الموعد - يذهب للمراجع وللمراجَع عليه، ويعود ردّهما لمدير الجودة
-  'schedule_confirmation_request' | 'schedule_accepted' | 'schedule_reschedule_requested' |
-  // اعتماد قائمة الأسئلة ثم اعتماد الأجوبة - كلاهما من مدير الجودة
-  'questions_approval_request' | 'questions_approved' | 'questions_rejected' |
+  // اعتماد أجوبة المراجعة وملاحظاتها من مدير الجودة، قبل أن تُعرض على المُراجَع عليه.
+  // ستة أنواع أخرى (تأكيد الموعد، اعتماد قائمة الأسئلة) كانت معرَّفة هنا ولا يرسلها
+  // شيء؛ حُذفت مع البوابتين اللتين كانتا تخصّانهما.
   'answers_approval_request' | 'answers_approved' | 'answers_rejected' |
+  // اعتماد الإجراءات التصحيحية - الشرط الذي كان يوقف المسار بلا زر يمنحه
+  'corrective_actions_approved' |
   'general';
   title: string;
   message: string;

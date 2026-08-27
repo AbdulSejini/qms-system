@@ -252,38 +252,20 @@ export type FindingSeverity = 'observation' | 'minor' | 'major' | 'critical';
 export type FindingStatus = 'open' | 'in_progress' | 'closed' | 'verified';
 
 // ===========================================
-// Schedule confirmation - تأكيد موعد المراجعة
+// Approval gate - بوابة اعتماد الأجوبة
 // ===========================================
 //
-// A planned date is a PROPOSAL until both the auditor and the auditee have said yes.
-// Either side may instead ask for a different date, with a reason - which is the point:
-// an audit forced onto a date the auditee cannot make is an audit that does not happen,
-// and one that nobody recorded as having been refused.
-
-export type ScheduleResponseStatus =
-  | 'pending'                // لم يرد بعد
-  | 'accepted'               // وافق على الموعد
-  | 'reschedule_requested';  // طلب موعداً آخر
-
-export interface SchedulePartyResponse {
-  status: ScheduleResponseStatus;
-  respondedAt?: string;          // ISO
-  comment?: string;              // سبب طلب التغيير
-  proposedStartDate?: string;    // ISO - الموعد البديل المقترح
-}
-
-export interface AuditScheduleConfirmation {
-  auditor: SchedulePartyResponse;
-  auditee: SchedulePartyResponse;
-}
-
-// ===========================================
-// Approval gate - بوابة اعتماد
-// ===========================================
+// The one point inside an audit where the quality manager signs off: the answers and the
+// findings, before the AUDITEE is shown them. An unreviewed answer put in front of the
+// department it judges is a finding published without verification, so this gate - and not
+// the stage number - is what decides what the auditee may see.
 //
-// One shape for both points where the quality manager signs off inside an audit: the
-// question list before the audit runs, and the answers before the auditee is shown them.
 // Deliberately the same structure as the AnnualPlan approval fields, so the two read alike.
+//
+// A SCHEDULE-CONFIRMATION gate and a QUESTIONS gate were drafted here too and never wired
+// to a screen. They were removed rather than left as types nothing writes: a field that no
+// code path fills is not a half-built feature, it is a claim the data model makes and
+// cannot keep.
 
 export type ApprovalGateStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
 
@@ -433,7 +415,10 @@ export interface AuditFinding {
   rootCause?: string;
   correctiveAction?: string;
   actionEvidence?: string;
-  status: 'open' | 'in_progress' | 'pending_verification' | 'closed' | 'pending_department_approval';
+  // open → in_progress (الإدارة تعمل عليها) → pending_verification (ردّت، بانتظار
+  // تحقق المراجع) → closed. حالة خامسة 'pending_department_approval' كانت معرَّفة هنا
+  // ولا يكتبها شيء في تاريخ النظام كله؛ حُذفت.
+  status: 'open' | 'in_progress' | 'pending_verification' | 'closed';
   createdAt: string;
   closedAt?: string;
   extensionRequests?: ExtensionRequest[];
@@ -472,7 +457,12 @@ export interface Audit {
   teamMemberIds?: string[];
   auditorIds?: string[];
 
-  // الجهة المُراجَع عليها
+  // الجهة المُراجَع عليها - شخص واحد مسمّى، لا إدارة كاملة.
+  //
+  // هذا الحقل هو ما يفتح لصاحبه الكتابة على المراجعة في firestore.rules (belongsToAudit)،
+  // فبدونه لا تستطيع الجهة المُراجَع عليها الرد على ملاحظة ولا طلب تمديد: القاعدة ترفض
+  // الكتابة والواجهة تُظهر نجاحاً كاذباً. يُشتق تلقائياً عند الإنشاء (مدير الإدارة، أو
+  // رئيس القسم حين تُراجَع أقسام بعينها) ويستطيع مدير الجودة تصحيحه من نافذة تعديل المراجعة.
   auditeeId?: string;
 
   startDate: string;
@@ -486,9 +476,7 @@ export interface Audit {
   questions?: AuditQuestion[];
   findings?: AuditFinding[];
 
-  // البوابات الثلاث - انظر src/lib/audit-workflow.ts
-  schedule?: AuditScheduleConfirmation;
-  questionsGate?: ApprovalGate;
+  // بوابة اعتماد الأجوبة - انظر src/lib/audit-workflow.ts
   answersGate?: ApprovalGate;
 
   qmsApproval?: QMSApprovalLegacy;

@@ -167,7 +167,11 @@ export default function FindingsPage() {
               descriptionAr: f.evidence || '',
               descriptionEn: f.evidence || '',
               severity: f.categoryB === 'major_nc' ? 'major' : f.categoryB === 'minor_nc' ? 'minor' : f.categoryB === 'observation' ? 'observation' : 'minor',
-              status: f.status === 'closed' ? 'closed' : f.status === 'in_progress' ? 'in_progress' : f.status === 'pending_verification' ? 'verified' : 'open',
+              // pending_verification تعني: ردّت الإدارة وبانتظار تحقق المراجع - لا "تم التحقق".
+              // كانت تُعرض على أنها verified، فتُقرأ ملاحظة لم يفحصها أحد بعد على أنها مفحوصة.
+              status: f.status === 'closed' ? 'closed'
+                : f.status === 'pending_verification' ? 'in_progress'
+                  : f.status === 'in_progress' ? 'in_progress' : 'open',
               clause: f.clause || '',
               departmentId: f.departmentId,
               sectionId: f.sectionId,

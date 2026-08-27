@@ -4,8 +4,9 @@ import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout';
 // موحَّدة في @/types - كانت نسخاً محلية تختلف عن المخزَّن فعلاً
-import type { AuditFinding as Finding, AuditQuestion } from '@/types';
-import { FINDING_CATEGORY_A, FINDING_CATEGORY_B } from '@/types';
+import type { AuditFinding as Finding, AuditQuestion, AuditStageId, AuditStoredStatus, ApprovalGate } from '@/types';
+import { AUDIT_STAGE_ORDER } from '@/types';
+import { stageOf, isQualityStaff, areAnswersApproved, LAST_STAGE } from '@/lib/audit-workflow';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui';
@@ -16,39 +17,26 @@ import {
   updateAudit,
   deleteAudit as deleteAuditFromFirestore,
   addNotification,
-  Audit as FirestoreAudit,
 } from '@/lib/firestore';
 import {
   Plus,
   Search,
   ClipboardCheck,
   Eye,
-  Edit,
   Calendar,
   AlertCircle,
   CheckCircle,
   Clock,
-  FileQuestion,
   UserCheck,
   Wrench,
   ChevronRight,
   ChevronLeft,
   X,
   AlertTriangle,
-  Award,
-  Send,
-  ThumbsUp,
-  ThumbsDown,
-  Paperclip,
   Shield,
   Trash2,
-  Save,
-  ArrowRight,
   Building2,
-  Users,
   FileCheck,
-  RotateCcw,
-  ArrowUpDown,
   ArrowUp,
   ArrowDown,
   SlidersHorizontal,
@@ -57,22 +45,32 @@ import {
 // ===========================================
 // سير عمل المراجعة المنطقي
 // ===========================================
-const workflowStages = [
+//
+// ستّ مراحل، وترتيبها هو AUDIT_STAGE_ORDER في @/types - نفس الترتيب الذي تقرؤه صفحة
+// تفاصيل المراجعة بالضبط.
+//
+// كانت هنا سبع مراحل، بمرحلة 'questions_preparation' إضافية لا يجلس فيها أحد (الأسئلة
+// تُعدّ أثناء التخطيط)، وكان أثرها الوحيد أن تُزيح كل مرحلة بعدها رقماً واحداً. وبما أن
+// الصفحتين تكتبان في currentStage نفسه، فإن اعتماد مراجعة من هذه الصفحة كان يكتب رقماً
+// على سُلَّم السبعة تقرؤه صفحة التفاصيل على سُلَّم الستة: مراجعة في "مراجعة الجودة"
+// تُعتمد فتظهر في "التحقق والإغلاق"، متخطّيةً مرحلة الإجراءات التصحيحية كلها.
+interface WorkflowStage {
+  id: AuditStageId;
+  stepAr: string;
+  stepEn: string;
+  icon: typeof Calendar;
+  descriptionAr: string;
+  descriptionEn: string;
+}
+
+const workflowStages: WorkflowStage[] = [
   {
     id: 'planning',
-    stepAr: 'التخطيط',
-    stepEn: 'Planning',
+    stepAr: 'التخطيط وإعداد الأسئلة',
+    stepEn: 'Planning & Questions',
     icon: Calendar,
-    descriptionAr: 'تحديد نطاق المراجعة والفريق والتواريخ',
-    descriptionEn: 'Define audit scope, team, and dates',
-  },
-  {
-    id: 'questions_preparation',
-    stepAr: 'إعداد الأسئلة',
-    stepEn: 'Questions Prep',
-    icon: FileQuestion,
-    descriptionAr: 'إعداد قائمة أسئلة المراجعة',
-    descriptionEn: 'Prepare audit questions checklist',
+    descriptionAr: 'تحديد نطاق المراجعة والفريق والتواريخ وإعداد الأسئلة',
+    descriptionEn: 'Define audit scope, team, dates and prepare questions',
   },
   {
     id: 'execution',
@@ -116,8 +114,14 @@ const workflowStages = [
   },
 ];
 
+// نفس الحارس الموجود في صفحة تفاصيل المراجعة: أي انحراف عن الترتيب الواحد خطأ عند
+// التحميل، لا خلل صامت في البيانات.
+if (workflowStages.length !== AUDIT_STAGE_ORDER.length ||
+    workflowStages.some((stage, index) => stage.id !== AUDIT_STAGE_ORDER[index])) {
+  throw new Error('workflowStages must mirror AUDIT_STAGE_ORDER exactly');
+}
+
 // ISO 9001 Finding Categories - من @/types، مصدر واحد للصفحتين
-const findingCategories = { A: FINDING_CATEGORY_A, B: FINDING_CATEGORY_B };
 
 // Question interface
 
@@ -130,10 +134,15 @@ interface Audit {
   type: 'internal' | 'external' | 'surveillance' | 'certification';
   departmentId: string;
   sectionId?: string;
-  status: string;
+  // نفس اتحاد الحالات المخزَّنة، لا `string`: التساهل هنا هو ما سمح للصفحتين أن
+  // تختلفا في معنى الحالة نفسها دون أن يعترض المترجم
+  status: AuditStoredStatus;
   currentStage: number;
   leadAuditorId: string;
   auditorIds: string[];
+  auditeeId?: string;
+  // بوابة اعتماد الأجوبة - ما يقرّر ظهور المراجعة للجهة المُراجَع عليها في القائمة
+  answersGate?: ApprovalGate;
   startDate: string;
   endDate: string;
   scope: string;
@@ -151,7 +160,6 @@ interface Audit {
 }
 
 // No demo data - start with empty audits
-const initialAudits: Audit[] = [];
 
 export default function AuditsPage() {
   const router = useRouter();
@@ -159,10 +167,11 @@ export default function AuditsPage() {
   const { currentUser, hasPermission, users: allUsers, departments: allDepartments, sections: allSections } = useAuth();
 
   // Get auditors from users (canBeAuditor = true)
-  const auditors = useMemo(() => allUsers.filter(u => u.canBeAuditor && u.isActive), [allUsers]);
 
   // Check if current user is quality manager
-  const isQualityManager = currentUser?.role === 'quality_manager';
+  // إدارة الجودة: مدير الجودة ومدير النظام. كان مدير النظام محجوباً عن الموافقة على
+  // إنشاء المراجعات رغم أن canApproveAudits في صلاحياته true.
+  const isQualityManager = isQualityStaff(currentUser);
 
   // Audits data - load from Firestore with real-time updates
   const [auditsData, setAuditsData] = useState<Audit[]>([]);
@@ -180,9 +189,12 @@ export default function AuditsPage() {
         departmentId: fa.departmentId,
         sectionId: fa.sectionId,
         status: fa.status,
-        currentStage: getStageFromStatus(fa.status),
+        // نفس الدالة التي تقرأ بها صفحة التفاصيل، لا اشتقاق محلي
+        currentStage: stageOf(fa),
         leadAuditorId: fa.leadAuditorId,
         auditorIds: fa.teamMemberIds || [],
+        auditeeId: fa.auditeeId,
+        answersGate: fa.answersGate,
         startDate: fa.startDate,
         endDate: fa.endDate,
         scope: fa.scope || '',
@@ -197,26 +209,6 @@ export default function AuditsPage() {
     return () => unsubscribe();
   }, []);
 
-  // Helper to get stage from status
-  const getStageFromStatus = (status: string): number => {
-    const stageMap: Record<string, number> = {
-      'draft': 0,
-      'pending_approval': 0,
-      'approved': 0,
-      'planning': 0,
-      'questions_preparation': 1,
-      'execution': 2,
-      'in_progress': 2,
-      'qms_review': 3,
-      'corrective_actions': 4,
-      'verification': 5,
-      'completed': 6,
-      'cancelled': 6,
-      'postponed': 0,
-    };
-    return stageMap[status] || 0;
-  };
-
   // Role view mode - auditor vs auditee
   const [viewMode, setViewMode] = useState<'all' | 'as_auditor' | 'as_auditee'>('all');
 
@@ -230,83 +222,17 @@ export default function AuditsPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   // Modals
-  const [showDetailModal, setShowDetailModal] = useState(false);
-  const [selectedAudit, setSelectedAudit] = useState<Audit | null>(null);
-  const [showNewModal, setShowNewModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [auditToDelete, setAuditToDelete] = useState<Audit | null>(null);
 
   // Detail modal tabs
-  const [activeTab, setActiveTab] = useState<'details' | 'questions' | 'findings' | 'approval'>('details');
 
   // New audit form
-  const [newAudit, setNewAudit] = useState<{
-    titleAr: string;
-    titleEn: string;
-    type: 'internal' | 'external' | 'surveillance' | 'certification';
-    departmentId: string;
-    sectionId: string;
-    leadAuditorId: string;
-    auditorIds: string[];
-    startDate: string;
-    endDate: string;
-    scope: string;
-    objective: string;
-  }>({
-    titleAr: '',
-    titleEn: '',
-    type: 'internal',
-    departmentId: '',
-    sectionId: '',
-    leadAuditorId: '',
-    auditorIds: [],
-    startDate: '',
-    endDate: '',
-    scope: '',
-    objective: '',
-  });
-
-  // Auditor search
-  const [auditorSearch, setAuditorSearch] = useState('');
-  const [showAuditorDropdown, setShowAuditorDropdown] = useState(false);
-
-  // Question modal
-  const [showQuestionModal, setShowQuestionModal] = useState(false);
-  const [newQuestion, setNewQuestion] = useState({ questionAr: '', questionEn: '', clause: '' });
-
-  // Finding modal
-  const [showFindingModal, setShowFindingModal] = useState(false);
-  const [newFinding, setNewFinding] = useState({
-    clause: '',
-    finding: '',
-    evidence: '',
-    categoryA: '',
-    categoryB: '',
-    estimatedClosingDate: '',
-  });
-
-  // QMS Approval modal
-  const [showApprovalModal, setShowApprovalModal] = useState(false);
-  const [approvalComment, setApprovalComment] = useState('');
-  const [approvalError, setApprovalError] = useState('');
-  const [isSavingApproval, setIsSavingApproval] = useState(false);
 
   // Helper functions
   const getDepartment = (id: string) => allDepartments.find(d => d.id === id);
   const getSection = (id: string) => allSections.find(s => s.id === id);
   const getUser = (id: string) => allUsers.find(u => u.id === id);
-  const getSectionsByDepartment = (deptId: string) => allSections.filter(s => s.departmentId === deptId);
-
-  // Filtered auditors for search
-  const filteredAuditors = useMemo(() => {
-    if (!auditorSearch) return auditors;
-    const search = auditorSearch.toLowerCase();
-    return auditors.filter(a =>
-      a.fullNameAr.toLowerCase().includes(search) ||
-      a.fullNameEn.toLowerCase().includes(search)
-    );
-  }, [auditorSearch, auditors]);
-
   // Types
   const types = [
     { value: 'all', labelAr: 'الكل', labelEn: 'All' },
@@ -331,6 +257,29 @@ export default function AuditsPage() {
     { value: 'department', labelAr: 'الإدارة', labelEn: 'Department' },
   ];
 
+  // من هو هذا المستخدم في كل مراجعة، ومن يرى ماذا - مرفوعة فوق ما يقرؤها.
+  const isUserAuditor = (audit: Audit) =>
+    audit.leadAuditorId === currentUser?.id ||
+    (audit.auditorIds?.includes(currentUser?.id || '') ?? false) ||
+    audit.createdBy === currentUser?.id;
+
+  // الإدارة التي تُراجَع
+  const isUserAuditee = (audit: Audit) =>
+    audit.departmentId === currentUser?.departmentId;
+
+  // ماذا ترى الجهة المُراجَع عليها من قائمة المراجعات.
+  //
+  // بعد اعتماد إدارة الجودة للنتائج - وهي نفس البوابة التي تقرّر ما تراه داخل المراجعة،
+  // فلا يُخفى عنها هناك ما تُظهره القائمة هنا. ومدير الإدارة ورئيس القسم يريان المراجعة
+  // المجدولة عليهما قبل ذلك، فهما يستقبلان فريق المراجعة، لكن دون نتائجها.
+  //
+  // كان الشرط رقمَ مرحلة (>= 3) مكتوباً على سُلَّم المراحل السبع، فلا يعني على السُّلَّم
+  // الواحد ما كان يعنيه. والقاعدة لم تكن يوماً عن رقم المرحلة، بل عن الاعتماد نفسه.
+  const auditeeMaySee = (audit: Audit): boolean =>
+    areAnswersApproved(audit) ||
+    ((currentUser?.role === 'department_manager' || currentUser?.role === 'section_head') &&
+      stageOf(audit) >= 1);
+
   // Filter and sort audits
   const filteredAudits = useMemo(() => {
     // First filter by user access and view mode
@@ -344,11 +293,7 @@ export default function AuditsPage() {
       }
 
       if (viewMode === 'as_auditee') {
-        if (!isUserAuditee(audit)) return false;
-        // Auditee can see after QMS approval (stage 3+) or if department head (stage 2+)
-        if (audit.currentStage >= 3) return true;
-        if ((currentUser?.role === 'department_manager' || currentUser?.role === 'section_head') && audit.currentStage >= 2) return true;
-        return false;
+        return isUserAuditee(audit) && auditeeMaySee(audit);
       }
 
       // Default 'all' mode
@@ -361,14 +306,8 @@ export default function AuditsPage() {
       // User can see audits where they are part of the team
       if (audit.auditorIds?.includes(currentUser?.id || '')) return true;
 
-      // User can see audits where their department is being audited (auditee)
-      // Only show after QMS approval (currentStage >= 3) or if user is department head
-      if (audit.departmentId === currentUser?.departmentId) {
-        // Show if audit has been approved by QMS (stage 3+)
-        if (audit.currentStage >= 3) return true;
-        // Or if user is department/section head, show scheduled audits (stage 2+)
-        if ((currentUser?.role === 'department_manager' || currentUser?.role === 'section_head') && audit.currentStage >= 2) return true;
-      }
+      // الإدارة التي تُراجَع ترى المراجعة بعد اعتماد نتائجها، لا قبله
+      if (audit.departmentId === currentUser?.departmentId && auditeeMaySee(audit)) return true;
 
       return false;
     });
@@ -420,33 +359,17 @@ export default function AuditsPage() {
     return sorted;
   }, [auditsData, searchQuery, selectedType, selectedStatus, sortBy, sortOrder, language]);
 
-  // Check if user is an auditor in an audit
-  const isUserAuditor = (audit: Audit) => {
-    return audit.leadAuditorId === currentUser?.id ||
-      audit.auditorIds?.includes(currentUser?.id || '') ||
-      audit.createdBy === currentUser?.id;
-  };
-
-  // Check if user is an auditee (their department is being audited)
-  const isUserAuditee = (audit: Audit) => {
-    return audit.departmentId === currentUser?.departmentId;
-  };
-
   // Audits where user is auditor
-  const auditsAsAuditor = useMemo(() => {
-    return auditsData.filter(audit => isUserAuditor(audit));
-  }, [auditsData, currentUser]);
+  const auditsAsAuditor = useMemo(() =>
+    auditsData.filter(audit => isUserAuditor(audit)),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [auditsData, currentUser]);
 
   // Audits where user is auditee
-  const auditsAsAuditee = useMemo(() => {
-    return auditsData.filter(audit => {
-      if (!isUserAuditee(audit)) return false;
-      // Auditee can see after QMS approval (stage 3+) or if department head (stage 2+)
-      if (audit.currentStage >= 3) return true;
-      if ((currentUser?.role === 'department_manager' || currentUser?.role === 'section_head') && audit.currentStage >= 2) return true;
-      return false;
-    });
-  }, [auditsData, currentUser]);
+  const auditsAsAuditee = useMemo(() =>
+    auditsData.filter(audit => isUserAuditee(audit) && auditeeMaySee(audit)),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [auditsData, currentUser]);
 
   // Get accessible audits for stats (same logic as filtering)
   const accessibleAuditsForStats = useMemo(() => {
@@ -462,7 +385,7 @@ export default function AuditsPage() {
   // Stats based on accessible audits
   const stats = {
     total: accessibleAuditsForStats.length,
-    inProgress: accessibleAuditsForStats.filter(a => a.currentStage >= 1 && a.currentStage < 6).length,
+    inProgress: accessibleAuditsForStats.filter(a => a.currentStage >= 1 && a.currentStage < LAST_STAGE).length,
     pendingApproval: accessibleAuditsForStats.filter(a => a.status === 'qms_review' || a.status === 'pending_approval').length,
     openFindings: accessibleAuditsForStats.reduce((sum, a) => sum + a.findings.filter(f => f.status !== 'closed').length, 0),
   };
@@ -512,23 +435,6 @@ export default function AuditsPage() {
     );
   };
 
-  // Finding status badge
-  const getFindingStatusBadge = (status: Finding['status']) => {
-    const config: Record<Finding['status'], { color: string; labelAr: string; labelEn: string }> = {
-      open: { color: 'bg-red-100 text-red-700', labelAr: 'مفتوح', labelEn: 'Open' },
-      in_progress: { color: 'bg-yellow-100 text-yellow-700', labelAr: 'قيد العمل', labelEn: 'In Progress' },
-      pending_verification: { color: 'bg-blue-100 text-blue-700', labelAr: 'بانتظار التحقق', labelEn: 'Pending Verification' },
-      // كانت ناقصة هنا، فتظهر الملاحظات المنتظرة لرد الإدارة بشارة فارغة
-      pending_department_approval: { color: 'bg-purple-100 text-purple-700', labelAr: 'بانتظار رد الإدارة', labelEn: 'Awaiting Department' },
-      closed: { color: 'bg-green-100 text-green-700', labelAr: 'مغلق', labelEn: 'Closed' },
-    };
-    const c = config[status];
-    return (
-      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${c.color}`}>
-        {language === 'ar' ? c.labelAr : c.labelEn}
-      </span>
-    );
-  };
 
   // Handle view audit - redirect to detail page
   const handleViewAudit = (audit: Audit) => {
@@ -600,182 +506,6 @@ export default function AuditsPage() {
         auditId: audit.id,
       });
     }
-  };
-
-  // Handle create audit
-  const handleCreateAudit = () => {
-    if (!newAudit.titleAr || !newAudit.departmentId || !newAudit.leadAuditorId) return;
-
-    const audit: Audit = {
-      id: `${Date.now()}`,
-      number: `AUD-${new Date().getFullYear()}-${String(auditsData.length + 1).padStart(4, '0')}`,
-      titleAr: newAudit.titleAr,
-      titleEn: newAudit.titleEn || newAudit.titleAr,
-      type: newAudit.type,
-      departmentId: newAudit.departmentId,
-      sectionId: newAudit.sectionId || undefined,
-      status: 'planning',
-      currentStage: 0,
-      leadAuditorId: newAudit.leadAuditorId,
-      auditorIds: [newAudit.leadAuditorId, ...newAudit.auditorIds.filter(id => id !== newAudit.leadAuditorId)],
-      startDate: newAudit.startDate || new Date().toISOString().split('T')[0],
-      endDate: newAudit.endDate,
-      scope: newAudit.scope,
-      objective: newAudit.objective,
-      questions: [],
-      findings: [],
-      createdAt: new Date().toISOString().split('T')[0],
-    };
-
-    setAuditsData(prev => [audit, ...prev]);
-    setShowNewModal(false);
-    resetNewAuditForm();
-
-    // Open the audit for detailed editing
-    setSelectedAudit(audit);
-    setActiveTab('details');
-    setShowDetailModal(true);
-  };
-
-  const resetNewAuditForm = () => {
-    setNewAudit({
-      titleAr: '',
-      titleEn: '',
-      type: 'internal',
-      departmentId: '',
-      sectionId: '',
-      leadAuditorId: '',
-      auditorIds: [],
-      startDate: '',
-      endDate: '',
-      scope: '',
-      objective: '',
-    });
-    setAuditorSearch('');
-  };
-
-  // Add auditor to team
-  const addAuditorToTeam = (auditorId: string) => {
-    if (!newAudit.auditorIds.includes(auditorId) && auditorId !== newAudit.leadAuditorId) {
-      setNewAudit({ ...newAudit, auditorIds: [...newAudit.auditorIds, auditorId] });
-    }
-    setAuditorSearch('');
-    setShowAuditorDropdown(false);
-  };
-
-  // Remove auditor from team
-  const removeAuditorFromTeam = (auditorId: string) => {
-    setNewAudit({ ...newAudit, auditorIds: newAudit.auditorIds.filter(id => id !== auditorId) });
-  };
-
-  // Move to next stage
-  const moveToNextStage = () => {
-    if (!selectedAudit || selectedAudit.currentStage >= workflowStages.length - 1) return;
-
-    const nextStage = selectedAudit.currentStage + 1;
-    const updatedAudit = {
-      ...selectedAudit,
-      currentStage: nextStage,
-      status: workflowStages[nextStage].id,
-    };
-
-    setAuditsData(prev => prev.map(a => a.id === selectedAudit.id ? updatedAudit : a));
-    setSelectedAudit(updatedAudit);
-  };
-
-  // Add question
-  const handleAddQuestion = () => {
-    if (!selectedAudit || !newQuestion.questionAr) return;
-
-    const question: AuditQuestion = {
-      id: `q${Date.now()}`,
-      questionAr: newQuestion.questionAr,
-      questionEn: newQuestion.questionEn || newQuestion.questionAr,
-      clause: newQuestion.clause,
-      status: 'pending',
-    };
-
-    const updatedAudit = {
-      ...selectedAudit,
-      questions: [...selectedAudit.questions, question],
-    };
-
-    setAuditsData(prev => prev.map(a => a.id === selectedAudit.id ? updatedAudit : a));
-    setSelectedAudit(updatedAudit);
-    setNewQuestion({ questionAr: '', questionEn: '', clause: '' });
-    setShowQuestionModal(false);
-  };
-
-  // Add finding
-  const handleAddFinding = () => {
-    if (!selectedAudit || !newFinding.finding || !newFinding.categoryB) return;
-
-    const finding: Finding = {
-      id: `f${Date.now()}`,
-      reportNumber: `FND-${new Date().getFullYear()}-${String(selectedAudit.findings.length + 1).padStart(3, '0')}`,
-      departmentId: selectedAudit.departmentId,
-      sectionId: selectedAudit.sectionId,
-      clause: newFinding.clause,
-      finding: newFinding.finding,
-      evidence: newFinding.evidence,
-      categoryA: newFinding.categoryA || 'quality',
-      categoryB: newFinding.categoryB,
-      estimatedClosingDate: newFinding.estimatedClosingDate,
-      status: 'open',
-      createdAt: new Date().toISOString().split('T')[0],
-    };
-
-    const updatedAudit = {
-      ...selectedAudit,
-      findings: [...selectedAudit.findings, finding],
-    };
-
-    setAuditsData(prev => prev.map(a => a.id === selectedAudit.id ? updatedAudit : a));
-    setSelectedAudit(updatedAudit);
-    setNewFinding({ clause: '', finding: '', evidence: '', categoryA: '', categoryB: '', estimatedClosingDate: '' });
-    setShowFindingModal(false);
-  };
-
-  // QMS Approval
-  const handleQMSApproval = async (approved: boolean) => {
-    if (!selectedAudit || isSavingApproval) return;
-
-    setIsSavingApproval(true);
-    setApprovalError('');
-
-    const updatedAudit = {
-      ...selectedAudit,
-      qmsApproval: {
-        approved,
-        comment: approvalComment,
-        date: new Date().toISOString().split('T')[0],
-        approvedBy: currentUser?.id || '',
-      },
-      currentStage: approved ? selectedAudit.currentStage + 1 : selectedAudit.currentStage,
-      status: approved ? workflowStages[selectedAudit.currentStage + 1]?.id || 'completed' : selectedAudit.status,
-    };
-
-    // Persist to Firestore - without this the decision is lost on reload
-    const saved = await updateAudit(selectedAudit.id, {
-      qmsApproval: updatedAudit.qmsApproval,
-      currentStage: updatedAudit.currentStage,
-      status: updatedAudit.status as FirestoreAudit['status'],
-    });
-
-    setIsSavingApproval(false);
-
-    if (!saved) {
-      // Keep the modal open so the decision and comment are not lost
-      setApprovalError(language === 'ar'
-        ? 'تعذر حفظ القرار. تحقق من الاتصال ثم أعد المحاولة.'
-        : 'Could not save the decision. Check your connection and try again.');
-      return;
-    }
-
-    setAuditsData(prev => prev.map(a => a.id === selectedAudit.id ? updatedAudit : a));
-    setSelectedAudit(updatedAudit);
-    setShowApprovalModal(false);
-    setApprovalComment('');
   };
 
   const Arrow = isRTL ? ChevronLeft : ChevronRight;
@@ -1239,856 +969,11 @@ export default function AuditsPage() {
           </Table>
         </Card>
 
-        {/* New Audit Modal */}
-        {showNewModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowNewModal(false)} />
-            <div className="relative z-50 w-full max-w-2xl rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4 max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-semibold">{t('audits.newAudit')}</h2>
-                <Button variant="ghost" size="icon-sm" onClick={() => setShowNewModal(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-
-              <div className="space-y-5">
-                {/* Title */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
-                      {language === 'ar' ? 'عنوان المراجعة (عربي) *' : 'Audit Title (Arabic) *'}
-                    </label>
-                    <input
-                      type="text"
-                      value={newAudit.titleAr}
-                      onChange={(e) => setNewAudit({ ...newAudit, titleAr: e.target.value })}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
-                      {language === 'ar' ? 'عنوان المراجعة (إنجليزي)' : 'Audit Title (English)'}
-                    </label>
-                    <input
-                      type="text"
-                      value={newAudit.titleEn}
-                      onChange={(e) => setNewAudit({ ...newAudit, titleEn: e.target.value })}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-
-                {/* Type and Department */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
-                      {t('audits.auditType')}
-                    </label>
-                    <select
-                      value={newAudit.type}
-                      onChange={(e) => setNewAudit({ ...newAudit, type: e.target.value as typeof newAudit.type })}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                    >
-                      {types.slice(1).map(type => (
-                        <option key={type.value} value={type.value}>
-                          {language === 'ar' ? type.labelAr : type.labelEn}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
-                      {language === 'ar' ? 'الإدارة *' : 'Department *'}
-                    </label>
-                    <select
-                      value={newAudit.departmentId}
-                      onChange={(e) => setNewAudit({ ...newAudit, departmentId: e.target.value, sectionId: '' })}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                    >
-                      <option value="">{language === 'ar' ? 'اختر الإدارة' : 'Select Department'}</option>
-                      {allDepartments.filter(d => d.isActive).map(dept => (
-                        <option key={dept.id} value={dept.id}>
-                          {language === 'ar' ? dept.nameAr : dept.nameEn}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Section */}
-                {newAudit.departmentId && (
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
-                      {language === 'ar' ? 'القسم (اختياري)' : 'Section (Optional)'}
-                    </label>
-                    <select
-                      value={newAudit.sectionId}
-                      onChange={(e) => setNewAudit({ ...newAudit, sectionId: e.target.value })}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                    >
-                      <option value="">{language === 'ar' ? 'كل الأقسام' : 'All Sections'}</option>
-                      {getSectionsByDepartment(newAudit.departmentId).filter(s => s.isActive).map(sec => (
-                        <option key={sec.id} value={sec.id}>
-                          {language === 'ar' ? sec.nameAr : sec.nameEn}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {/* Lead Auditor */}
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'رئيس فريق المراجعة *' : 'Lead Auditor *'}
-                  </label>
-                  <select
-                    value={newAudit.leadAuditorId}
-                    onChange={(e) => setNewAudit({ ...newAudit, leadAuditorId: e.target.value })}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  >
-                    <option value="">{language === 'ar' ? 'اختر رئيس الفريق' : 'Select Lead Auditor'}</option>
-                    {auditors.map(auditor => (
-                      <option key={auditor.id} value={auditor.id}>
-                        {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn} - {language === 'ar' ? auditor.jobTitleAr : auditor.jobTitleEn}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Team Members */}
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'أعضاء الفريق' : 'Team Members'}
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={auditorSearch}
-                      onChange={(e) => {
-                        setAuditorSearch(e.target.value);
-                        setShowAuditorDropdown(true);
-                      }}
-                      onFocus={() => setShowAuditorDropdown(true)}
-                      placeholder={language === 'ar' ? 'ابحث عن مراجع...' : 'Search for auditor...'}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                    />
-                    {showAuditorDropdown && filteredAuditors.length > 0 && (
-                      <div className="absolute z-10 mt-1 w-full rounded-lg border border-[var(--border)] bg-white dark:bg-gray-800 shadow-lg max-h-48 overflow-y-auto">
-                        {filteredAuditors
-                          .filter(a => a.id !== newAudit.leadAuditorId && !newAudit.auditorIds.includes(a.id))
-                          .map(auditor => (
-                            <button
-                              key={auditor.id}
-                              type="button"
-                              onClick={() => addAuditorToTeam(auditor.id)}
-                              className="w-full px-4 py-2 text-start text-sm hover:bg-[var(--background-tertiary)]"
-                            >
-                              {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
-                              <span className="text-xs text-[var(--foreground-muted)] ms-2">
-                                {language === 'ar' ? auditor.jobTitleAr : auditor.jobTitleEn}
-                              </span>
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                  {newAudit.auditorIds.length > 0 && (
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {newAudit.auditorIds.map(id => {
-                        const auditor = getUser(id);
-                        return auditor ? (
-                          <span key={id} className="inline-flex items-center gap-1 px-2 py-1 bg-[var(--primary-light)] text-[var(--primary)] rounded-full text-xs">
-                            {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
-                            <button type="button" onClick={() => removeAuditorFromTeam(id)}>
-                              <X className="h-3 w-3" />
-                            </button>
-                          </span>
-                        ) : null;
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Dates */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">{t('audits.startDate')}</label>
-                    <input
-                      type="date"
-                      value={newAudit.startDate}
-                      onChange={(e) => setNewAudit({ ...newAudit, startDate: e.target.value })}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">{t('audits.endDate')}</label>
-                    <input
-                      type="date"
-                      value={newAudit.endDate}
-                      onChange={(e) => setNewAudit({ ...newAudit, endDate: e.target.value })}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-
-                {/* Scope and Objective */}
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'نطاق المراجعة' : 'Audit Scope'}
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={newAudit.scope}
-                    onChange={(e) => setNewAudit({ ...newAudit, scope: e.target.value })}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'هدف المراجعة' : 'Audit Objective'}
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={newAudit.objective}
-                    onChange={(e) => setNewAudit({ ...newAudit, objective: e.target.value })}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  />
-                </div>
-              </div>
-
-              <div className="mt-6 flex justify-end gap-3">
-                <Button variant="outline" onClick={() => setShowNewModal(false)}>
-                  {t('common.cancel')}
-                </Button>
-                <Button
-                  onClick={handleCreateAudit}
-                  disabled={!newAudit.titleAr || !newAudit.departmentId || !newAudit.leadAuditorId}
-                >
-                  {language === 'ar' ? 'إنشاء ومتابعة' : 'Create & Continue'}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Detail Modal */}
-        {showDetailModal && selectedAudit && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowDetailModal(false)} />
-            <div className="relative z-50 w-full max-w-5xl rounded-xl bg-white dark:bg-gray-900 shadow-xl mx-4 max-h-[90vh] overflow-hidden flex flex-col">
-              {/* Header */}
-              <div className="flex items-center justify-between p-6 border-b border-[var(--border)]">
-                <div>
-                  <h2 className="text-xl font-semibold">
-                    {language === 'ar' ? selectedAudit.titleAr : selectedAudit.titleEn}
-                  </h2>
-                  <p className="text-sm text-[var(--foreground-secondary)]">{selectedAudit.number}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  {getTypeBadge(selectedAudit.type)}
-                  {getStatusBadge(selectedAudit.status)}
-                  <Button variant="ghost" size="icon-sm" onClick={() => setShowDetailModal(false)}>
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              {/* Workflow Progress */}
-              <div className="p-4 bg-[var(--background-secondary)] border-b border-[var(--border)]">
-                <div className="flex items-center justify-between overflow-x-auto">
-                  {workflowStages.map((stage, index) => {
-                    const Icon = stage.icon;
-                    const isCompleted = index < selectedAudit.currentStage;
-                    const isCurrent = index === selectedAudit.currentStage;
-                    return (
-                      <div key={stage.id} className="flex items-center">
-                        <div className="flex flex-col items-center">
-                          <div className={`flex h-10 w-10 items-center justify-center rounded-full ${isCompleted ? 'bg-green-500 text-white' :
-                            isCurrent ? 'bg-[var(--primary)] text-white' :
-                              'bg-[var(--background-tertiary)] text-[var(--foreground-muted)]'
-                            }`}>
-                            {isCompleted ? <CheckCircle className="h-5 w-5" /> : <Icon className="h-5 w-5" />}
-                          </div>
-                          <p className={`mt-1 text-xs font-medium text-center ${isCurrent ? 'text-[var(--primary)]' : 'text-[var(--foreground-secondary)]'}`}>
-                            {language === 'ar' ? stage.stepAr : stage.stepEn}
-                          </p>
-                        </div>
-                        {index < workflowStages.length - 1 && (
-                          <div className={`mx-1 h-0.5 w-8 ${isCompleted ? 'bg-green-500' : 'bg-[var(--border)]'}`} />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Tabs */}
-              <div className="flex border-b border-[var(--border)]">
-                {[
-                  { id: 'details', labelAr: 'التفاصيل', labelEn: 'Details' },
-                  { id: 'questions', labelAr: 'الأسئلة', labelEn: 'Questions', count: selectedAudit.questions.length },
-                  { id: 'findings', labelAr: 'الملاحظات', labelEn: 'Findings', count: selectedAudit.findings.length },
-                  { id: 'approval', labelAr: 'الموافقات', labelEn: 'Approval' },
-                ].map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id as typeof activeTab)}
-                    className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === tab.id
-                      ? 'border-[var(--primary)] text-[var(--primary)]'
-                      : 'border-transparent text-[var(--foreground-secondary)] hover:text-[var(--foreground)]'
-                      }`}
-                  >
-                    {language === 'ar' ? tab.labelAr : tab.labelEn}
-                    {tab.count !== undefined && tab.count > 0 && (
-                      <span className="ms-2 px-1.5 py-0.5 rounded-full bg-[var(--primary-light)] text-[var(--primary)] text-xs">
-                        {tab.count}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-
-              {/* Content */}
-              <div className="flex-1 overflow-y-auto p-6">
-                {/* Details Tab */}
-                {activeTab === 'details' && (
-                  <div className="grid gap-6 lg:grid-cols-2">
-                    <div className="space-y-4">
-                      <h3 className="font-semibold">{language === 'ar' ? 'تفاصيل المراجعة' : 'Audit Details'}</h3>
-                      <div className="space-y-3">
-                        <div className="flex justify-between py-2 border-b border-[var(--border)]">
-                          <span className="text-[var(--foreground-secondary)]">{language === 'ar' ? 'الإدارة' : 'Department'}</span>
-                          <span>{getDepartment(selectedAudit.departmentId) ? (language === 'ar' ? getDepartment(selectedAudit.departmentId)!.nameAr : getDepartment(selectedAudit.departmentId)!.nameEn) : '-'}</span>
-                        </div>
-                        {selectedAudit.sectionId && (
-                          <div className="flex justify-between py-2 border-b border-[var(--border)]">
-                            <span className="text-[var(--foreground-secondary)]">{language === 'ar' ? 'القسم' : 'Section'}</span>
-                            <span>{getSection(selectedAudit.sectionId) ? (language === 'ar' ? getSection(selectedAudit.sectionId)!.nameAr : getSection(selectedAudit.sectionId)!.nameEn) : '-'}</span>
-                          </div>
-                        )}
-                        <div className="flex justify-between py-2 border-b border-[var(--border)]">
-                          <span className="text-[var(--foreground-secondary)]">{t('audits.startDate')}</span>
-                          <span>{new Date(selectedAudit.startDate).toLocaleDateString(language === 'ar' ? 'ar-SA' : 'en-US')}</span>
-                        </div>
-                        <div className="flex justify-between py-2 border-b border-[var(--border)]">
-                          <span className="text-[var(--foreground-secondary)]">{t('audits.endDate')}</span>
-                          <span>{selectedAudit.endDate ? new Date(selectedAudit.endDate).toLocaleDateString(language === 'ar' ? 'ar-SA' : 'en-US') : '-'}</span>
-                        </div>
-                        {selectedAudit.scope && (
-                          <div className="py-2">
-                            <span className="text-[var(--foreground-secondary)] block mb-1">{language === 'ar' ? 'نطاق المراجعة' : 'Scope'}</span>
-                            <p className="text-sm">{selectedAudit.scope}</p>
-                          </div>
-                        )}
-                        {selectedAudit.objective && (
-                          <div className="py-2">
-                            <span className="text-[var(--foreground-secondary)] block mb-1">{language === 'ar' ? 'الهدف' : 'Objective'}</span>
-                            <p className="text-sm">{selectedAudit.objective}</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="space-y-4">
-                      <h3 className="font-semibold">{language === 'ar' ? 'فريق المراجعة' : 'Audit Team'}</h3>
-                      <div className="space-y-2">
-                        {[...new Set(selectedAudit.auditorIds)].map((id, idx) => {
-                          const auditor = getUser(id);
-                          const isLead = id === selectedAudit.leadAuditorId;
-                          return auditor ? (
-                            <div key={`auditor-${id}-${idx}`} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--background-tertiary)]">
-                              <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${isLead ? 'bg-[var(--primary)] text-white' : 'bg-[var(--background)] text-[var(--foreground)]'
-                                }`}>
-                                {idx + 1}
-                              </div>
-                              <div className="flex-1">
-                                <p className="text-sm font-medium">{language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}</p>
-                                <p className="text-xs text-[var(--foreground-secondary)]">
-                                  {isLead ? (language === 'ar' ? 'رئيس الفريق' : 'Lead Auditor') : (language === 'ar' ? 'عضو' : 'Member')}
-                                </p>
-                              </div>
-                            </div>
-                          ) : null;
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Questions Tab */}
-                {activeTab === 'questions' && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h3 className="font-semibold">{language === 'ar' ? 'قائمة الأسئلة' : 'Questions Checklist'}</h3>
-                      {(selectedAudit.currentStage === 1 || selectedAudit.currentStage === 2) && (
-                        <Button size="sm" leftIcon={<Plus className="h-4 w-4" />} onClick={() => setShowQuestionModal(true)}>
-                          {language === 'ar' ? 'إضافة سؤال' : 'Add Question'}
-                        </Button>
-                      )}
-                    </div>
-
-                    {selectedAudit.questions.length > 0 ? (
-                      <div className="space-y-3">
-                        {selectedAudit.questions.map((q, idx) => (
-                          <div key={q.id} className="rounded-lg border border-[var(--border)] p-4">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex-1">
-                                <p className="text-sm font-medium">
-                                  {idx + 1}. {language === 'ar' ? q.questionAr : q.questionEn}
-                                </p>
-                                {q.clause && (
-                                  <p className="text-xs text-[var(--foreground-muted)] mt-1">
-                                    {language === 'ar' ? 'البند:' : 'Clause:'} {q.clause}
-                                  </p>
-                                )}
-                              </div>
-                              <span className={`px-2 py-0.5 rounded-full text-xs ${q.status === 'compliant' ? 'bg-green-100 text-green-700' :
-                                q.status === 'non_compliant' ? 'bg-red-100 text-red-700' :
-                                  q.status === 'not_applicable' ? 'bg-gray-100 text-gray-700' :
-                                    'bg-yellow-100 text-yellow-700'
-                                }`}>
-                                {q.status === 'compliant' ? (language === 'ar' ? 'مطابق' : 'Compliant') :
-                                  q.status === 'non_compliant' ? (language === 'ar' ? 'غير مطابق' : 'Non-Compliant') :
-                                    q.status === 'not_applicable' ? (language === 'ar' ? 'لا ينطبق' : 'N/A') :
-                                      (language === 'ar' ? 'معلق' : 'Pending')}
-                              </span>
-                            </div>
-                            {q.answer && (
-                              <p className="mt-3 text-sm text-[var(--foreground-secondary)] bg-[var(--background-tertiary)] rounded p-3">
-                                {q.answer}
-                              </p>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-center py-8 text-[var(--foreground-muted)]">
-                        <FileQuestion className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                        <p>{language === 'ar' ? 'لم يتم إضافة أسئلة بعد' : 'No questions added yet'}</p>
-                        {selectedAudit.currentStage === 1 && (
-                          <Button size="sm" className="mt-4" onClick={() => setShowQuestionModal(true)}>
-                            {language === 'ar' ? 'إضافة أول سؤال' : 'Add First Question'}
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Findings Tab */}
-                {activeTab === 'findings' && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h3 className="font-semibold">{language === 'ar' ? 'الملاحظات' : 'Findings'}</h3>
-                      {selectedAudit.currentStage >= 2 && selectedAudit.currentStage < 4 && (
-                        <Button size="sm" leftIcon={<Plus className="h-4 w-4" />} onClick={() => setShowFindingModal(true)}>
-                          {language === 'ar' ? 'إضافة ملاحظة' : 'Add Finding'}
-                        </Button>
-                      )}
-                    </div>
-
-                    {selectedAudit.findings.length > 0 ? (
-                      <div className="space-y-4">
-                        {selectedAudit.findings.map(finding => (
-                          <div key={finding.id} className="border border-[var(--border)] rounded-lg p-4">
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2 mb-2">
-                                  <span className="font-mono text-sm text-[var(--foreground-secondary)]">{finding.reportNumber}</span>
-                                  <span className={`px-2 py-0.5 rounded-full text-xs ${finding.categoryB === 'major_nc' ? 'bg-red-100 text-red-700' :
-                                    finding.categoryB === 'minor_nc' ? 'bg-orange-100 text-orange-700' :
-                                      finding.categoryB === 'observation' ? 'bg-yellow-100 text-yellow-700' :
-                                        'bg-blue-100 text-blue-700'
-                                    }`}>
-                                    {findingCategories.B.find(c => c.value === finding.categoryB)?.[language === 'ar' ? 'labelAr' : 'labelEn'] || finding.categoryB}
-                                  </span>
-                                  {getFindingStatusBadge(finding.status)}
-                                </div>
-                                <p className="text-sm font-medium">{finding.finding}</p>
-                                <p className="text-xs text-[var(--foreground-secondary)] mt-1">
-                                  {language === 'ar' ? 'البند:' : 'Clause:'} {finding.clause}
-                                </p>
-                              </div>
-                            </div>
-                            {finding.evidence && (
-                              <div className="mt-3 p-3 bg-[var(--background-tertiary)] rounded-lg">
-                                <p className="text-xs font-medium text-[var(--foreground-secondary)] mb-1">
-                                  {language === 'ar' ? 'الدليل:' : 'Evidence:'}
-                                </p>
-                                <p className="text-sm">{finding.evidence}</p>
-                              </div>
-                            )}
-                            {finding.rootCause && (
-                              <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                                <p className="text-xs font-medium text-blue-700 dark:text-blue-300 mb-1">
-                                  {language === 'ar' ? 'السبب الجذري:' : 'Root Cause:'}
-                                </p>
-                                <p className="text-sm">{finding.rootCause}</p>
-                              </div>
-                            )}
-                            {finding.correctiveAction && (
-                              <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                                <p className="text-xs font-medium text-green-700 dark:text-green-300 mb-1">
-                                  {language === 'ar' ? 'الإجراء التصحيحي:' : 'Corrective Action:'}
-                                </p>
-                                <p className="text-sm">{finding.correctiveAction}</p>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center py-12 bg-[var(--background-tertiary)]/30 rounded-lg border border-dashed border-[var(--border)]">
-                        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[var(--background-secondary)] mb-4">
-                          <ClipboardCheck className="h-8 w-8 text-[var(--foreground-secondary)] opacity-50" />
-                        </div>
-                        <h4 className="text-lg font-medium mb-1">{language === 'ar' ? 'لا توجد ملاحظات مسجلة' : 'No Findings Recorded'}</h4>
-                        <p className="text-sm text-[var(--foreground-secondary)] max-w-xs text-center mb-6">
-                          {language === 'ar'
-                            ? 'لم يتم تسجيل أي حالات عدم مطابقة أو ملاحظات في هذه المراجعة حتى الآن.'
-                            : 'No non-conformities or observations have been recorded for this audit yet.'}
-                        </p>
-                        {selectedAudit.currentStage >= 2 && selectedAudit.currentStage < 4 && (
-                          <Button onClick={() => setShowFindingModal(true)}>
-                            <Plus className="h-4 w-4 me-2" />
-                            {language === 'ar' ? 'تسجيل أول ملاحظة' : 'Record First Finding'}
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Approval Tab */}
-                {activeTab === 'approval' && (
-                  <div className="space-y-6">
-                    <h3 className="font-semibold">{language === 'ar' ? 'موافقة إدارة الجودة' : 'QMS Department Approval'}</h3>
-
-                    {/* Workflow explanation */}
-                    <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                      <h4 className="text-sm font-medium text-blue-800 dark:text-blue-300 mb-2">
-                        {language === 'ar' ? 'مسار الموافقة' : 'Approval Workflow'}
-                      </h4>
-                      <div className="flex items-center gap-2 text-xs text-blue-700 dark:text-blue-400">
-                        <span className="px-2 py-1 bg-blue-100 dark:bg-blue-800 rounded">
-                          {language === 'ar' ? 'فريق المراجعة' : 'Audit Team'}
-                        </span>
-                        <Arrow className="h-4 w-4" />
-                        <span className="px-2 py-1 bg-blue-100 dark:bg-blue-800 rounded">
-                          {language === 'ar' ? 'إدارة الجودة (QMS)' : 'QMS Department'}
-                        </span>
-                        <Arrow className="h-4 w-4" />
-                        <span className="px-2 py-1 bg-blue-100 dark:bg-blue-800 rounded">
-                          {language === 'ar' ? 'الجهة المراجَعة' : 'Auditee'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {selectedAudit.qmsApproval ? (
-                      <div className={`p-4 rounded-lg border ${selectedAudit.qmsApproval.approved
-                        ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-                        : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-                        }`}>
-                        <div className="flex items-center gap-2 mb-2">
-                          {selectedAudit.qmsApproval.approved ? (
-                            <ThumbsUp className="h-5 w-5 text-green-600" />
-                          ) : (
-                            <ThumbsDown className="h-5 w-5 text-red-600" />
-                          )}
-                          <span className="font-medium">
-                            {selectedAudit.qmsApproval.approved
-                              ? (language === 'ar' ? 'تمت الموافقة' : 'Approved')
-                              : (language === 'ar' ? 'مرفوض' : 'Rejected')}
-                          </span>
-                        </div>
-                        {selectedAudit.qmsApproval.comment && (
-                          <p className="text-sm mt-2">{selectedAudit.qmsApproval.comment}</p>
-                        )}
-                        <p className="text-xs text-[var(--foreground-secondary)] mt-2">
-                          {selectedAudit.qmsApproval.date} - {getUser(selectedAudit.qmsApproval.approvedBy)?.fullNameAr}
-                        </p>
-                      </div>
-                    ) : selectedAudit.currentStage === 3 ? (
-                      <div className="p-4 border border-yellow-200 dark:border-yellow-800 rounded-lg bg-yellow-50 dark:bg-yellow-900/20">
-                        <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-300 mb-3 flex items-center gap-2">
-                          <Shield className="h-4 w-4" />
-                          {language === 'ar' ? 'بانتظار موافقة إدارة الجودة' : 'Pending QMS Approval'}
-                        </h4>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            className="bg-green-600 hover:bg-green-700"
-                            onClick={() => {
-                              setApprovalError('');
-                              setShowApprovalModal(true);
-                            }}
-                          >
-                            <ThumbsUp className="h-4 w-4 me-2" />
-                            {language === 'ar' ? 'موافقة' : 'Approve'}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-red-600 border-red-600"
-                            onClick={() => {
-                              setApprovalError('');
-                              setShowApprovalModal(true);
-                            }}
-                          >
-                            <ThumbsDown className="h-4 w-4 me-2" />
-                            {language === 'ar' ? 'رفض' : 'Reject'}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-center py-8 text-[var(--foreground-muted)]">
-                        {language === 'ar' ? 'لا توجد موافقات معلقة حالياً' : 'No pending approvals'}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Footer Actions */}
-              <div className="flex justify-end gap-3 p-4 border-t border-[var(--border)]">
-                <Button variant="outline" onClick={() => setShowDetailModal(false)}>
-                  {t('common.close')}
-                </Button>
-                {selectedAudit.currentStage < workflowStages.length - 1 && selectedAudit.currentStage !== 3 && (
-                  <Button leftIcon={<Arrow className="h-4 w-4" />} onClick={moveToNextStage}>
-                    {language === 'ar' ? 'الانتقال للمرحلة التالية' : 'Move to Next Stage'}
-                  </Button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Add Question Modal */}
-        {showQuestionModal && selectedAudit && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center">
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowQuestionModal(false)} />
-            <div className="relative z-[60] w-full max-w-md rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">
-                  {language === 'ar' ? 'إضافة سؤال جديد' : 'Add New Question'}
-                </h2>
-                <Button variant="ghost" size="icon-sm" onClick={() => setShowQuestionModal(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'السؤال (عربي) *' : 'Question (Arabic) *'}
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={newQuestion.questionAr}
-                    onChange={(e) => setNewQuestion({ ...newQuestion, questionAr: e.target.value })}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'السؤال (إنجليزي)' : 'Question (English)'}
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={newQuestion.questionEn}
-                    onChange={(e) => setNewQuestion({ ...newQuestion, questionEn: e.target.value })}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'بند ISO المرجعي' : 'ISO Clause Reference'}
-                  </label>
-                  <input
-                    type="text"
-                    value={newQuestion.clause}
-                    onChange={(e) => setNewQuestion({ ...newQuestion, clause: e.target.value })}
-                    placeholder="e.g., 8.5.1"
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  />
-                </div>
-              </div>
-              <div className="mt-6 flex justify-end gap-3">
-                <Button variant="outline" onClick={() => setShowQuestionModal(false)}>
-                  {t('common.cancel')}
-                </Button>
-                <Button onClick={handleAddQuestion} disabled={!newQuestion.questionAr}>
-                  {language === 'ar' ? 'إضافة' : 'Add'}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Add Finding Modal */}
-        {showFindingModal && selectedAudit && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center">
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowFindingModal(false)} />
-            <div className="relative z-[60] w-full max-w-lg rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4 max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">
-                  {language === 'ar' ? 'إضافة ملاحظة جديدة' : 'Add New Finding'}
-                </h2>
-                <Button variant="ghost" size="icon-sm" onClick={() => setShowFindingModal(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'بند ISO المرجعي' : 'ISO Clause Reference'}
-                  </label>
-                  <input
-                    type="text"
-                    value={newFinding.clause}
-                    onChange={(e) => setNewFinding({ ...newFinding, clause: e.target.value })}
-                    placeholder="e.g., ISO 9001:2015 - 8.5.1"
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'وصف الملاحظة *' : 'Finding Description *'}
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={newFinding.finding}
-                    onChange={(e) => setNewFinding({ ...newFinding, finding: e.target.value })}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'الدليل' : 'Evidence'}
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={newFinding.evidence}
-                    onChange={(e) => setNewFinding({ ...newFinding, evidence: e.target.value })}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
-                      {language === 'ar' ? 'الفئة' : 'Category'}
-                    </label>
-                    <select
-                      value={newFinding.categoryA}
-                      onChange={(e) => setNewFinding({ ...newFinding, categoryA: e.target.value })}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                    >
-                      <option value="">{language === 'ar' ? 'اختر' : 'Select'}</option>
-                      {findingCategories.A.map(cat => (
-                        <option key={cat.value} value={cat.value}>
-                          {language === 'ar' ? cat.labelAr : cat.labelEn}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium">
-                      {language === 'ar' ? 'نوع الملاحظة *' : 'Finding Type *'}
-                    </label>
-                    <select
-                      value={newFinding.categoryB}
-                      onChange={(e) => setNewFinding({ ...newFinding, categoryB: e.target.value })}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                    >
-                      <option value="">{language === 'ar' ? 'اختر' : 'Select'}</option>
-                      {findingCategories.B.map(cat => (
-                        <option key={cat.value} value={cat.value}>
-                          {language === 'ar' ? cat.labelAr : cat.labelEn}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'تاريخ الإغلاق المتوقع' : 'Expected Closing Date'}
-                  </label>
-                  <input
-                    type="date"
-                    value={newFinding.estimatedClosingDate}
-                    onChange={(e) => setNewFinding({ ...newFinding, estimatedClosingDate: e.target.value })}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  />
-                </div>
-              </div>
-              <div className="mt-6 flex justify-end gap-3">
-                <Button variant="outline" onClick={() => setShowFindingModal(false)}>
-                  {t('common.cancel')}
-                </Button>
-                <Button onClick={handleAddFinding} disabled={!newFinding.finding || !newFinding.categoryB}>
-                  {language === 'ar' ? 'إضافة' : 'Add'}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* QMS Approval Modal */}
-        {showApprovalModal && selectedAudit && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center">
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowApprovalModal(false)} />
-            <div className="relative z-[70] w-full max-w-md rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">
-                  {language === 'ar' ? 'موافقة إدارة الجودة' : 'QMS Approval'}
-                </h2>
-                <Button variant="ghost" size="icon-sm" onClick={() => setShowApprovalModal(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-              <div className="space-y-4">
-                <div className="p-3 bg-[var(--background-tertiary)] rounded-lg">
-                  <p className="text-xs text-[var(--foreground-secondary)] mb-1">{selectedAudit.number}</p>
-                  <p className="text-sm">{language === 'ar' ? selectedAudit.titleAr : selectedAudit.titleEn}</p>
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">
-                    {language === 'ar' ? 'التعليق' : 'Comment'}
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={approvalComment}
-                    onChange={(e) => setApprovalComment(e.target.value)}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                  />
-                </div>
-                {approvalError && (
-                  <p className="rounded-lg bg-red-50 dark:bg-red-900/20 px-3 py-2 text-sm text-red-600 dark:text-red-400">
-                    {approvalError}
-                  </p>
-                )}
-              </div>
-              <div className="mt-6 flex justify-end gap-3">
-                <Button
-                  variant="outline"
-                  className="text-red-600 border-red-600"
-                  disabled={isSavingApproval}
-                  onClick={() => handleQMSApproval(false)}
-                >
-                  <ThumbsDown className="h-4 w-4 me-2" />
-                  {language === 'ar' ? 'رفض' : 'Reject'}
-                </Button>
-                <Button
-                  className="bg-green-600 hover:bg-green-700"
-                  disabled={isSavingApproval}
-                  onClick={() => handleQMSApproval(true)}
-                >
-                  <ThumbsUp className="h-4 w-4 me-2" />
-                  {language === 'ar' ? 'موافقة' : 'Approve'}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* نافذة المعاينة داخل القائمة: حُذفت.
+            كانت نسخة ثانية أضعف من صفحة المراجعة - بمراحلها ومواقفها وأزرار اعتمادها -
+            ولم يكن يفتحها شيء أصلاً: زر العين يذهب إلى /audits/[id] منذ البداية، ولا
+            مستدعي لـ setSelectedAudit في الصفحة كلها. والقائمة تعرض وتنقل؛ والعمل على
+            المراجعة يجري في مكان واحد. */}
 
         {/* Delete Confirmation Modal */}
         {showDeleteModal && auditToDelete && (

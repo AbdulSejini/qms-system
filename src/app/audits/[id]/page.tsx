@@ -52,7 +52,38 @@ import {
   Lock,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { isIndependentOf } from '@/lib/audit-workflow';
+import {
+  isIndependentOf,
+  deriveAuditeeId,
+  isQualityStaff,
+  isLeadAuditorOf,
+  isOnAuditTeam,
+  stageOf,
+  statusForStage,
+  isAwaitingCreationApproval,
+  isAuditClosed,
+  answersGateOf,
+  areAnswersApproved,
+  isAwaitingAnswersApproval,
+  wereAnswersReturned,
+  mayDecideGate,
+  mayViewAnswers,
+  submittedAnswersGate,
+  decidedAnswersGate,
+  invalidatedAnswersGate,
+  whatBlocksAdvance,
+  mayAdvanceStage,
+  mayRewindStage,
+  mayEditQuestions,
+  mayAnswerQuestions,
+  mayRecordFindings,
+  mayRespondToFinding,
+  mayEnterCorrectiveAction,
+  mayApproveCorrectiveActions,
+  mayVerifyFinding,
+  notifyAnswersSubmitted,
+  logAuditAction,
+} from '@/lib/audit-workflow';
 import { recordActivity } from '@/lib/activity-log';
 import type {
   QMSDecision, QMSComment, QMSModificationEntry, QMSApprovalData,
@@ -60,7 +91,8 @@ import type {
   AttachmentFile, AuditQuestion, ExtensionRequest, AuditActivityLogEntry as ActivityLogEntry,
   AuditFinding as Finding, FindingComment, DepartmentResponse,
 } from '@/types';
-import { FINDING_CATEGORY_A, FINDING_CATEGORY_B } from '@/types';
+import type { ApprovalGate, AuditStageId, AuditStoredStatus } from '@/types';
+import { FINDING_CATEGORY_A, FINDING_CATEGORY_B, AUDIT_STAGE_ORDER } from '@/types';
 import { OneDrivePicker } from '@/components/ui/OneDrivePicker';
 import type { OneDriveFile } from '@/lib/onedrive';
 import { Cloud } from 'lucide-react';
@@ -70,7 +102,26 @@ import { Cloud } from 'lucide-react';
 // ===========================================
 // Workflow stages
 // ===========================================
-const workflowStages = [
+//
+// العرض فقط: الترتيب نفسه يأتي من AUDIT_STAGE_ORDER في @/types، وهذا الجدول يعلّق عليه
+// الأيقونة والنص. النوع أدناه يجعل أي انحراف عن ذلك الترتيب خطأ ترجمة، لا خللاً صامتاً
+// في البيانات: كانت هذه القائمة ست مراحل هنا وسبعاً في صفحة قائمة المراجعات، والصفحتان
+// تكتبان الرقم نفسه في الحقل نفسه.
+interface WorkflowStage {
+  id: AuditStageId;
+  stepAr: string;
+  stepEn: string;
+  icon: typeof Calendar;
+  descriptionAr: string;
+  descriptionEn: string;
+  instructionAr: string;
+  instructionEn: string;
+  responsibleAr: string;
+  responsibleEn: string;
+  requiresApproval?: boolean;
+}
+
+const workflowStages: WorkflowStage[] = [
   {
     id: 'planning',
     stepAr: 'التخطيط وإعداد الأسئلة',
@@ -146,6 +197,14 @@ const workflowStages = [
   },
 ];
 
+// The display table must stay in lockstep with the canonical order, in the same positions.
+// Thrown at module load rather than asserted in a test nobody runs: an audit whose stage
+// number means one thing here and another on the list page is silent data corruption.
+if (workflowStages.length !== AUDIT_STAGE_ORDER.length ||
+    workflowStages.some((stage, index) => stage.id !== AUDIT_STAGE_ORDER[index])) {
+  throw new Error('workflowStages must mirror AUDIT_STAGE_ORDER exactly');
+}
+
 // Finding categories
 const findingCategories = { A: FINDING_CATEGORY_A, B: FINDING_CATEGORY_B };
 
@@ -167,10 +226,12 @@ interface Audit {
   type: 'internal' | 'external' | 'surveillance' | 'certification';
   departmentId: string;
   sectionId?: string;
-  status: string;
+  status: AuditStoredStatus;
   currentStage: number;
   leadAuditorId: string;
   auditorIds: string[]; // يُحمّل من teamMemberIds في Firestore ويُحفظ إليه
+  // الجهة المُراجَع عليها - شخص واحد مسمّى. بدونه ترفض firestore.rules كل كتابة منها.
+  auditeeId?: string;
   startDate: string;
   endDate: string;
   scope: string;
@@ -186,6 +247,8 @@ interface Audit {
   };
   // الهيكل الجديد لمراجعة إدارة الجودة
   qmsApprovalData?: QMSApprovalData;
+  // بوابة اعتماد الأجوبة - ما يقرّر ما يراه المُراجَع عليه ومتى
+  answersGate?: ApprovalGate;
   createdAt: string;
   createdBy?: string;
   // Execution confirmation by lead auditor
@@ -208,9 +271,6 @@ type StoredAuditExtras = Pick<Audit,
   'correctiveActionsApprovalComment'
 >;
 
-// حالات تحدد المرحلة بذاتها: المرحلة المخزّنة معها لا يُعتد بها لأنها قد تكون قديمة
-const STATUS_DETERMINED_STAGES = ['completed', 'cancelled'];
-
 export default function AuditDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -224,12 +284,13 @@ export default function AuditDetailPage() {
   // State
   const [audit, setAudit] = useState<Audit | null>(null);
   const [loading, setLoading] = useState(true);
+  // آخر فشل كتابة - يُعرض للمستخدم بدل أن يُبتلع
+  const [saveError, setSaveError] = useState('');
   const [activeTab, setActiveTab] = useState<'details' | 'questions' | 'findings' | 'approval' | 'activity' | 'my_findings'>('details');
 
   // Modals
   const [showQuestionModal, setShowQuestionModal] = useState(false);
   const [showFindingModal, setShowFindingModal] = useState(false);
-  const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [showExtensionModal, setShowExtensionModal] = useState(false);
   const [showCorrectiveActionModal, setShowCorrectiveActionModal] = useState(false);
   const [showQMSDecisionModal, setShowQMSDecisionModal] = useState(false);
@@ -253,6 +314,9 @@ export default function AuditDetailPage() {
     sectionId: '',
     leadAuditorId: '',
     auditorIds: [] as string[],
+    // الجهة المُراجَع عليها. موجودة هنا لأنها المسار الوحيد لتصحيحها على المراجعات
+    // القائمة قبل هذا التغيير - وهي كلها بلا auditeeId، فلا تستطيع الإدارة الرد عليها.
+    auditeeId: '',
     startDate: '',
     endDate: '',
   });
@@ -262,6 +326,20 @@ export default function AuditDetailPage() {
   // النافذة تعرض الجميع، فيُعاد تشكيل الفريق من داخل الإدارة التي تُراجَع، وهو ما
   // يُبطل استقلالية المراجعة كلها. الإدارة تُقرأ من النموذج لا من المراجعة، لأنها
   // قد تكون قد تغيّرت في النافذة نفسها.
+  // من يصحّ أن يكون الجهة المُراجَع عليها: من ينتمي للإدارة (أو القسم) محل المراجعة.
+  // المدير أو رئيس القسم أولاً في القائمة، لأنه المسؤول في الحالة العادية.
+  const auditeeCandidates = useMemo(() => {
+    const deptId = editAuditForm.departmentId;
+    const sectionId = editAuditForm.sectionId;
+    const inScope = allUsers.filter(u =>
+      u.isActive && !u.isSystemAccount && u.departmentId === deptId &&
+      (!sectionId || !u.sectionId || u.sectionId === sectionId)
+    );
+    const rank = (role: string) =>
+      role === 'department_manager' ? 0 : role === 'section_head' ? 1 : 2;
+    return [...inScope].sort((a, b) => rank(a.role) - rank(b.role));
+  }, [allUsers, editAuditForm.departmentId, editAuditForm.sectionId]);
+
   const editAuditors = useMemo(
     () => auditors.filter(u =>
       isIndependentOf(u, editAuditForm.departmentId, editAuditForm.sectionId || undefined)
@@ -308,7 +386,6 @@ export default function AuditDetailPage() {
     estimatedClosingDate: '',
     attachments: [] as AttachmentFile[], // Local or OneDrive files
   });
-  const [approvalComment, setApprovalComment] = useState('');
   const [extensionRequest, setExtensionRequest] = useState({ newDate: '', reason: '' });
   const [correctiveActionForm, setCorrectiveActionForm] = useState({ rootCause: '', correctiveAction: '' });
 
@@ -336,14 +413,13 @@ export default function AuditDetailPage() {
             departmentId: firestoreAudit.departmentId,
             sectionId: firestoreAudit.sectionId,
             status: firestoreAudit.status,
-            // الحالات النهائية تحدد المرحلة بنفسها، فأي مرحلة مخزّنة معها تكون قديمة
-            // (مثلاً الرفض من صفحة المراجعات يغيّر الحالة إلى cancelled دون تحديث المرحلة).
-            // فيما عدا ذلك المرحلة المخزّنة هي المرجع، والاشتقاق احتياطي للمراجعات القديمة
-            currentStage: STATUS_DETERMINED_STAGES.includes(firestoreAudit.status)
-              ? getStageFromStatus(firestoreAudit.status)
-              : firestoreAudit.currentStage ?? getStageFromStatus(firestoreAudit.status),
+            // المرحلة تُقرأ من مكان واحد لكل النظام - stageOf في @/lib/audit-workflow -
+            // فلا تشتقّ صفحةٌ سُلَّماً خاصاً بها. كانت هذه الصفحة تعدّ ست مراحل وصفحة
+            // القائمة سبعاً، وكلتاهما تكتب في currentStage نفسه.
+            currentStage: stageOf(firestoreAudit),
             leadAuditorId: firestoreAudit.leadAuditorId,
             auditorIds: firestoreAudit.teamMemberIds || [],
+            auditeeId: firestoreAudit.auditeeId,
             startDate: firestoreAudit.startDate,
             endDate: firestoreAudit.endDate,
             scope: firestoreAudit.scope || '',
@@ -352,6 +428,7 @@ export default function AuditDetailPage() {
             findings: firestoreAudit.findings || [],
             qmsApproval: firestoreAudit.qmsApproval,
             qmsApprovalData: firestoreAudit.qmsApprovalData,
+            answersGate: firestoreAudit.answersGate,
             executionConfirmed: storedExtras.executionConfirmed,
             executionConfirmedAt: storedExtras.executionConfirmedAt,
             executionConfirmedBy: storedExtras.executionConfirmedBy,
@@ -373,40 +450,29 @@ export default function AuditDetailPage() {
     loadAudit();
   }, [auditId]);
 
-  // Helper to get stage from status
-  const getStageFromStatus = (status: string): number => {
-    const stageMap: Record<string, number> = {
-      'draft': 0,
-      'pending_approval': 0,
-      'approved': 0,
-      'planning': 0,
-      'questions_preparation': 0,
-      'execution': 1,
-      'in_progress': 1,
-      'qms_review': 2,
-      'corrective_actions': 3,
-      'verification': 4,
-      'completed': 5,
-      'cancelled': 5,
-      'postponed': 0,
-    };
-    return stageMap[status] || 0;
-  };
-
-  // Save audit changes to Firestore
-  const saveAudit = async (updatedAudit: Audit) => {
+  // Save audit changes to Firestore.
+  //
+  // ترجع نجاح الكتابة، ولا تُحدّث الشاشة إلا إذا نجحت.
+  //
+  // كانت تتجاهل القيمة التي يُرجعها التحديث وتُحدّث الشاشة على أي حال، فتُظهر للمستخدم
+  // نجاحاً لم يحدث: قاعدة firestore.rules ترفض الكتابة (وهذا ما كان يحدث لكل رد من
+  // الجهة المُراجَع عليها، لأن auditeeId لم يكن يُكتب أصلاً) ويرى هو تأكيداً بالحفظ،
+  // ثم يختفي عمله عند أول إعادة تحميل. الفشل الصامت أسوأ من الفشل.
+  const saveAudit = async (updatedAudit: Audit): Promise<boolean> => {
+    setSaveError('');
     // Update in Firestore - include all important fields
     // كل حقل هنا يجب أن يُقرأ في loadAudit أيضاً، وإلا ضاع بعد إعادة التحميل
     const payload = {
       titleAr: updatedAudit.titleAr,
       titleEn: updatedAudit.titleEn,
       type: updatedAudit.type,
-      status: updatedAudit.status as any,
+      status: updatedAudit.status,
       currentStage: updatedAudit.currentStage, // Important: save the current stage
       departmentId: updatedAudit.departmentId,
       sectionId: updatedAudit.sectionId,
       leadAuditorId: updatedAudit.leadAuditorId,
       teamMemberIds: updatedAudit.auditorIds,
+      auditeeId: updatedAudit.auditeeId,
       startDate: updatedAudit.startDate,
       endDate: updatedAudit.endDate,
       objectives: updatedAudit.objective,
@@ -415,6 +481,7 @@ export default function AuditDetailPage() {
       questions: updatedAudit.questions, // Save questions with answers
       qmsApproval: updatedAudit.qmsApproval, // Save QMS approval data
       qmsApprovalData: updatedAudit.qmsApprovalData, // Save detailed QMS approval data
+      answersGate: updatedAudit.answersGate, // بوابة اعتماد الأجوبة
       activityLog: updatedAudit.activityLog, // Save activity log
       // Execution confirmation and corrective actions approval
       executionConfirmed: updatedAudit.executionConfirmed,
@@ -425,9 +492,26 @@ export default function AuditDetailPage() {
       correctiveActionsApprovedBy: updatedAudit.correctiveActionsApprovedBy,
       correctiveActionsApprovalComment: updatedAudit.correctiveActionsApprovalComment,
     };
-    await updateAuditInFirestore(auditId, payload);
+    const saved = await updateAuditInFirestore(auditId, payload);
+    if (!saved) {
+      setSaveError(language === 'ar'
+        ? 'تعذّر حفظ التغيير. قد لا تكون لديك صلاحية الكتابة على هذه المراجعة، أو انقطع الاتصال. أعد المحاولة، وإن تكرر الرفض فراجع إدارة الجودة.'
+        : 'The change could not be saved. You may not have write access to this audit, or the connection dropped. Try again, and if it keeps failing contact the quality department.');
+      return false;
+    }
     setAudit(updatedAudit);
+    return true;
   };
+
+  // ما اعتُمد إذا تغيّر سقط اعتماده.
+  //
+  // تُلفّ بها كل كتابة تمسّ الأجوبة أو الملاحظات، فتعود البوابة إلى مسودة ويُطلب قرار
+  // جديد على ما صار عليه الحال. بدون هذا يبقى اعتماد الأمس سارياً على أجوبة اليوم -
+  // وهي الحالة التي كان يصل إليها كل من رجع مرحلةً ثم عدّل ثم تقدّم.
+  const withAnswersRevised = (auditData: Audit): Audit => ({
+    ...auditData,
+    answersGate: invalidatedAnswersGate(answersGateOf(auditData)),
+  });
 
   // Helper function to add activity log entry
   const addActivityLog = (
@@ -448,17 +532,21 @@ export default function AuditDetailPage() {
     };
   };
 
-  // Move to next stage
+  // Move to next stage.
+  //
+  // الحارس هنا هو نفسه الذي يقرّر ظهور الزر - دالة واحدة في @/lib/audit-workflow، لا
+  // شرط في الشاشة وشرط آخر في المعالج. وكان المعالج بلا أي فحص دور إطلاقاً.
   const handleMoveToNextStage = () => {
-    if (!audit || audit.currentStage >= workflowStages.length - 1) return;
+    if (!audit || !currentUser) return;
+    if (!mayAdvanceStage({ audit, user: currentUser })) return;
 
     const fromStage = audit.currentStage;
     const toStage = audit.currentStage + 1;
 
-    let updatedAudit = {
+    let updatedAudit: Audit = {
       ...audit,
       currentStage: toStage,
-      status: workflowStages[toStage].id,
+      status: statusForStage(toStage),
     };
 
     // Add activity log for stage change
@@ -478,32 +566,46 @@ export default function AuditDetailPage() {
     saveAudit(updatedAudit);
   };
 
-  // Move to previous stage
+  // Move to previous stage - إدارة الجودة وحدها.
+  //
+  // والرجوع يُسقط اعتماد الأجوبة، لأن ما اعتُمد على وشك أن يتغيّر. كان الرجوع ينقص الرقم
+  // ويترك الاعتماد قائماً، فتعود المراجعة للتنفيذ، تُعدَّل أجوبتها، ثم تمرّ من بوابة
+  // مراجعة الجودة مرة أخرى بلا قرار جديد - اعتماد الأمس ساري المفعول على أجوبة اليوم.
   const handleMoveToPrevStage = () => {
-    if (!audit || audit.currentStage <= 0) return;
+    if (!audit || !currentUser) return;
+    if (!mayRewindStage({ audit, user: currentUser })) return;
 
     const fromStage = audit.currentStage;
     const toStage = audit.currentStage - 1;
+    const gate = answersGateOf(audit);
+    const gateDropped = gate.status !== 'draft';
 
-    let updatedAudit = {
+    let updatedAudit: Audit = {
       ...audit,
       currentStage: toStage,
-      status: workflowStages[toStage].id,
+      status: statusForStage(toStage),
+      answersGate: invalidatedAnswersGate(gate),
+      // اعتماد الإجراءات التصحيحية يسقط كذلك حين نعود إلى ما قبله
+      ...(toStage < 3
+        ? { correctiveActionsApproved: false, correctiveActionsApprovedAt: undefined, correctiveActionsApprovedBy: undefined }
+        : {}),
     };
 
     // Add activity log
     updatedAudit = addActivityLog(updatedAudit, 'stage_changed', {
       stageFrom: fromStage,
       stageTo: toStage,
-      description: `تم الرجوع من "${workflowStages[fromStage].stepAr}" إلى "${workflowStages[toStage].stepAr}"`,
+      description: `تم الرجوع من "${workflowStages[fromStage].stepAr}" إلى "${workflowStages[toStage].stepAr}"`
+        + (gateDropped ? '، وسقط اعتماد الأجوبة فتُطلب الموافقة من جديد.' : ''),
     });
 
     saveAudit(updatedAudit);
   };
 
-  // تأكيد إتمام المراجعة من قبل رئيس الفريق
+  // تأكيد إتمام المراجعة من قبل رئيس الفريق - وهو ما يفتح تسجيل الأجوبة، لا العكس
   const handleConfirmExecution = () => {
     if (!audit || audit.currentStage !== 1) return;
+    if (!isLeadAuditorOf(audit, currentUser?.id) && !isQualityStaff(currentUser)) return;
 
     const baseAudit: Audit = {
       ...audit,
@@ -520,65 +622,57 @@ export default function AuditDetailPage() {
     saveAudit(updatedAudit);
   };
 
-  // موافقة مدير الجودة على الإجراءات التصحيحية
-  const handleApproveCorrectiveActions = (comment: string) => {
-    if (!audit || audit.currentStage !== 3) return;
+  // موافقة مدير الجودة على الإجراءات التصحيحية.
+  //
+  // هذا هو الشرط الذي كان الانتقال من مرحلة الإجراءات التصحيحية يطلبه بينما لا يوجد في
+  // النظام كله زرٌّ يمنحه: الدالة موجودة منذ البداية ولا يستدعيها شيء، فتتجمّد كل مراجعة
+  // تصل هذه المرحلة إلى الأبد وتُعرض على المستخدم رسالة حمراء بلا مخرج. صار لها زر الآن.
+  const handleApproveCorrectiveActions = async (comment: string) => {
+    if (!audit || !currentUser) return;
+    if (!mayApproveCorrectiveActions(audit, currentUser)) return;
 
-    const updatedAudit = {
+    let updatedAudit: Audit = {
       ...audit,
       correctiveActionsApproved: true,
       correctiveActionsApprovedAt: new Date().toISOString(),
-      correctiveActionsApprovedBy: currentUser?.id,
+      correctiveActionsApprovedBy: currentUser.id,
       correctiveActionsApprovalComment: comment,
     };
-    saveAudit(updatedAudit);
 
-    // إرسال إشعار للإدارة المُراجَعة via Firestore
-    const deptUsers = allUsers.filter(u => u.departmentId === audit.departmentId && u.isActive);
-    deptUsers.forEach(async (user) => {
+    updatedAudit = addActivityLog(updatedAudit, 'corrective_actions_approved', {
+      description: 'اعتمدت إدارة الجودة الإجراءات التصحيحية' + (comment ? `: ${comment}` : ''),
+      comment,
+    });
+
+    if (!await saveAudit(updatedAudit)) return;
+
+    logAuditAction(currentUser, {
+      action: 'approve',
+      entityId: audit.id,
+      entityLabel: audit.titleAr,
+      summaryAr: `اعتمد ${currentUser.fullNameAr || currentUser.fullNameEn} الإجراءات التصحيحية لمراجعة "${audit.titleAr}".`,
+      summaryEn: `${currentUser.fullNameEn || currentUser.fullNameAr} approved the corrective actions for "${audit.titleEn}".`,
+    });
+
+    // الإشعار يذهب للمُراجَع عليه ولفريق المراجعة - لا لكل موظف في الإدارة
+    const recipients = Array.from(new Set([
+      audit.auditeeId,
+      audit.leadAuditorId,
+      ...(audit.auditorIds || []),
+    ].filter(Boolean) as string[])).filter(id => id !== currentUser.id);
+
+    for (const recipientId of recipients) {
       await addNotification({
-        type: 'corrective_action_response_required',
-        title: language === 'ar' ? 'مطلوب استجابة للإجراءات التصحيحية' : 'Corrective Action Response Required',
+        type: 'corrective_actions_approved',
+        title: language === 'ar' ? 'اعتماد الإجراءات التصحيحية' : 'Corrective Actions Approved',
         message: language === 'ar'
-          ? `المراجعة ${audit.number} تحتاج استجابتكم للإجراءات التصحيحية`
-          : `Audit ${audit.number} requires your response to corrective actions`,
-        recipientId: user.id,
-        senderId: currentUser?.id,
+          ? `اعتمدت إدارة الجودة الإجراءات التصحيحية لمراجعة ${audit.number}، وانتقلت المراجعة إلى التحقق.`
+          : `The quality department approved the corrective actions for audit ${audit.number}.`,
+        recipientId,
+        senderId: currentUser.id,
         auditId: audit.id,
       });
-    });
-  };
-
-  // استجابة الإدارة للملاحظة
-  const handleDepartmentResponse = (findingId: string, response: {
-    closingDate: string;
-    comment?: string;
-    attachments?: AttachmentFile[];
-  }) => {
-    if (!audit) return;
-
-    const updatedFindings = audit.findings.map(f => {
-      if (f.id === findingId) {
-        return {
-          ...f,
-          status: 'pending_verification' as const,
-          departmentResponse: {
-            approvedBy: currentUser?.id || '',
-            approvedAt: new Date().toISOString(),
-            closingDate: response.closingDate,
-            comment: response.comment,
-            attachments: response.attachments,
-          },
-        };
-      }
-      return f;
-    });
-
-    const updatedAudit = {
-      ...audit,
-      findings: updatedFindings,
-    };
-    saveAudit(updatedAudit);
+    }
   };
 
   // إضافة تعليق على الملاحظة
@@ -612,9 +706,13 @@ export default function AuditDetailPage() {
   };
 
 
-  // إرسال للموافقة من إدارة الجودة
+  // إرسال الأجوبة والملاحظات لاعتماد إدارة الجودة - رفع بوابة الاعتماد.
+  //
+  // هذه هي اللحظة التي تُسلَّم فيها نتيجة المراجعة من فريقها إلى من يعتمدها. وقبل اعتمادها
+  // لا تُعرض على الجهة المُراجَع عليها - وهذا ما تفرضه mayViewAnswers، لا رقم المرحلة.
   const handleSubmitForQMSApproval = async () => {
-    if (!audit || audit.currentStage !== 1) return; // مرحلة التنفيذ هي 1 الآن
+    if (!audit || !currentUser || audit.currentStage !== 1) return;
+    if (!isOnAuditTeam(audit, currentUser.id) && !isQualityStaff(currentUser)) return;
 
     // التحقق من وجود أسئلة
     if (audit.questions.length === 0) {
@@ -623,30 +721,37 @@ export default function AuditDetailPage() {
         : 'You must add at least one question before submitting for approval');
       return;
     }
-
-    // الانتقال لمرحلة مراجعة الجودة
-    const updatedAudit = {
-      ...audit,
-      currentStage: 2, // مرحلة مراجعة الجودة هي 2 الآن
-      status: 'qms_review',
-    };
-    saveAudit(updatedAudit);
-
-    // إرسال إشعار لمدير الجودة via Firestore
-    const allUsersData = await getAllUsers();
-    const qualityManagers = allUsersData.filter(u => u.role === 'quality_manager' && u.isActive);
-    for (const qm of qualityManagers) {
-      await addNotification({
-        type: 'audit_approval_request',
-        title: language === 'ar' ? 'طلب موافقة على مراجعة' : 'Audit Approval Request',
-        message: language === 'ar'
-          ? `المراجعة ${audit.number} جاهزة للمراجعة والموافقة`
-          : `Audit ${audit.number} is ready for review and approval`,
-        recipientId: qm.id,
-        senderId: currentUser?.id,
-        auditId: audit.id,
-      });
+    if (!audit.executionConfirmed) {
+      alert(language === 'ar'
+        ? 'يجب تأكيد إتمام المراجعة على الإدارة قبل الإرسال للاعتماد'
+        : 'Confirm the audit was carried out before submitting it for approval');
+      return;
     }
+    if (!allQuestionsAnswered) {
+      alert(language === 'ar'
+        ? 'يجب الإجابة على جميع الأسئلة قبل الإرسال للاعتماد'
+        : 'All questions must be answered before submitting for approval');
+      return;
+    }
+
+    // الانتقال لمرحلة مراجعة الجودة، ورفع بوابة اعتماد الأجوبة معه
+    let updatedAudit: Audit = {
+      ...audit,
+      currentStage: 2,
+      status: statusForStage(2),
+      answersGate: submittedAnswersGate(currentUser.id),
+    };
+
+    updatedAudit = addActivityLog(updatedAudit, 'answers_submitted', {
+      description: 'أُرسلت أجوبة المراجعة وملاحظاتها لاعتماد إدارة الجودة',
+    });
+
+    if (!await saveAudit(updatedAudit)) return;
+
+    // إشعار من يبتّ في البوابة: إدارة الجودة ومدير النظام
+    const allUsersData = await getAllUsers();
+    const deciders = allUsersData.filter(u => isQualityStaff(u) && u.isActive).map(u => u.id);
+    notifyAnswersSubmitted(audit, currentUser, deciders);
   };
 
   // Add question
@@ -777,6 +882,7 @@ export default function AuditDetailPage() {
   // Answer question
   const handleAnswerQuestion = () => {
     if (!audit || !selectedQuestion) return;
+    if (!mayAnswerQuestions(audit, currentUser)) return;
 
     const statusLabels = {
       compliant: 'مطابق',
@@ -818,7 +924,7 @@ export default function AuditDetailPage() {
       newValue: questionAnswer.status,
     });
 
-    saveAudit(updatedAudit);
+    saveAudit(withAnswersRevised(updatedAudit));
     setSelectedQuestion(null);
     setQuestionAnswer({ answer: '', status: 'pending', notes: '', attachments: [] });
     setShowAnswerModal(false);
@@ -844,6 +950,7 @@ export default function AuditDetailPage() {
   // Add finding
   const handleAddFinding = () => {
     if (!audit || !newFinding.finding || !newFinding.categoryA || !newFinding.categoryB || !newFinding.clause || !newFinding.evidence || !newFinding.estimatedClosingDate) return;
+    if (!mayRecordFindings(audit, currentUser)) return;
 
     const finding: Finding = {
       id: `f-${Date.now()}`,
@@ -880,24 +987,25 @@ export default function AuditDetailPage() {
       description: `تم إضافة ملاحظة جديدة (${categoryBLabels[newFinding.categoryB] || newFinding.categoryB}): "${newFinding.finding.substring(0, 50)}${newFinding.finding.length > 50 ? '...' : ''}"`,
     });
 
-    saveAudit(updatedAudit);
+    saveAudit(withAnswersRevised(updatedAudit));
 
-    // Send notification to the auditee department, the audit team and the quality managers
+    // الإشعار يذهب لفريق المراجعة وإدارة الجودة - ولا يذهب للجهة المُراجَع عليها.
+    //
+    // كان يُرسَل لكل موظف في الإدارة المُراجَعة لحظة كتابة الملاحظة، فينفذ من نافذة
+    // الإشعارات ما تمنعه بوابة الاعتماد من الشاشة: نصّ الملاحظة يصل الإدارة قبل أن
+    // يمرّ عليه مدير الجودة. البوابة لا تساوي شيئاً إن كان الإشعار يسبقها.
+    // الجهة المُراجَع عليها تُبلَّغ عند اعتماد الأجوبة، في handleQMSDecision.
     const targetDepartmentId = newFinding.departmentId || audit.departmentId;
-    const deptEmployees = allUsers.filter(u =>
-      u.departmentId === targetDepartmentId && u.isActive
-    );
     // فريق المراجعة (رئيس الفريق والمراجعون) - المستخدمون غير النشطين لا يُشعَرون
     const auditTeamIds = allUsers
       .filter(u => u.isActive && (u.id === audit.leadAuditorId || (audit.auditorIds || []).includes(u.id)))
       .map(u => u.id);
     const qualityManagerIds = allUsers
-      .filter(u => u.role === 'quality_manager' && u.isActive)
+      .filter(u => isQualityStaff(u) && u.isActive)
       .map(u => u.id);
 
     // Deduplicate and never notify the user who raised the finding
     const recipientIds = Array.from(new Set([
-      ...deptEmployees.map(e => e.id),
       ...auditTeamIds,
       ...qualityManagerIds,
     ])).filter(id => id && id !== currentUser?.id);
@@ -913,8 +1021,8 @@ export default function AuditDetailPage() {
           ? `ملاحظة جديدة - ${finding.reportNumber}`
           : `New Finding - ${finding.reportNumber}`,
         message: language === 'ar'
-          ? `تم تسجيل ملاحظة جديدة على إدارة ${deptName}: "${findingExcerpt}"`
-          : `A new finding was recorded on ${deptName} department: "${findingExcerpt}"`,
+          ? `سجّل فريق المراجعة ملاحظة على إدارة ${deptName}: "${findingExcerpt}" - بانتظار اعتماد إدارة الجودة.`
+          : `The audit team recorded a finding on ${deptName}: "${findingExcerpt}" - pending quality approval.`,
         auditId: audit.id,
         forUserIds: recipientIds,
       });
@@ -933,28 +1041,6 @@ export default function AuditDetailPage() {
       attachments: [],
     });
     setShowFindingModal(false);
-  };
-
-  // Handle approval
-  const handleApproval = (approved: boolean) => {
-    if (!audit) return;
-
-    const updatedAudit = {
-      ...audit,
-      qmsApproval: {
-        approved,
-        comment: approvalComment,
-        date: new Date().toISOString().split('T')[0],
-        approvedBy: currentUser?.id || '',
-      },
-      ...(approved && {
-        currentStage: audit.currentStage + 1,
-        status: workflowStages[audit.currentStage + 1].id,
-      }),
-    };
-    saveAudit(updatedAudit);
-    setApprovalComment('');
-    setShowApprovalModal(false);
   };
 
   // Handle extension request
@@ -1016,9 +1102,10 @@ export default function AuditDetailPage() {
     saveAudit({ ...audit, findings: updatedFindings });
   };
 
-  // Handle corrective action
+  // Handle corrective action - السبب الجذري والإجراء، بعد اعتماد الملاحظة لا قبله
   const handleCorrectiveAction = () => {
     if (!audit || !selectedFinding || !correctiveActionForm.correctiveAction) return;
+    if (!mayEnterCorrectiveAction(audit, currentUser)) return;
 
     const updatedFindings = audit.findings.map(f =>
       f.id === selectedFinding.id
@@ -1037,9 +1124,15 @@ export default function AuditDetailPage() {
     setShowCorrectiveActionModal(false);
   };
 
-  // Handle verify finding
+  // Handle verify finding - التحقق من الإجراء التصحيحي وإغلاق الملاحظة.
+  //
+  // كانت بلا أي فحص دور، وزرّها يظهر لكل من يرى الملاحظة في مرحلة التحقق - بما فيهم
+  // الإدارة التي رُفعت عليها، فتغلق ملاحظتها بنفسها. والإغلاق بلا ردٍّ موثَّق من تلك
+  // الإدارة ليس تحققاً من شيء، فالردّ شرط في mayVerifyFinding.
   const handleVerifyFinding = (findingId: string) => {
-    if (!audit) return;
+    if (!audit || !currentUser) return;
+    const finding = audit.findings.find(f => f.id === findingId);
+    if (!finding || !mayVerifyFinding(audit, finding, currentUser)) return;
 
     const updatedFindings = audit.findings.map(f =>
       f.id === findingId
@@ -1047,12 +1140,22 @@ export default function AuditDetailPage() {
         : f
     );
 
-    saveAudit({ ...audit, findings: updatedFindings });
+    const verified = addActivityLog({ ...audit, findings: updatedFindings }, 'finding_verified', {
+      findingId,
+      description: `تم التحقق من الإجراء التصحيحي وإغلاق الملاحظة ${finding.reportNumber}`,
+    });
+
+    saveAudit(verified);
   };
 
-  // Handle auditee response to finding
+  // Handle auditee response to finding.
+  //
+  // ولا تُعرض هذه الشاشة أصلاً لمن ترفض firestore.rules كتابته: auditeeId هو ما يفتح
+  // الكتابة، وكان لا يُكتب على أي مراجعة، فكل رد من الجهة المُراجَع عليها كان يُرفض
+  // من قاعدة البيانات بينما تقول الشاشة إنه حُفظ.
   const handleAuditeeResponse = () => {
     if (!audit || !selectedFinding || !auditeeResponseForm.closingDate) return;
+    if (!mayRespondToFinding(audit, currentUser)) return;
 
     const updatedFindings = audit.findings.map(f =>
       f.id === selectedFinding.id
@@ -1072,7 +1175,7 @@ export default function AuditDetailPage() {
             })),
           },
           estimatedClosingDate: auditeeResponseForm.closingDate,
-          status: 'in_progress' as const,
+          status: 'pending_verification' as const,
         }
         : f
     );
@@ -1145,9 +1248,10 @@ export default function AuditDetailPage() {
     }
   };
 
-  // معالجة قرار مدير إدارة الجودة
+  // معالجة قرار مدير إدارة الجودة على أجوبة المراجعة وملاحظاتها
   const handleQMSDecision = async (decision: QMSDecision | null) => {
-    if (!audit || !decision) return;
+    if (!audit || !decision || !currentUser) return;
+    if (!mayDecideGate(currentUser)) return;
     // التعليق مطلوب فقط في حالات غير الموافقة
     if (decision !== 'approved' && !qmsComment.trim()) return;
 
@@ -1192,12 +1296,14 @@ export default function AuditDetailPage() {
       updatedAudit = {
         ...updatedAudit,
         currentStage: audit.currentStage + 1,
-        status: workflowStages[audit.currentStage + 1].id,
+        status: statusForStage(audit.currentStage + 1),
+        // البوابة هي المرجع؛ qmsApproval يبقى للتوافق مع الشاشات القديمة
+        answersGate: decidedAnswersGate(answersGateOf(audit), 'approved', currentUser.id, qmsComment),
         qmsApproval: {
           approved: true,
           comment: qmsComment,
           date: new Date().toISOString().split('T')[0],
-          approvedBy: currentUser?.id || '',
+          approvedBy: currentUser.id,
         },
       };
       // إرسال إشعار للمراجعين
@@ -1211,42 +1317,49 @@ export default function AuditDetailPage() {
         forUserIds: audit.auditorIds,
       });
 
-      // إرسال إشعار لموظفي الإدارة المُراجَعة (المدقق عليهم) via Firestore
-      const deptUsers = allUsers.filter(u => u.departmentId === audit.departmentId && u.isActive);
-      for (const user of deptUsers) {
-        // لا ترسل إشعار للمراجعين (فهم يعرفون بالفعل)
-        if (!audit.auditorIds.includes(user.id)) {
-          await addNotification({
-            type: 'audit_scheduled',
-            title: language === 'ar' ? 'مراجعة مجدولة على إدارتكم' : 'Audit Scheduled for Your Department',
-            message: language === 'ar'
-              ? `سيتم إجراء مراجعة "${audit.titleAr}" على إدارتكم بتاريخ ${audit.startDate}`
-              : `Audit "${audit.titleEn}" is scheduled for your department on ${audit.startDate}`,
-            recipientId: user.id,
-            senderId: currentUser?.id,
-            auditId: audit.id,
-          });
-        }
+      // الجهة المُراجَع عليها تُبلَّغ الآن، لا قبل الآن: هذا الاعتماد هو اللحظة التي
+      // صارت فيها الملاحظات ملكها لتتصرّف بها. وكان الإشعار المُرسَل هنا يقول لها إن
+      // "مراجعة ستُجرى على إدارتكم" - خبرٌ عن ماضٍ انقضى، لا عن نتيجةٍ عليها أن تعالجها.
+      if (audit.auditeeId && audit.auditeeId !== currentUser.id) {
+        await addNotification({
+          type: 'corrective_action_response_required',
+          title: language === 'ar' ? 'نتائج مراجعة معتمدة تخصّكم' : 'Approved Audit Results for You',
+          message: language === 'ar'
+            ? `اعتمدت إدارة الجودة نتائج مراجعة "${audit.titleAr}". ${audit.findings.length} ملاحظة بانتظار ردّكم والإجراء التصحيحي.`
+            : `The quality department approved the results of "${audit.titleEn}". ${audit.findings.length} finding(s) await your response.`,
+          recipientId: audit.auditeeId,
+          senderId: currentUser.id,
+          auditId: audit.id,
+        });
       }
-    } else if (decision === 'rejected') {
+    } else if (decision === 'rejected' || decision === 'modification_requested') {
+      // الرفض وطلب التعديل كلاهما يُعيد الأجوبة إلى فريق المراجعة: البوابة تُغلق،
+      // والمُراجَع عليه لا يرى شيئاً حتى تُرفع من جديد وتُعتمد.
       updatedAudit = {
         ...updatedAudit,
+        answersGate: decidedAnswersGate(answersGateOf(audit), 'rejected', currentUser.id, qmsComment),
         qmsApproval: {
           approved: false,
           comment: qmsComment,
           date: new Date().toISOString().split('T')[0],
-          approvedBy: currentUser?.id || '',
+          approvedBy: currentUser.id,
         },
       };
       // إرسال إشعار للمراجعين
       sendNotification({
-        type: 'audit_rejected',
-        title: language === 'ar' ? 'تم رفض المراجعة' : 'Audit Rejected',
-        message: language === 'ar'
-          ? `تم رفض المراجعة ${audit.number} من قبل إدارة الجودة`
-          : `Audit ${audit.number} has been rejected by QMS`,
+        type: decision === 'rejected' ? 'audit_rejected' : 'audit_modification_requested',
+        title: decision === 'rejected'
+          ? (language === 'ar' ? 'تم رفض المراجعة' : 'Audit Rejected')
+          : (language === 'ar' ? 'طلب تعديل على المراجعة' : 'Modification Requested'),
+        message: decision === 'rejected'
+          ? (language === 'ar'
+            ? `تم رفض المراجعة ${audit.number} من قبل إدارة الجودة. السبب: ${qmsComment}`
+            : `Audit ${audit.number} has been rejected by QMS. Reason: ${qmsComment}`)
+          : (language === 'ar'
+            ? `مدير الجودة يطلب تعديلات على المراجعة ${audit.number}: ${qmsComment}`
+            : `QMS Manager requests modifications on audit ${audit.number}: ${qmsComment}`),
         auditId: audit.id,
-        forUserIds: audit.auditorIds,
+        forUserIds: Array.from(new Set([audit.leadAuditorId, ...audit.auditorIds].filter(Boolean))),
       });
     } else if (decision === 'postponed') {
       // إرسال إشعار للمراجعين
@@ -1256,17 +1369,6 @@ export default function AuditDetailPage() {
         message: language === 'ar'
           ? `تم تأجيل مراجعة ${audit.number} من قبل إدارة الجودة`
           : `Audit ${audit.number} has been postponed by QMS`,
-        auditId: audit.id,
-        forUserIds: audit.auditorIds,
-      });
-    } else if (decision === 'modification_requested') {
-      // إرسال إشعار للمراجعين لطلب التعديل
-      sendNotification({
-        type: 'audit_modification_requested',
-        title: language === 'ar' ? 'طلب تعديل على المراجعة' : 'Modification Requested',
-        message: language === 'ar'
-          ? `مدير الجودة يطلب تعديلات على المراجعة ${audit.number}`
-          : `QMS Manager requests modifications on audit ${audit.number}`,
         auditId: audit.id,
         forUserIds: audit.auditorIds,
       });
@@ -1288,7 +1390,16 @@ export default function AuditDetailPage() {
       comment: qmsComment || undefined,
     });
 
-    saveAudit(updatedAudit);
+    if (!await saveAudit(updatedAudit)) return;
+
+    logAuditAction(currentUser, {
+      action: decision === 'approved' ? 'approve' : decision === 'rejected' ? 'reject' : 'update',
+      entityId: audit.id,
+      entityLabel: audit.titleAr,
+      summaryAr: `${decisionLabels[decision]} "${audit.titleAr}" من ${currentUser.fullNameAr || currentUser.fullNameEn}${qmsComment ? `: ${qmsComment}` : '.'}`,
+      summaryEn: `${currentUser.fullNameEn || currentUser.fullNameAr} recorded "${decision}" on the answers for "${audit.titleEn}"${qmsComment ? `: ${qmsComment}` : '.'}`,
+    });
+
     setQmsComment('');
     setSelectedDecision(null);
     setShowQMSDecisionModal(false);
@@ -1339,6 +1450,9 @@ export default function AuditDetailPage() {
       sectionId: audit.sectionId || '',
       leadAuditorId: audit.leadAuditorId,
       auditorIds: audit.auditorIds.filter(id => id !== audit.leadAuditorId),
+      // مراجعة قديمة بلا جهة مُراجَع عليها: يُقترح المسؤول المشتق، فيكفي الحفظ لتصحيحها
+      auditeeId: audit.auditeeId
+        || deriveAuditeeId(allUsers, audit.departmentId, audit.sectionId) || '',
       startDate: audit.startDate,
       endDate: audit.endDate || '',
     });
@@ -1370,6 +1484,9 @@ export default function AuditDetailPage() {
     if (editAuditForm.objective !== (audit.objective || '')) changes.push('تم تعديل هدف المراجعة');
     if (editAuditForm.departmentId !== audit.departmentId) changes.push('تم تغيير الإدارة');
     if (editAuditForm.leadAuditorId !== audit.leadAuditorId) changes.push('تم تغيير رئيس الفريق');
+    if (editAuditForm.auditeeId !== (audit.auditeeId || '')) {
+      changes.push(`الجهة المُراجَع عليها: ${getUser(audit.auditeeId || '')?.fullNameAr || 'غير محددة'} ← ${getUser(editAuditForm.auditeeId)?.fullNameAr || 'غير محددة'}`);
+    }
     if (editAuditForm.startDate !== audit.startDate) changes.push(`تاريخ البدء: ${audit.startDate} ← ${editAuditForm.startDate}`);
     if (editAuditForm.endDate !== (audit.endDate || '')) changes.push(`تاريخ الانتهاء: ${audit.endDate || '-'} ← ${editAuditForm.endDate}`);
 
@@ -1385,6 +1502,7 @@ export default function AuditDetailPage() {
       sectionId: editAuditForm.sectionId || undefined,
       leadAuditorId: editAuditForm.leadAuditorId,
       auditorIds: allAuditorIds,
+      auditeeId: editAuditForm.auditeeId || undefined,
       startDate: editAuditForm.startDate,
       endDate: editAuditForm.endDate,
     };
@@ -1466,8 +1584,14 @@ export default function AuditDetailPage() {
   };
 
   // إرسال التعديلات من المراجع
+  // المراجع يعيد رفع الأجوبة بعد تعديلها - البوابة تعود إلى "بانتظار الاعتماد".
+  //
+  // كانت تُصفّر القرار القديم في qmsApprovalData وحده. والبوابة هي ما يقرّر ما يراه
+  // المُراجَع عليه، فتركها مغلقةً بعد إعادة الرفع يعني أن مدير الجودة يبتّ في شيء تقول
+  // البوابة إنه مرفوض أصلاً.
   const handleSubmitModifications = () => {
-    if (!audit) return;
+    if (!audit || !currentUser) return;
+    if (!isOnAuditTeam(audit, currentUser.id)) return;
 
     const existingApprovalData = audit.qmsApprovalData || {
       currentDecision: null,
@@ -1486,6 +1610,7 @@ export default function AuditDetailPage() {
     saveAudit({
       ...audit,
       qmsApprovalData: updatedApprovalData,
+      answersGate: submittedAnswersGate(currentUser.id),
     });
 
     // إرسال إشعار لمدير الجودة
@@ -1616,66 +1741,68 @@ export default function AuditDetailPage() {
   const currentStage = workflowStages[audit.currentStage];
   const StageIcon = currentStage.icon;
 
-  // Get responsible person for current stage
+  // من المسؤول عن المرحلة الحالية.
+  //
+  // كان مدير الجودة يُبحث عنه بمعرّف إدارة مكتوب في الشيفرة ('dept-2') - يعمل في قاعدة
+  // بيانات واحدة ولا يعمل في غيرها. يُبحث عنه بدوره الآن. والمسؤول عن مرحلة الإجراءات
+  // التصحيحية هو الشخص المسمّى في auditeeId، لا "مدير الإدارة" المستنتج، لأنه هو من
+  // تقبل قاعدة البيانات كتابته فعلاً.
+  const displayName = (user?: { fullNameAr: string; fullNameEn: string }) =>
+    user ? (language === 'ar' ? user.fullNameAr : user.fullNameEn) : '';
+
   const getResponsiblePerson = () => {
     const stage = workflowStages[audit.currentStage];
     if (stage.id === 'qms_review') {
-      // Find QMS manager
-      const qmsManager = allUsers.find(u => u.departmentId === 'dept-2' && u.canBeAuditor);
-      return qmsManager ? (language === 'ar' ? qmsManager.fullNameAr : qmsManager.fullNameEn) : (language === 'ar' ? 'مدير إدارة الجودة' : 'QMS Manager');
+      const qmsManager = allUsers.find(u => u.role === 'quality_manager' && u.isActive);
+      return displayName(qmsManager) || (language === 'ar' ? 'مدير إدارة الجودة' : 'the quality manager');
     }
     if (stage.id === 'corrective_actions') {
+      const auditee = audit.auditeeId ? getUser(audit.auditeeId) : undefined;
+      if (auditee) return displayName(auditee);
       const dept = getDepartment(audit.departmentId);
-      const deptManager = allUsers.find(u => u.departmentId === audit.departmentId && u.role === 'department_manager');
-      return deptManager ? (language === 'ar' ? deptManager.fullNameAr : deptManager.fullNameEn) : (dept ? (language === 'ar' ? `مدير ${dept.nameAr}` : `${dept.nameEn} Manager`) : '');
+      return dept
+        ? (language === 'ar' ? `مدير ${dept.nameAr}` : `the ${dept.nameEn} manager`)
+        : (language === 'ar' ? 'الجهة المُراجَع عليها' : 'the auditee');
     }
-    const lead = getUser(audit.leadAuditorId);
-    return lead ? (language === 'ar' ? lead.fullNameAr : lead.fullNameEn) : '';
+    return displayName(getUser(audit.leadAuditorId))
+      || (language === 'ar' ? 'رئيس فريق المراجعة' : 'the lead auditor');
   };
 
-  // اعتماد إدارة الجودة يتحقق فقط عندما يتفق التمثيلان: سجل الاعتماد القديم يقول "معتمد"
-  // ولا يوجد قرار أحدث يناقضه (رفض أو تأجيل أو طلب تعديل). وجود السجل وحده لا يكفي،
-  // فالرفض يكتب سجلاً بـ approved: false ويُبقي المراجعة في مرحلة مراجعة الجودة
-  const isApprovedByQMS = audit.qmsApproval?.approved === true &&
-    (!audit.qmsApprovalData?.currentDecision || audit.qmsApprovalData.currentDecision === 'approved');
+  // البوابة هي المرجع الوحيد لحالة الاعتماد.
+  //
+  // كانت تُستنتج من تمثيلين قديمين يجب أن يتفقا (qmsApproval و qmsApprovalData)، وهي
+  // بالضبط الحالة التي جعلت اعتماداً قديماً يبقى سارياً على أجوبة عُدِّلت بعده. البوابة
+  // تسقط إلى مسودة عند كل تعديل، فلا يمكن أن تصف حالة لم تعد قائمة.
+  const isApprovedByQMS = areAnswersApproved(audit);
+  const answersAwaitingDecision = isAwaitingAnswersApproval(audit);
+  const answersReturned = wereAnswersReturned(audit);
 
   // Check if waiting for approval
   const isWaitingForApproval = currentStage.requiresApproval && !isApprovedByQMS;
 
-  // Check if can move to previous stage
-  const canMoveToPrev = audit.currentStage > 0 && audit.currentStage < workflowStages.length - 1;
+  // القفل الأول: مراجعة لم يوافق عليها مدير الجودة بعد لا يُعمل عليها إطلاقاً
+  const awaitingCreationApproval = isAwaitingCreationApproval(audit);
+  const auditClosed = isAuditClosed(audit);
+
+  // Check if can move to previous stage - إدارة الجودة وحدها، والرجوع يُسقط الاعتماد
+  const canMoveToPrev = mayRewindStage({ audit, user: currentUser });
 
   // Check if all questions are answered (not pending)
   const allQuestionsAnswered = audit.questions.length > 0 &&
     audit.questions.every(q => q.status !== 'pending');
 
-  // Check if has findings (at least one finding added)
-  const hasFindings = audit.findings.length > 0;
-
-  // Check if execution is confirmed by lead auditor
-  const isExecutionConfirmed = audit.executionConfirmed === true;
-
-  // Check if corrective actions are approved by QMS
-  const areCorrectiveActionsApproved = audit.correctiveActionsApproved === true;
-
-  // Check if all findings have department response
-  const allFindingsHaveDepartmentResponse = audit.findings.length > 0 &&
-    audit.findings.every(f => f.departmentResponse);
-
   // Check if user is lead auditor
   const isLeadAuditor = currentUser?.id === audit.leadAuditorId;
 
-  // Check if user is quality manager
-  const isQualityManager = currentUser?.role === 'quality_manager';
+  // إدارة الجودة: مدير الجودة ومدير النظام معاً. كان مدير النظام محجوباً عن كل قرار
+  // اعتماد رغم أن canApproveAudits في صلاحياته true - فإذا غاب مدير الجودة توقّف النظام.
+  const isQualityManager = isQualityStaff(currentUser);
 
   // من يعيد الجدولة أو يعيد تشكيل الفريق، وإلى متى.
   // إدارة الجودة ومدير النظام - ومدير النظام كان محروماً منها بلا سبب. والحد هو
   // إقفال المراجعة: مراجعة مكتملة أو ملغاة سجلٌّ لما جرى، وتغيير موعدها أو فريقها
   // بعد ذلك يعيد كتابة التاريخ بدل أن يصحّح خطة.
-  const canEditAuditDetails =
-    (isQualityManager || currentUser?.role === 'system_admin') &&
-    audit?.status !== 'completed' &&
-    audit?.status !== 'cancelled';
+  const canEditAuditDetails = isQualityManager && !auditClosed;
 
   // Check if user is from the audited department
   const isFromAuditedDepartment = currentUser?.departmentId === audit.departmentId;
@@ -1686,91 +1813,91 @@ export default function AuditDetailPage() {
   // Users who can see full audit details: QMS Manager, Lead Auditor, or Auditors
   const canSeeFullDetails = isQualityManager || isLeadAuditor || isAuditor;
 
-  // Users who can edit/delete audit questions: audit team, QMS Manager or system admin
-  const canManageQuestions = isLeadAuditor || isAuditor || isQualityManager || currentUser?.role === 'system_admin';
+  // من يعدّل قائمة الأسئلة ومتى - قاعدة واحدة في @/lib/audit-workflow تخدم الزر والحارس
+  // معاً، فلا يُعرض زرٌّ يرفضه المعالج أو معالجٌ يقبل ما لا يُعرض له زر.
+  const canModifyQuestions = mayEditQuestions(audit, currentUser);
 
-  // المراحل التي يُسمح فيها بتغيير قائمة الأسئلة: التخطيط والتنفيذ،
-  // أو أثناء مراجعة الجودة عندما يطلب مدير الجودة تعديلاً من أحد المراجعين
-  const isQuestionEditingStage = audit.currentStage === 0 || audit.currentStage === 1 ||
-    (audit.currentStage === 2 && audit.qmsApprovalData?.currentDecision === 'modification_requested' &&
-      audit.auditorIds.includes(currentUser?.id || ''));
-
-  // التعديل والحذف لا يكونان أوسع صلاحية من الإضافة: نفس شرط المرحلة + صلاحية إدارة الأسئلة
-  const canModifyQuestions = canManageQuestions && isQuestionEditingStage;
+  // من يسجّل الإجابات: فريق المراجعة، بعد تأكيد إتمام المراجعة ميدانياً
+  const canAnswerQuestions = mayAnswerQuestions(audit, currentUser);
+  const canRecordFindings = mayRecordFindings(audit, currentUser);
+  // الإجراء التصحيحي وردّ الجهة المُراجَع عليها: بعد اعتماد الملاحظة، في مرحلتها
+  const canEnterCorrectiveAction = mayEnterCorrectiveAction(audit, currentUser);
+  const canRespondToFindings = mayRespondToFinding(audit, currentUser);
+  // اعتماد الإجراءات التصحيحية - الزر الذي لم يكن له وجود
+  const canApproveCorrectiveActions = mayApproveCorrectiveActions(audit, currentUser);
 
   // Users from audited department who are not auditors can only see limited info
   const isAuditeeOnly = isFromAuditedDepartment && !canSeeFullDetails;
 
+  // قاعدة الرؤية: ما يراه المستخدم من أحكام هذه المراجعة.
+  //
+  // كانت الملاحظة تصل الإدارة التي رُفعت عليها لحظة كتابتها، قبل أن يمرّ عليها مدير
+  // الجودة - حكمٌ يُعرض على من يُحكم عليه قبل التحقق منه. mayViewAnswers هي البوابة،
+  // وكانت مكتوبة ولا تُستدعى من أي شاشة. تمرّ منها الآن كل قائمة ملاحظات وكل عدّاد،
+  // فتختفي الثلاثة معاً بدل أن يتسرّب أحدها.
+  const canViewAnswers = mayViewAnswers(audit, currentUser);
+  const visibleFindings = canViewAnswers ? audit.findings : [];
+  const myFindings = visibleFindings.filter(f => f.departmentId === currentUser?.departmentId);
+
   // Check if user is both an auditor AND from the audited department (dual role)
-  const hasAuditeeFindings = audit.findings.filter(f => f.departmentId === currentUser?.departmentId).length > 0;
+  const hasAuditeeFindings = myFindings.length > 0;
   const isDualRole = isAuditor && isFromAuditedDepartment;
 
-  // Check requirements for moving between stages
-  // Stage 0: planning
-  // Stage 1: execution - تأكيد المراجعة + الإجابة على الأسئلة
-  // Stage 2: qms_review - موافقة مدير الجودة
-  // Stage 3: corrective_actions - موافقة مدير الجودة على الإجراءات + استجابة الإدارة
-  // Stage 4: verification
-  // Stage 5: completed
+  // شروط الانتقال بين المراحل - كلها في whatBlocksAdvance، ومنها يُشتق الزر والرسالة.
+  //
+  // كانت الشروط مكتوبة هنا ومكتوبة مرة أخرى في المعالج، وكلاهما بلا فحص دور: كل من
+  // يفتح رابط المراجعة - بما فيهم موظف الإدارة التي تُراجَع - يرى الزر ويضغطه.
+  const advanceBlock = whatBlocksAdvance({ audit, user: currentUser });
+  const canMoveToNext = advanceBlock === null;
 
-  // Check if can move to next stage
-  const canMoveToNext = (() => {
-    // Basic checks
-    if (audit.currentStage >= workflowStages.length - 1) return false;
-    if (isWaitingForApproval) return false;
-
-    // Stage 1 (execution) -> Stage 2 (qms_review)
-    // Requires: execution confirmed AND all questions answered
-    if (audit.currentStage === 1) {
-      return isExecutionConfirmed && allQuestionsAnswered;
+  // ولماذا لا يستطيع. 'not_your_stage' و 'last_stage' لا يُعرضان كخطأ أحمر: الأول ليس
+  // عطلاً بل توزيع مسؤوليات، والثاني نهاية المسار.
+  const cantMoveReason = ((): string => {
+    const ar = language === 'ar';
+    switch (advanceBlock) {
+      case 'locked_pending_creation_approval':
+        return ar
+          ? 'هذه المراجعة بانتظار موافقة إدارة الجودة على إنشائها. لا يبدأ العمل عليها قبل الموافقة.'
+          : 'This audit is waiting for the quality department to approve it. Work cannot start before then.';
+      case 'no_questions':
+        return ar
+          ? 'أضف سؤالاً واحداً على الأقل قبل الانتقال لمرحلة التنفيذ.'
+          : 'Add at least one question before moving to execution.';
+      case 'execution_not_confirmed':
+        return ar
+          ? 'يجب تأكيد إتمام المراجعة على الإدارة قبل الانتقال للمرحلة التالية.'
+          : 'Confirm the audit was carried out before moving to the next stage.';
+      case 'answers_incomplete':
+        return ar
+          ? `يجب الإجابة على جميع الأسئلة أولاً. متبقٍّ ${audit.questions.filter(q => q.status === 'pending').length} سؤال.`
+          : `All questions must be answered first. ${audit.questions.filter(q => q.status === 'pending').length} remaining.`;
+      case 'answers_not_submitted':
+        return ar
+          ? 'أرسل الأجوبة والملاحظات لاعتماد إدارة الجودة من الزر أعلاه.'
+          : 'Submit the answers and findings for quality approval using the button above.';
+      case 'answers_not_approved':
+        return ar
+          ? 'بانتظار قرار إدارة الجودة على الأجوبة والملاحظات.'
+          : 'Waiting on the quality department\'s decision on the answers and findings.';
+      case 'auditee_has_not_responded':
+        return ar
+          ? 'يجب أن تستجيب الجهة المُراجَع عليها لجميع الملاحظات قبل الانتقال للمرحلة التالية.'
+          : 'The auditee must respond to every finding before moving to the next stage.';
+      case 'corrective_actions_not_approved':
+        return ar
+          ? 'يجب أن تعتمد إدارة الجودة الإجراءات التصحيحية قبل الانتقال للتحقق.'
+          : 'The quality department must approve the corrective actions before verification.';
+      case 'findings_still_open':
+        return ar
+          ? `لا تُغلق المراجعة وفيها ملاحظات مفتوحة. متبقٍّ ${audit.findings.filter(f => f.status !== 'closed').length} ملاحظة.`
+          : `The audit cannot be closed with open findings. ${audit.findings.filter(f => f.status !== 'closed').length} remaining.`;
+      default:
+        return '';
     }
-
-    // Stage 3 (corrective_actions) -> Stage 4 (verification)
-    // Requires: corrective actions approved by QMS AND all findings have department response
-    if (audit.currentStage === 3) {
-      return areCorrectiveActionsApproved && (audit.findings.length === 0 || allFindingsHaveDepartmentResponse);
-    }
-
-    return true;
   })();
 
-  // Reason why can't move to next stage
-  const cantMoveReason = (() => {
-    // Stage 1 (execution)
-    if (audit.currentStage === 1) {
-      if (!isExecutionConfirmed && !allQuestionsAnswered) {
-        return language === 'ar'
-          ? 'يجب تأكيد إتمام المراجعة والإجابة على جميع الأسئلة قبل الانتقال للمرحلة التالية'
-          : 'You must confirm the audit completion and answer all questions before moving to the next stage';
-      }
-      if (!isExecutionConfirmed) {
-        return language === 'ar'
-          ? 'يجب تأكيد إتمام المراجعة على الإدارة قبل الانتقال للمرحلة التالية'
-          : 'You must confirm the audit execution before moving to the next stage';
-      }
-      if (!allQuestionsAnswered) {
-        return language === 'ar'
-          ? 'يجب الإجابة على جميع الأسئلة قبل الانتقال للمرحلة التالية'
-          : 'All questions must be answered before moving to the next stage';
-      }
-    }
-
-    // Stage 3 (corrective_actions)
-    if (audit.currentStage === 3) {
-      if (!areCorrectiveActionsApproved) {
-        return language === 'ar'
-          ? 'يجب موافقة مدير إدارة الجودة على الإجراءات التصحيحية قبل الانتقال للمرحلة التالية'
-          : 'QMS manager must approve the corrective actions before moving to the next stage';
-      }
-      if (audit.findings.length > 0 && !allFindingsHaveDepartmentResponse) {
-        return language === 'ar'
-          ? 'يجب أن تستجيب الإدارة المُراجَعة لجميع الملاحظات قبل الانتقال للمرحلة التالية'
-          : 'The audited department must respond to all findings before moving to the next stage';
-      }
-    }
-
-    return '';
-  })();
+  // من المسؤول عن هذه المرحلة الآن - يُعرض لمن ليست مرحلته بدل زرٍّ لا يملكه
+  const stageBelongsToSomeoneElse = advanceBlock === 'not_your_stage';
 
   return (
     <DashboardLayout>
@@ -1793,6 +1920,84 @@ export default function AuditDetailPage() {
             {language === 'ar' ? 'العودة للقائمة' : 'Back to List'}
           </Button>
         </div>
+
+        {/* فشل الحفظ - يُعرض بدل أن يُبتلع */}
+        {saveError && (
+          <div className="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-medium text-red-800 dark:text-red-200">
+                  {language === 'ar' ? 'لم يُحفظ التغيير' : 'The change was not saved'}
+                </p>
+                <p className="text-sm text-red-700 dark:text-red-300 mt-1">{saveError}</p>
+              </div>
+              <Button variant="ghost" size="icon-sm" onClick={() => setSaveError('')}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* مراجعة قديمة بلا جهة مُراجَع عليها.
+            كل المراجعات المنشأة قبل هذا التغيير كذلك، ولا يمكن أن تُغلق حلقتها التصحيحية
+            حتى يُسمّى المسؤول: القاعدة في firestore.rules تقرأ auditeeId، فما دام فارغاً
+            تُرفض كل كتابة من الإدارة. يُصحَّح من "تعديل بيانات المراجعة". */}
+        {!audit.auditeeId && !auditClosed && (
+          <div className="rounded-lg border border-orange-300 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20 p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-orange-600 dark:text-orange-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-medium text-orange-800 dark:text-orange-200">
+                  {language === 'ar' ? 'لم تُحدَّد الجهة المُراجَع عليها' : 'No auditee is set on this audit'}
+                </p>
+                <p className="text-sm text-orange-700 dark:text-orange-300 mt-1">
+                  {language === 'ar'
+                    ? 'لا يستطيع أحد من الإدارة المُراجَعة الرد على ملاحظة ولا طلب تمديد حتى يُسمَّى المسؤول عنها، فالكتابة تُرفض من قاعدة البيانات. حدِّده من "تعديل بيانات المراجعة".'
+                    : 'Nobody from the audited department can answer a finding or request an extension until a responsible person is named - the database rejects the write. Set one from "Edit audit details".'}
+                </p>
+              </div>
+              {canEditAuditDetails && (
+                <Button size="sm" variant="outline" onClick={openEditAuditModal}>
+                  {language === 'ar' ? 'تحديد' : 'Set'}
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* القفل الأول: مراجعة بانتظار موافقة إدارة الجودة على إنشائها */}
+        {awaitingCreationApproval && (
+          <div className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-4">
+            <div className="flex items-start gap-3">
+              <Lock className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-amber-800 dark:text-amber-200">
+                  {language === 'ar' ? 'بانتظار موافقة إدارة الجودة على إنشاء المراجعة' : 'Awaiting quality approval to open this audit'}
+                </p>
+                <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
+                  {language === 'ar'
+                    ? 'لا تُعدَّل الأسئلة ولا تُسجَّل الإجابات ولا تتحرك المراحل قبل الموافقة. الموافقة أو الرفض من صفحة قائمة المراجعات.'
+                    : 'Questions, answers and stage moves are all closed until the quality department approves it. Approve or reject from the audits list.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* المراجعة مقفلة نهائياً - سجلٌّ لما جرى */}
+        {auditClosed && (
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--background-secondary)] p-4">
+            <div className="flex items-center gap-3">
+              <Lock className="h-5 w-5 text-[var(--foreground-secondary)]" />
+              <p className="text-sm text-[var(--foreground-secondary)]">
+                {language === 'ar'
+                  ? `هذه المراجعة ${audit.status === 'completed' ? 'مكتملة' : 'ملغاة'} - سجلٌّ لما جرى، ولا تقبل تعديلاً.`
+                  : `This audit is ${audit.status === 'completed' ? 'completed' : 'cancelled'} - a record of what happened, and read-only.`}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Progress Steps */}
         <Card>
@@ -2331,7 +2536,7 @@ export default function AuditDetailPage() {
                     <ClipboardCheck className="h-5 w-5 text-[var(--primary)]" />
                     {language === 'ar' ? 'قائمة الأسئلة' : 'Questions List'}
                   </h3>
-                  {isQuestionEditingStage && (
+                  {canModifyQuestions && (
                     <Button size="sm" leftIcon={<Plus className="h-4 w-4" />} onClick={openAddQuestionModal}>
                       {language === 'ar' ? 'إضافة سؤال' : 'Add Question'}
                     </Button>
@@ -2403,7 +2608,7 @@ export default function AuditDetailPage() {
                               {q.status === 'not_applicable' && (language === 'ar' ? 'غير قابل للتطبيق' : 'N/A')}
                             </Badge>
                             {/* زر الإجابة - يظهر في مرحلة التنفيذ للمراجعين */}
-                            {audit.currentStage === 1 && (isLeadAuditor || audit.auditorIds.includes(currentUser?.id || '')) && (
+                            {canAnswerQuestions && (
                               <Button
                                 size="sm"
                                 variant={q.status === 'pending' ? 'primary' : 'outline'}
@@ -2470,7 +2675,7 @@ export default function AuditDetailPage() {
                         ? 'ابدأ بإضافة الأسئلة التي ستطرحها أثناء المراجعة. تأكد من تغطية جميع البنود المطلوبة.'
                         : 'Start adding questions you will ask during the audit. Make sure to cover all required items.'}
                     </p>
-                    {isQuestionEditingStage && (
+                    {canModifyQuestions && (
                       <Button onClick={openAddQuestionModal} leftIcon={<Plus className="h-4 w-4" />}>
                         {language === 'ar' ? 'إضافة أول سؤال' : 'Add First Question'}
                       </Button>
@@ -2546,8 +2751,77 @@ export default function AuditDetailPage() {
                   </div>
                 )}
 
+                {/* اعتماد إدارة الجودة للإجراءات التصحيحية.
+                    الشرط كان موجوداً في canMoveToNext والزر غير موجود في النظام كله،
+                    فتتجمّد كل مراجعة تصل هذه المرحلة إلى الأبد. هذا هو الزر. */}
+                {canApproveCorrectiveActions && (
+                  <div className="mt-6 p-6 rounded-lg bg-gradient-to-r from-teal-50 to-emerald-50 dark:from-teal-900/20 dark:to-emerald-900/20 border border-teal-200 dark:border-teal-800">
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2 rounded-full bg-teal-100 dark:bg-teal-800">
+                          <Shield className="h-6 w-6 text-teal-600 dark:text-teal-400" />
+                        </div>
+                        <div>
+                          <p className="font-semibold text-teal-800 dark:text-teal-200">
+                            {language === 'ar' ? 'اعتماد الإجراءات التصحيحية' : 'Approve Corrective Actions'}
+                          </p>
+                          <p className="text-sm text-teal-700 dark:text-teal-300 mt-1">
+                            {language === 'ar'
+                              ? 'ردّت الجهة المُراجَع عليها على جميع الملاحظات. راجع الإجراءات المقترحة واعتمدها لتنتقل المراجعة إلى مرحلة التحقق.'
+                              : 'The auditee has responded to every finding. Review the proposed actions and approve them to move the audit to verification.'}
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        onClick={() => {
+                          const comment = window.prompt(language === 'ar'
+                            ? 'تعليق على الاعتماد (اختياري):'
+                            : 'Approval comment (optional):');
+                          if (comment === null) return;
+                          void handleApproveCorrectiveActions(comment);
+                        }}
+                        className="bg-teal-600 hover:bg-teal-700 text-white whitespace-nowrap"
+                        leftIcon={<ThumbsUp className="h-4 w-4" />}
+                      >
+                        {language === 'ar' ? 'اعتماد الإجراءات' : 'Approve Actions'}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* الإجراءات التصحيحية معتمدة */}
+                {audit.currentStage === 3 && audit.correctiveActionsApproved && (
+                  <div className="mt-6 p-4 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
+                    <div className="flex items-center gap-3">
+                      <CheckCircle className="h-5 w-5 text-green-600 dark:text-green-400" />
+                      <div>
+                        <p className="font-medium text-green-800 dark:text-green-200">
+                          {language === 'ar' ? 'اعتُمدت الإجراءات التصحيحية' : 'Corrective Actions Approved'}
+                        </p>
+                        {audit.correctiveActionsApprovalComment && (
+                          <p className="text-sm text-green-700 dark:text-green-300">{audit.correctiveActionsApprovalComment}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* في مرحلة الإجراءات التصحيحية وبعض الملاحظات بلا ردّ بعد */}
+                {audit.currentStage === 3 && !audit.correctiveActionsApproved && !canApproveCorrectiveActions && isQualityManager && (
+                  <div className="mt-6 p-4 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                    <div className="flex items-start gap-3">
+                      <Clock className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5" />
+                      <p className="text-sm text-amber-700 dark:text-amber-300">
+                        {language === 'ar'
+                          ? `بانتظار ردّ الجهة المُراجَع عليها على ${audit.findings.filter(f => !f.departmentResponse).length} ملاحظة قبل أن تُعتمد الإجراءات التصحيحية.`
+                          : `Waiting on the auditee's response to ${audit.findings.filter(f => !f.departmentResponse).length} finding(s) before the corrective actions can be approved.`}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* زر إرسال للموافقة - يظهر في مرحلة التنفيذ بعد تأكيد الإتمام وإكمال الأسئلة */}
-                {audit.currentStage === 1 && audit.questions.length > 0 && audit.executionConfirmed && allQuestionsAnswered && (
+                {audit.currentStage === 1 && audit.questions.length > 0 && audit.executionConfirmed && allQuestionsAnswered && !answersAwaitingDecision && (
                   <div className="mt-6 p-6 rounded-lg bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-900/20 dark:to-blue-900/20 border border-green-200 dark:border-green-800">
                     <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                       <div className="flex items-start gap-3">
@@ -2634,7 +2908,6 @@ export default function AuditDetailPage() {
 
                     {/* إحصائيات الملاحظات للمراجع عليهم */}
                     {(() => {
-                      const myFindings = audit.findings.filter(f => f.departmentId === currentUser?.departmentId);
                       return (
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                           <div className="p-4 rounded-lg bg-[var(--background-secondary)] text-center">
@@ -2653,7 +2926,7 @@ export default function AuditDetailPage() {
                           </div>
                           <div className="p-4 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-center">
                             <p className="text-2xl font-bold text-blue-600">
-                              {myFindings.filter(f => f.status === 'pending_verification').length}
+                              {myFindings.filter(f => !!f.departmentResponse && f.status !== 'closed').length}
                             </p>
                             <p className="text-xs text-blue-700 dark:text-blue-400">
                               {language === 'ar' ? 'بانتظار التحقق' : 'Pending Verification'}
@@ -2681,7 +2954,6 @@ export default function AuditDetailPage() {
 
                     {/* قائمة الملاحظات للمراجع عليهم */}
                     {(() => {
-                      const myFindings = audit.findings.filter(f => f.departmentId === currentUser?.departmentId);
 
                       if (myFindings.length === 0) {
                         return (
@@ -2861,8 +3133,8 @@ export default function AuditDetailPage() {
                                   </div>
                                 )}
 
-                                {/* أزرار الإجراءات للمراجع عليهم */}
-                                {finding.status !== 'closed' && audit.currentStage >= 3 && (
+                                {/* أزرار الإجراءات للمراجع عليهم - للمسؤول المسمّى وحده */}
+                                {finding.status !== 'closed' && canRespondToFindings && (
                                   <div className="flex flex-wrap gap-2 pt-3 border-t border-[var(--border)]">
                                     {/* زر الرد على الملاحظة */}
                                     <Button
@@ -3004,7 +3276,7 @@ export default function AuditDetailPage() {
                         <AlertCircle className="h-5 w-5 text-[var(--primary)]" />
                         {language === 'ar' ? 'قائمة الملاحظات' : 'Findings List'}
                       </h3>
-                      {audit.currentStage >= 1 && audit.currentStage < 5 && (
+                      {canRecordFindings && (
                         <Button size="sm" leftIcon={<Plus className="h-4 w-4" />} onClick={() => setShowFindingModal(true)}>
                           {language === 'ar' ? 'إضافة ملاحظة' : 'Add Finding'}
                         </Button>
@@ -3013,9 +3285,9 @@ export default function AuditDetailPage() {
                   </>
                 )}
 
-                {audit.findings.length > 0 ? (
+                {visibleFindings.length > 0 ? (
                   <div className="space-y-4">
-                    {audit.findings.map((finding) => {
+                    {visibleFindings.map((finding) => {
                       // التحقق من تجاوز الموعد
                       const isOverdue = finding.status !== 'closed' &&
                         new Date(finding.estimatedClosingDate) < new Date();
@@ -3093,8 +3365,8 @@ export default function AuditDetailPage() {
                                 </Button>
                               )}
 
-                              {/* زر إضافة إجراء تصحيحي */}
-                              {finding.status === 'open' && (
+                              {/* زر إضافة إجراء تصحيحي - بعد اعتماد الملاحظة، لا أثناء تسجيلها */}
+                              {finding.status === 'open' && canEnterCorrectiveAction && (
                                 <Button
                                   size="sm"
                                   variant="outline"
@@ -3108,8 +3380,8 @@ export default function AuditDetailPage() {
                                 </Button>
                               )}
 
-                              {/* زر التحقق (للمدقق) */}
-                              {finding.status === 'in_progress' && audit.currentStage === 4 && (
+                              {/* زر التحقق - للمراجع أو إدارة الجودة، وبعد ردٍّ موثَّق من الجهة المُراجَع عليها */}
+                              {mayVerifyFinding(audit, finding, currentUser) && (
                                 <Button
                                   size="sm"
                                   onClick={() => handleVerifyFinding(finding.id)}
@@ -3117,6 +3389,16 @@ export default function AuditDetailPage() {
                                   <CheckCircle className="h-3 w-3 mx-1" />
                                   {language === 'ar' ? 'تحقق وإغلاق' : 'Verify & Close'}
                                 </Button>
+                              )}
+
+                              {/* لماذا لا يظهر زر التحقق: الردّ لم يصل بعد */}
+                              {audit.currentStage === 4 && !finding.departmentResponse &&
+                                (isAuditor || isLeadAuditor || isQualityManager) && (
+                                <span className="text-xs text-amber-600 dark:text-amber-400 self-center">
+                                  {language === 'ar'
+                                    ? 'لا يمكن الإغلاق قبل ردّ الجهة المُراجَع عليها على الملاحظة'
+                                    : 'Cannot close before the auditee has responded to this finding'}
+                                </span>
                               )}
                             </div>
                           )}
@@ -3207,7 +3489,7 @@ export default function AuditDetailPage() {
                         ? 'هذا يعني أن المراجعة لم تجد أي عدم مطابقات أو ملاحظات تحتاج لإجراءات تصحيحية.'
                         : 'This means the audit found no non-conformities or observations requiring corrective actions.'}
                     </p>
-                    {audit.currentStage >= 2 && audit.currentStage < 6 && (
+                    {canRecordFindings && (
                       <Button className="mt-4" variant="outline" onClick={() => setShowFindingModal(true)} leftIcon={<Plus className="h-4 w-4" />}>
                         {language === 'ar' ? 'إضافة ملاحظة' : 'Add Finding'}
                       </Button>
@@ -3241,7 +3523,6 @@ export default function AuditDetailPage() {
 
                 {/* إحصائيات */}
                 {(() => {
-                  const myFindings = audit.findings.filter(f => f.departmentId === currentUser?.departmentId);
                   return (
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="p-4 rounded-lg bg-[var(--background-secondary)] text-center">
@@ -3260,7 +3541,7 @@ export default function AuditDetailPage() {
                       </div>
                       <div className="p-4 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-center">
                         <p className="text-2xl font-bold text-blue-600">
-                          {myFindings.filter(f => f.status === 'pending_verification').length}
+                          {myFindings.filter(f => !!f.departmentResponse && f.status !== 'closed').length}
                         </p>
                         <p className="text-xs text-blue-700 dark:text-blue-400">
                           {language === 'ar' ? 'بانتظار التحقق' : 'Pending Verification'}
@@ -3280,7 +3561,6 @@ export default function AuditDetailPage() {
 
                 {/* قائمة الملاحظات */}
                 {(() => {
-                  const myFindings = audit.findings.filter(f => f.departmentId === currentUser?.departmentId);
 
                   if (myFindings.length === 0) {
                     return (
@@ -3362,8 +3642,8 @@ export default function AuditDetailPage() {
                               </div>
                             )}
 
-                            {/* أزرار الإجراءات */}
-                            {finding.status !== 'closed' && audit.currentStage >= 3 && (
+                            {/* أزرار الإجراءات - للمسؤول المسمّى عن الرد وحده */}
+                            {finding.status !== 'closed' && canRespondToFindings && (
                               <div className="flex flex-wrap gap-2 pt-3 border-t border-[var(--border)]">
                                 <Button
                                   size="sm"
@@ -3578,13 +3858,12 @@ export default function AuditDetailPage() {
                   </div>
                 )}
 
-                {/* أزرار القرار لمدير الجودة */}
-                {/* الرفض والتأجيل كلاهما يُبقي المراجعة في مرحلة مراجعة الجودة، لذا يظل بإمكان
-                    مدير الجودة إعادة اتخاذ القرار؛ أما الموافقة وطلب التعديل فينتقل بهما المسار */}
-                {audit.currentStage === 2 && currentUser?.role === 'quality_manager' &&
-                  (!audit.qmsApprovalData?.currentDecision ||
-                    audit.qmsApprovalData.currentDecision === 'postponed' ||
-                    audit.qmsApprovalData.currentDecision === 'rejected') && (
+                {/* أزرار القرار لإدارة الجودة.
+                    الشرط هو حالة البوابة، لا القرار القديم المحفوظ في qmsApprovalData:
+                    البوابة هي ما يقرّر ما يراه المُراجَع عليه، فهي التي يجب أن تُفتح
+                    وتُغلق. وتظهر ما لم تكن معتمدةً بالفعل - أي على الأجوبة المرفوعة
+                    للاعتماد، وعلى ما أُعيد ثم أُرسل من جديد. */}
+                {audit.currentStage === 2 && isQualityManager && !isApprovedByQMS && (
                     <div className="p-4 rounded-lg bg-[var(--background-secondary)] border border-[var(--border)]">
                       <h4 className="font-medium mb-4 flex items-center gap-2">
                         <Shield className="h-5 w-5 text-[var(--primary)]" />
@@ -3638,9 +3917,9 @@ export default function AuditDetailPage() {
                     </div>
                   )}
 
-                {/* وضع التعديل للمراجعين */}
-                {audit.qmsApprovalData?.currentDecision === 'modification_requested' &&
-                  audit.auditorIds.includes(currentUser?.id || '') && (
+                {/* وضع التعديل للمراجعين - حين تُعاد الأجوبة إليهم */}
+                {answersReturned && audit.currentStage === 2 &&
+                  isOnAuditTeam(audit, currentUser?.id) && (
                     <div className="p-4 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
@@ -3961,16 +4240,27 @@ export default function AuditDetailPage() {
                       {language === 'ar' ? <ArrowLeft className="h-4 w-4 mr-2" /> : <ArrowRight className="h-4 w-4 ml-2" />}
                     </Button>
                   )}
-                  {isWaitingForApproval && (
+                  {isWaitingForApproval && !stageBelongsToSomeoneElse && (
                     <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
                       <Clock className="h-4 w-4" />
                       <span className="text-sm font-medium">
-                        {language === 'ar' ? 'بانتظار موافقة إدارة الجودة' : 'Waiting for QMS Approval'}
+                        {language === 'ar' ? 'بانتظار اعتماد إدارة الجودة للأجوبة' : 'Waiting on quality approval of the answers'}
+                      </span>
+                    </div>
+                  )}
+                  {/* هذه ليست مرحلتك - توزيع مسؤوليات، لا عطل. تُقال بهدوء بلون محايد. */}
+                  {stageBelongsToSomeoneElse && (
+                    <div className="flex items-center gap-2 text-[var(--foreground-secondary)] max-w-md">
+                      <User className="h-4 w-4 flex-shrink-0" />
+                      <span className="text-sm">
+                        {language === 'ar'
+                          ? `المسؤول عن هذه المرحلة: ${getResponsiblePerson()}`
+                          : `This stage belongs to ${getResponsiblePerson()}`}
                       </span>
                     </div>
                   )}
                   {/* Warning message when can't move to next stage */}
-                  {!canMoveToNext && !isWaitingForApproval && audit.currentStage < workflowStages.length - 1 && cantMoveReason && (
+                  {!canMoveToNext && !stageBelongsToSomeoneElse && !isWaitingForApproval && cantMoveReason && (
                     <div className="flex items-center gap-2 text-red-600 dark:text-red-400 max-w-md">
                       <AlertCircle className="h-4 w-4 flex-shrink-0" />
                       <span className="text-sm">
@@ -4577,56 +4867,6 @@ export default function AuditDetailPage() {
           </div>
         )}
 
-        {/* Approval Modal */}
-        {showApprovalModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowApprovalModal(false)} />
-            <div className="relative z-50 w-full max-w-md rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">
-                  {language === 'ar' ? 'موافقة إدارة الجودة' : 'QMS Approval'}
-                </h2>
-                <Button variant="ghost" size="icon-sm" onClick={() => setShowApprovalModal(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-              <div className="mb-4">
-                <p className="text-sm text-[var(--foreground-secondary)] mb-2">{audit.number}</p>
-                <p className="font-medium">{language === 'ar' ? audit.titleAr : audit.titleEn}</p>
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">
-                  {language === 'ar' ? 'التعليق' : 'Comment'}
-                </label>
-                <textarea
-                  rows={3}
-                  value={approvalComment}
-                  onChange={(e) => setApprovalComment(e.target.value)}
-                  placeholder={language === 'ar' ? 'أضف تعليقك هنا...' : 'Add your comment here...'}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="outline"
-                  className="border-red-500 text-red-500 hover:bg-red-50"
-                  onClick={() => handleApproval(false)}
-                >
-                  <ThumbsDown className="h-4 w-4 mx-1" />
-                  {language === 'ar' ? 'رفض' : 'Reject'}
-                </Button>
-                <Button
-                  className="bg-green-600 hover:bg-green-700"
-                  onClick={() => handleApproval(true)}
-                >
-                  <ThumbsUp className="h-4 w-4 mx-1" />
-                  {language === 'ar' ? 'موافقة' : 'Approve'}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Extension Request Modal */}
         {showExtensionModal && selectedFinding && (
           <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -5111,6 +5351,31 @@ export default function AuditDetailPage() {
                           </option>
                         ))}
                       </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">
+                        {language === 'ar' ? 'الجهة المُراجَع عليها *' : 'Auditee *'}
+                      </label>
+                      <select
+                        value={editAuditForm.auditeeId}
+                        onChange={(e) => setEditAuditForm({ ...editAuditForm, auditeeId: e.target.value })}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                      >
+                        <option value="">{language === 'ar' ? 'غير محددة' : 'Not set'}</option>
+                        {auditeeCandidates.map(user => (
+                          <option key={user.id} value={user.id}>
+                            {language === 'ar' ? user.fullNameAr : user.fullNameEn}
+                            {user.jobTitleAr || user.jobTitleEn
+                              ? ` - ${language === 'ar' ? (user.jobTitleAr || user.jobTitleEn) : (user.jobTitleEn || user.jobTitleAr)}`
+                              : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-[var(--foreground-secondary)] mt-1">
+                        {language === 'ar'
+                          ? 'المسؤول عن الرد على الملاحظات وتنفيذ الإجراءات التصحيحية. بدونه لا تستطيع الإدارة الرد على شيء - قاعدة البيانات ترفض كتابتها.'
+                          : 'The person who answers findings and carries out corrective actions. Without one, the department cannot write to this audit at all - the database rejects it.'}
+                      </p>
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-1">
