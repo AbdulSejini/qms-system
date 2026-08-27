@@ -6,7 +6,7 @@ import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
-import { isIndependentOf } from '@/lib/audit-workflow';
+import { isIndependentOf, deriveAuditeeId } from '@/lib/audit-workflow';
 import {
   ArrowRight,
   ArrowLeft,
@@ -235,6 +235,9 @@ export default function NewAuditPage() {
   // Kept on screen with a retry so the operator is never left believing the plan
   // was updated - and so they cannot press "create" again and get a duplicate.
   const [linkFailure, setLinkFailure] = useState<{ auditId: string } | null>(null);
+
+  // سبب تعذُّر الحفظ - يُعرض للمستخدم بدل أن تفشل العملية بصمت
+  const [submitError, setSubmitError] = useState('');
   const [isRetryingLink, setIsRetryingLink] = useState(false);
 
   // The parameters are read from window after mount rather than through
@@ -682,11 +685,28 @@ export default function NewAuditPage() {
     if (isSubmitting) return;
     if (!validateStep(currentStep)) return;
 
+    setSubmitError('');
     setIsSubmitting(true);
 
     try {
       // Determine initial status - quality manager doesn't need approval for their own audits
       const initialStatus = isQualityManager ? 'planning' : 'pending_approval';
+
+      // الجهة المُراجَع عليها: شخص واحد مسمّى - رئيس القسم حين تُراجَع أقسام بعينها،
+      // وإلا فمدير الإدارة.
+      //
+      // هذا الحقل هو ما تفحصه firestore.rules لتقبل كتابةً من الجهة المُراجَع عليها،
+      // ولم يكن يُكتب على أي مراجعة في تاريخ النظام: القاعدة تسأل عن auditeeId، والحقل
+      // فارغ دائماً، فكل ردّ من الإدارة على ملاحظة كان يُرفض من قاعدة البيانات بينما
+      // تُظهر الشاشة أنه حُفظ. حلقة الإجراءات التصحيحية كانت مقطوعة من طرفها الأهم.
+      const auditeeId = deriveAuditeeId(allUsers, formData.departmentId, formData.sectionId || undefined);
+      if (!auditeeId) {
+        setSubmitError(language === 'ar'
+          ? 'لا يوجد مدير معيَّن للإدارة المختارة (أو رئيس للقسم المختار)، والمراجعة تحتاج جهةً مُراجَعاً عليها تستطيع الرد على الملاحظات. عيِّن المسؤول من صفحة الإدارات ثم أعد المحاولة.'
+          : 'The selected department has no assigned manager (or the selected section no head). An audit needs a named auditee who can respond to its findings. Assign one on the departments page and try again.');
+        setIsSubmitting(false);
+        return;
+      }
 
       // Create audit object with questions formatted for audit detail page
       const questionsFormatted = formData.questions.map(q => ({
@@ -705,6 +725,7 @@ export default function NewAuditPage() {
         departmentId: formData.departmentId,
         sectionId: formData.sectionId || undefined,
         leadAuditorId: formData.leadAuditorId,
+        auditeeId,
         scope: formData.scope,
         objective: formData.objective,
         status: initialStatus,
@@ -746,6 +767,7 @@ export default function NewAuditPage() {
         sectionId: audit.sectionId,
         leadAuditorId: audit.leadAuditorId,
         teamMemberIds: audit.auditorIds,
+        auditeeId: audit.auditeeId,
         startDate: audit.startDate,
         endDate: audit.endDate,
         objectives: audit.objective,
@@ -759,6 +781,9 @@ export default function NewAuditPage() {
 
       if (!auditId) {
         console.error('Failed to create audit');
+        setSubmitError(language === 'ar'
+          ? 'تعذّر حفظ المراجعة في قاعدة البيانات. تحقق من الاتصال ثم أعد المحاولة.'
+          : 'The audit could not be saved. Check your connection and try again.');
         setIsSubmitting(false);
         return;
       }
@@ -1983,6 +2008,21 @@ export default function NewAuditPage() {
               </div>
             </div>
           </>
+        )}
+
+        {/* لم تُحفظ المراجعة - والسبب معروض، لا مبتلَع في سجل المتصفح */}
+        {submitError && (
+          <div className="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-4 mb-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-medium text-red-800 dark:text-red-200">
+                  {language === 'ar' ? 'لم تُنشأ المراجعة' : 'The audit was not created'}
+                </p>
+                <p className="text-sm text-red-700 dark:text-red-300 mt-1">{submitError}</p>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* The audit was saved but the plan line could not be updated */}
