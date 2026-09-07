@@ -40,6 +40,7 @@ import {
   addNotification,
   getAllUsers,
   getAnnualPlanById,
+  planItemAuditExists,
   updateAnnualPlan,
 } from '@/lib/firestore';
 
@@ -173,7 +174,10 @@ export default function NewAuditPage() {
   // The audit was created but its id could not be written onto the plan line.
   // Kept on screen with a retry so the operator is never left believing the plan
   // was updated - and so they cannot press "create" again and get a duplicate.
+  // بند خطة مرتبط بمراجعة قائمة - يُعرض بدل إنشاء مراجعة ثانية
+  const [duplicatePlanLink, setDuplicatePlanLink] = useState<{ auditId: string } | null>(null);
   const [linkFailure, setLinkFailure] = useState<{ auditId: string } | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const [isRetryingLink, setIsRetryingLink] = useState(false);
 
   // The parameters are read from window after mount rather than through
@@ -215,6 +219,25 @@ export default function NewAuditPage() {
 
   // Write the new audit's id onto the planned line it came from.
   // Returns true when the line now carries this audit id.
+  // هل بند الخطة مرتبط بمراجعة قائمة بالفعل؟ يُسأل قبل الإنشاء، لا بعده.
+  //
+  // linkAuditToPlanItem كانت ترجع true حين تجد البند مرتبطاً - أي أن المراجعة الثانية
+  // تُنشأ فعلاً، ولا تُربط، ويُبلَّغ المستخدم بالنجاح. النتيجة مراجعتان لبند مخطط واحد،
+  // إحداهما يتيمة لا تظهر في تقدّم الخطة ولا أحد يعلم أنها ازدواج.
+  const findExistingAuditForPlanLine = async (): Promise<string | null> => {
+    if (!planLink) return null;
+    try {
+      const plan = await getAnnualPlanById(planLink.planId);
+      const target = (plan?.items || []).find(item => item.id === planLink.planItemId);
+      if (!target?.auditId) return null;
+      // بند يشير إلى مراجعة محذوفة هو بند غير مُنفَّذ - يجوز التخطيط له من جديد.
+      // (المعرّف لا يُمحى عند الحذف؛ السبب في تعليق deleteAudit في src/lib/firestore.ts)
+      return (await planItemAuditExists(target.auditId)) ? target.auditId : null;
+    } catch {
+      return null;
+    }
+  };
+
   const linkAuditToPlanItem = async (auditId: string): Promise<boolean> => {
     if (!planLink) return true;
     try {
@@ -226,8 +249,8 @@ export default function NewAuditPage() {
       if (!target) return false;
 
       // Someone linked this line already - leave their audit in place rather than
-      // overwriting it, and treat it as done.
-      if (target.auditId) return true;
+      // overwriting it, and treat it as done. A link to a DELETED audit is not a link.
+      if (target.auditId && (await planItemAuditExists(target.auditId))) return true;
 
       return await updateAnnualPlan(plan.id, {
         items: items.map(item =>
@@ -246,7 +269,11 @@ export default function NewAuditPage() {
   const getUser = (id: string) => allUsers.find(u => u.id === id);
   const getSectionsByDepartment = (deptId: string) => allSections.filter(s => s.departmentId === deptId && s.isActive);
 
-  // Filtered auditors for search
+  // Filtered auditors for search.
+  // كانت التبعية [auditorSearch] وحدها، و`auditors` تتغيّر بتغيّر الإدارة محل المراجعة.
+  // فبعد اختيار إدارة، تبقى القائمة المعروضة هي قائمة ما قبلها - أي أن موظفي الإدارة
+  // التي تُراجَع يظلّون قابلين للاختيار في فريقها، وهو ما يُبطل شرط الاستقلالية الذي
+  // تفرضه isIndependentOf أصلاً.
   const filteredAuditors = useMemo(() => {
     if (!auditorSearch) return auditors;
     const search = auditorSearch.toLowerCase();
@@ -254,7 +281,7 @@ export default function NewAuditPage() {
       a.fullNameAr.toLowerCase().includes(search) ||
       a.fullNameEn.toLowerCase().includes(search)
     );
-  }, [auditorSearch]);
+  }, [auditorSearch, auditors]);
 
   // Add auditor to team
   const addAuditorToTeam = (auditorId: string) => {
@@ -481,6 +508,14 @@ export default function NewAuditPage() {
     setIsSubmitting(true);
 
     try {
+      // بند الخطة مرتبط بمراجعة سابقة؟ توقّف قبل إنشاء نسخة ثانية يتيمة.
+      const alreadyLinked = await findExistingAuditForPlanLine();
+      if (alreadyLinked) {
+        setIsSubmitting(false);
+        setDuplicatePlanLink({ auditId: alreadyLinked });
+        return;
+      }
+
       // Determine initial status - quality manager doesn't need approval for their own audits
       const initialStatus = isQualityManager ? 'planning' : 'pending_approval';
 
@@ -669,12 +704,19 @@ export default function NewAuditPage() {
   const handleRetryPlanLink = async () => {
     if (!linkFailure || isRetryingLink) return;
     setIsRetryingLink(true);
+    setRetryError(null);
     const linked = await linkAuditToPlanItem(linkFailure.auditId);
     setIsRetryingLink(false);
     if (linked) {
       setLinkFailure(null);
       router.push(`/audits/${linkFailure.auditId}`);
+      return;
     }
+    // فشل ثانٍ كان صامتاً تماماً: يتوقف الدوران ولا شيء يتغيّر ولا رسالة، فيضغط
+    // المستخدم الزر مرة بعد مرة. الخيار الصحيح هنا هو الربط لاحقاً من صفحة الخطط.
+    setRetryError(language === 'ar'
+      ? 'فشل الربط مرة أخرى. المراجعة محفوظة ولن تضيع - افتحها الآن، واربطها ببند الخطة لاحقاً من صفحة الخطط السنوية.'
+      : 'The link failed again. The audit is saved and will not be lost - open it now and link it to the plan line later from the annual plans page.');
   };
 
   // Step instructions
@@ -1636,6 +1678,38 @@ export default function NewAuditPage() {
         )}
 
         {/* The audit was saved but the plan line could not be updated */}
+        {/* بند الخطة مرتبط بمراجعة قائمة - لا تُنشأ ثانية */}
+        {duplicatePlanLink && (
+          <>
+            <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="w-full max-w-lg rounded-2xl bg-[var(--card)] p-6 shadow-xl">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+                    <AlertCircle className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+                  </div>
+                  <h2 className="text-lg font-bold text-[var(--foreground)]">
+                    {language === 'ar' ? 'لهذا البند مراجعة قائمة بالفعل' : 'This plan line already has an audit'}
+                  </h2>
+                </div>
+                <p className="text-sm text-[var(--foreground-secondary)] mb-6">
+                  {language === 'ar'
+                    ? 'بند الخطة السنوية الذي بدأت منه مرتبط بمراجعة أُنشئت سابقاً. لم تُنشأ مراجعة جديدة - فإنشاء ثانية يعني مراجعتين لبند واحد، إحداهما لا تظهر في تقدّم الخطة.'
+                    : 'The annual plan line you started from is already linked to an audit. Nothing was created - a second one would mean two audits for one planned line, with one of them invisible to plan progress.'}
+                </p>
+                <div className="flex items-center gap-3">
+                  <Button variant="outline" className="flex-1" onClick={() => { setDuplicatePlanLink(null); router.push('/plans'); }}>
+                    {language === 'ar' ? 'العودة للخطة' : 'Back to the plan'}
+                  </Button>
+                  <Button className="flex-1" onClick={() => { const id = duplicatePlanLink.auditId; setDuplicatePlanLink(null); router.push(`/audits/${id}`); }}>
+                    {language === 'ar' ? 'فتح المراجعة القائمة' : 'Open the existing audit'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
         {linkFailure && (
           <>
             <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
@@ -1662,6 +1736,12 @@ export default function NewAuditPage() {
                     ? 'حُفظت المراجعة بنجاح، لكن تسجيل رقمها على بند الخطة السنوية فشل، فستظل نسبة إنجاز الخطة دون هذه المراجعة. أعد المحاولة، أو افتح المراجعة الآن وأعد الربط لاحقاً من صفحة الخطط.'
                     : 'The audit was saved, but recording it on the annual plan line failed, so the plan progress will not count it yet. Retry the link, or open the audit now and link it later from the plans page.'}
                 </p>
+
+                {retryError && (
+                  <p role="alert" className="mb-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+                    {retryError}
+                  </p>
+                )}
 
                 <div className="flex items-center gap-3">
                   <Button

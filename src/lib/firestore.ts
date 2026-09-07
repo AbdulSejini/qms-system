@@ -880,7 +880,27 @@ export const updateAudit = async (auditId: string, updates: Partial<Audit>): Pro
   }
 };
 
-// Delete audit
+// Delete audit.
+//
+// The plan line that spawned this audit is deliberately NOT rewritten here.
+//
+// AnnualPlanItem.auditId is written when an audit is created from a planned line and is
+// never cleared, so a deleted audit leaves the plan pointing at something that no longer
+// exists. The obvious fix - clear the field on delete - needs a firestore.rules branch
+// permitting `id -> ''` on an approved plan, and adding one pushes the ruleset over the
+// 1000-EXPRESSION CEILING. That is not a theoretical limit here: this project has already
+// had plan approval die in production because of it, and Firestore reports the overrun as
+// PERMISSION_DENIED, indistinguishable from a real authorization failure. Measured on the
+// emulator, the mirrored rule broke seeding outright, and a merged single-evaluation
+// version still answered from the ceiling rather than from the rule.
+//
+// So the stale id is left in place and made HARMLESS instead, by the two things that
+// actually read it - see planItemAuditExists() below:
+//   - plan progress counts a line as delivered only when its audit still exists;
+//   - the new-audit wizard treats a line pointing at a missing audit as unlinked, so the
+//     line can be planned again.
+// Nothing else consults the field. If the rules ever gain headroom, unlinking here is the
+// tidier answer; until then this costs nothing and cannot take the system down.
 export const deleteAudit = async (auditId: string): Promise<boolean> => {
   try {
     const auditRef = doc(db, COLLECTIONS.AUDITS, auditId);
@@ -889,6 +909,20 @@ export const deleteAudit = async (auditId: string): Promise<boolean> => {
   } catch (error) {
     console.error('Error deleting audit:', error);
     return false;
+  }
+};
+
+// Does the audit a plan line points at still exist? A line whose audit was deleted is an
+// UNDELIVERED line, and must be plannable again.
+export const planItemAuditExists = async (auditId: string | undefined): Promise<boolean> => {
+  if (!auditId) return false;
+  try {
+    return (await getDoc(doc(db, COLLECTIONS.AUDITS, auditId))).exists();
+  } catch (error) {
+    // On a read failure, assume it exists: refusing to re-plan a line is recoverable,
+    // silently creating a duplicate audit is not.
+    console.error('Could not check whether a planned audit still exists:', error);
+    return true;
   }
 };
 

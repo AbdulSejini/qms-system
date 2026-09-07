@@ -11,6 +11,7 @@ import { isIndependentOf } from '@/lib/audit-workflow';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   subscribeToAnnualPlans,
+  subscribeToAudits,
   createAnnualPlan,
   updateAnnualPlan,
   deleteAnnualPlan,
@@ -101,6 +102,15 @@ function PlansPageContent() {
       const sorted = [...firestorePlans].sort((a, b) => b.year - a.year);
       setPlans(sorted);
       setPlansLoaded(true);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // المراجعات القائمة فعلاً - يُقاس بها إنجاز الخطة، لا بوجود معرّف على البند
+  const [liveAuditIds, setLiveAuditIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const unsubscribe = subscribeToAudits(audits => {
+      setLiveAuditIds(new Set(audits.map(a => a.id)));
     });
     return () => unsubscribe();
   }, []);
@@ -341,12 +351,20 @@ function PlansPageContent() {
   // عمود إجراءات البنود: يظهر للتعديل، ولإنشاء المراجعة من بنود الخطة المعتمدة،
   // ولفتح المراجعة المرتبطة ببند سبق تنفيذه
   const showItemActions = (plan: AnnualPlan): boolean =>
-    canEditPlan(plan) || plan.status === 'approved' || (plan.items || []).some(i => !!i.auditId);
+    canEditPlan(plan) || plan.status === 'approved' || (plan.items || []).some(isItemDelivered);
 
-  // نسبة الإنجاز: كم بنداً صار له مراجعة فعلية
+  // نسبة الإنجاز: كم بنداً صار له مراجعة فعلية - قائمة، لا محذوفة.
+  //
+  // كان الشرط `!!i.auditId` وحده. معرّف المراجعة يُكتب على البند عند الإنشاء ولا يُمحى عند
+  // الحذف (السبب في تعليق deleteAudit في src/lib/firestore.ts)، فكانت الخطة تحتسب بنداً
+  // مُنفَّذاً وتربط بصفحة ميتة لمراجعة لم تعد موجودة. البند الذي حُذفت مراجعته بند لم
+  // يُنفَّذ بعد.
+  const isItemDelivered = (item: AnnualPlanItem): boolean =>
+    !!item.auditId && liveAuditIds.has(item.auditId);
+
   const getPlanProgress = (plan: AnnualPlan) => {
     const items = plan.items || [];
-    const created = items.filter(i => !!i.auditId).length;
+    const created = items.filter(isItemDelivered).length;
     const total = items.length;
     const percent = total > 0 ? Math.round((created / total) * 100) : 0;
     return { created, total, percent };
