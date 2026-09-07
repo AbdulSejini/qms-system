@@ -6,7 +6,7 @@ import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
-import { isIndependentOf } from '@/lib/audit-workflow';
+import { isIndependentOf, resolveAuditeeId } from '@/lib/audit-workflow';
 import {
   ArrowRight,
   ArrowLeft,
@@ -477,6 +477,15 @@ export default function NewAuditPage() {
       // Determine initial status - quality manager doesn't need approval for their own audits
       const initialStatus = isQualityManager ? 'planning' : 'pending_approval';
 
+      // من تُجرى المراجعة عليه - يُحسم عند الإنشاء، لا لاحقاً.
+      // Without this the audited department is not a party to its own audit: firestore.rules
+      // admits them through `auditeeId` and notify() drops any recipient that is undefined,
+      // so an absent value denies them every write and discards every message to them.
+      const auditeeId = resolveAuditeeId(
+        { departmentId: formData.departmentId, sectionId: formData.sectionId || undefined },
+        { departments: allDepartments, sections: allSections, users: allUsers }
+      );
+
       // Create audit object with questions formatted for audit detail page
       const questionsFormatted = formData.questions.map(q => ({
         ...q,
@@ -535,6 +544,7 @@ export default function NewAuditPage() {
         sectionId: audit.sectionId,
         leadAuditorId: audit.leadAuditorId,
         teamMemberIds: audit.auditorIds,
+        auditeeId,
         startDate: audit.startDate,
         endDate: audit.endDate,
         objectives: audit.objective,
@@ -605,6 +615,22 @@ export default function NewAuditPage() {
             auditId: auditId,
           });
         }
+      }
+
+      // الجهة المُراجَع عليها تُبلَّغ بأن مراجعة ستُجرى عليها - وهي طرف، لا موضوع.
+      // The auditee is told at creation, not at the end: they have to know an audit is coming
+      // in order to accept or contest its date.
+      if (auditeeId && auditeeId !== currentUser?.id) {
+        await addNotification({
+          type: 'audit_scheduled',
+          title: language === 'ar' ? 'مراجعة مقررة على إدارتكم' : 'Audit Scheduled for Your Department',
+          message: language === 'ar'
+            ? `تم تسجيل مراجعة "${formData.titleAr}" على إدارتكم بتاريخ ${formData.startDate}.`
+            : `Audit "${formData.titleEn}" has been scheduled for your department on ${formData.startDate}.`,
+          recipientId: auditeeId,
+          senderId: currentUser?.id,
+          auditId,
+        });
       }
 
       setShowConfirmModal(false);

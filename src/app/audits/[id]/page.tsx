@@ -59,6 +59,7 @@ import type {
   AuditFinding as Finding, FindingComment, DepartmentResponse,
 } from '@/types';
 import { FINDING_CATEGORY_A, FINDING_CATEGORY_B } from '@/types';
+import { resolveAuditeeId } from '@/lib/audit-workflow';
 import { OneDrivePicker } from '@/components/ui/OneDrivePicker';
 import type { OneDriveFile } from '@/lib/onedrive';
 import { Cloud } from 'lucide-react';
@@ -169,6 +170,9 @@ interface Audit {
   currentStage: number;
   leadAuditorId: string;
   auditorIds: string[]; // يُحمّل من teamMemberIds في Firestore ويُحفظ إليه
+  // الجهة المُراجَع عليها - رئيس القسم أو مدير الإدارة محل المراجعة.
+  // firestore.rules تمنحه صلاحية الكتابة عبر هذا الحقل، وبدونه يُرفض كل ما يكتبه.
+  auditeeId?: string;
   startDate: string;
   endDate: string;
   scope: string;
@@ -330,6 +334,7 @@ export default function AuditDetailPage() {
               : firestoreAudit.currentStage ?? getStageFromStatus(firestoreAudit.status),
             leadAuditorId: firestoreAudit.leadAuditorId,
             auditorIds: firestoreAudit.teamMemberIds || [],
+            auditeeId: firestoreAudit.auditeeId,
             startDate: firestoreAudit.startDate,
             endDate: firestoreAudit.endDate,
             scope: firestoreAudit.scope || '',
@@ -393,6 +398,7 @@ export default function AuditDetailPage() {
       sectionId: updatedAudit.sectionId,
       leadAuditorId: updatedAudit.leadAuditorId,
       teamMemberIds: updatedAudit.auditorIds,
+      auditeeId: updatedAudit.auditeeId,
       startDate: updatedAudit.startDate,
       endDate: updatedAudit.endDate,
       objectives: updatedAudit.objective,
@@ -1348,6 +1354,15 @@ export default function AuditDetailPage() {
 
     const allAuditorIds = [editAuditForm.leadAuditorId, ...editAuditForm.auditorIds.filter(id => id !== editAuditForm.leadAuditorId)];
 
+    // الجهة المُراجَع عليها تتبع الإدارة والقسم: تغييرهما يغيّر من يُحاسَب على المراجعة،
+    // ومن له حق الكتابة عليها في firestore.rules. تُعاد الاشتقاق دائماً حتى لا يبقى
+    // مدير الإدارة السابقة طرفاً في مراجعة لم تعد تخصّه.
+    const auditeeId = resolveAuditeeId(
+      { departmentId: editAuditForm.departmentId, sectionId: editAuditForm.sectionId || undefined },
+      { departments: allDepartments, sections: allSections, users: allUsers }
+    );
+    if (auditeeId !== audit.auditeeId) changes.push('تم تغيير الجهة المُراجَع عليها');
+
     let updatedAudit: Audit = {
       ...audit,
       titleAr: editAuditForm.titleAr,
@@ -1358,6 +1373,7 @@ export default function AuditDetailPage() {
       sectionId: editAuditForm.sectionId || undefined,
       leadAuditorId: editAuditForm.leadAuditorId,
       auditorIds: allAuditorIds,
+      auditeeId,
       startDate: editAuditForm.startDate,
       endDate: editAuditForm.endDate,
     };

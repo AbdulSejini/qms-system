@@ -27,7 +27,9 @@ import {
   ApprovalGate,
   ApprovalGateStatus,
   AuditScheduleConfirmation,
+  Department,
   SchedulePartyResponse,
+  Section,
   User,
 } from '@/types';
 import { updateAudit, addNotification } from './firestore';
@@ -410,4 +412,62 @@ export const decideGate = async (
   });
 
   return { ok: true };
+};
+
+// ===========================================
+// Who is the auditee? - من هي الجهة المُراجَع عليها
+// ===========================================
+//
+// `auditeeId` is the single field that makes the audited department a PARTY to the audit
+// rather than a subject of it. Everything downstream hangs off it:
+//
+//   - firestore.rules `belongsToAudit()` admits the auditee through
+//     `uid == resource.data.auditeeId`. While the field is absent that clause is
+//     `appUserId() == ''`, which is never true, so the audited department's manager is
+//     DENIED every write on the audit - their corrective action, their response to a
+//     finding, their extension request.
+//   - `notify()` below drops any notification whose recipient is undefined, so every
+//     message addressed to the auditee was silently discarded.
+//   - `auditParties()` filters falsy, so the auditee was never in a recipient list.
+//
+// Nothing wrote it. The resolver below is the one definition of who that person is, so
+// the wizard, the edit form and the backfill script cannot disagree.
+//
+// WHO IT IS. The audit is scoped to a department and optionally a section. The person
+// answerable for it is the head of the narrowest scoped unit: the section head when the
+// audit is scoped to a section, the department manager otherwise. Both are followed by a
+// role-based fallback, because `managerId` / `headId` are optional fields and an
+// organisation chart with a gap must not silently produce an audit with no auditee.
+export const resolveAuditeeId = (
+  scope: { departmentId: string; sectionId?: string },
+  org: {
+    departments: Pick<Department, 'id' | 'managerId'>[];
+    sections: Pick<Section, 'id' | 'departmentId' | 'headId'>[];
+    users: Pick<User, 'id' | 'role' | 'departmentId' | 'sectionId' | 'isActive'>[];
+  }
+): string | undefined => {
+  if (!scope.departmentId) return undefined;
+
+  const isUsable = (id: string | undefined): boolean =>
+    !!id && org.users.some(u => u.id === id && u.isActive);
+
+  // 1. القسم: رئيس القسم المعيَّن، ثم أي رئيس قسم نشط فيه
+  if (scope.sectionId) {
+    const section = org.sections.find(s => s.id === scope.sectionId);
+    if (isUsable(section?.headId)) return section!.headId;
+
+    const head = org.users.find(
+      u => u.isActive && u.role === 'section_head' && u.sectionId === scope.sectionId
+    );
+    if (head) return head.id;
+  }
+
+  // 2. الإدارة: المدير المعيَّن، ثم أي مدير إدارة نشط فيها
+  const department = org.departments.find(d => d.id === scope.departmentId);
+  if (isUsable(department?.managerId)) return department!.managerId;
+
+  const manager = org.users.find(
+    u => u.isActive && u.role === 'department_manager' && u.departmentId === scope.departmentId
+  );
+  return manager?.id;
 };
