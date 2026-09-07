@@ -167,7 +167,10 @@ export default function AuditsPage() {
   const auditors = useMemo(() => allUsers.filter(u => u.canBeAuditor && u.isActive), [allUsers]);
 
   // Check if current user is quality manager
-  const isQualityManager = currentUser?.role === 'quality_manager';
+  // مدير النظام مدير جودة هنا أيضاً - انظر التعليق في صفحة تفاصيل المراجعة.
+  // كان يُعدّ معتمِداً في لوحة التحكم ولا يجد زر اعتماد أو رفض في هذه القائمة.
+  const isQualityManager =
+    currentUser?.role === 'quality_manager' || currentUser?.role === 'system_admin';
 
   // آخر إجراء فشل - يُعرض بدل أن يمر بصمت وكأنه نجح.
   // معرَّف قبل الاشتراك أدناه لأن معالج الخطأ فيه يستدعيه.

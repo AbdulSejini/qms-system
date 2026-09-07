@@ -713,8 +713,21 @@ export default function AuditDetailPage() {
   // or a quality manager's approval would be overwritten by the next save an auditor makes
   // from a page they loaded before it.
 
-  // من يبتّ في الاعتماد - كل مديري الجودة النشطين، ومدير النظام إن لم يوجد أحد
-  const gateDeciderIds = useMemo(() => gateDecidersIn(allUsers), [allUsers]);
+  // من يبتّ في الاعتماد - كل مديري الجودة النشطين، ومدير النظام إن لم يوجد أحد.
+  //
+  // تُقرأ من getAllUsers لا من allUsers الآتية من AuthContext: تلك تمر عبر
+  // getVisibleUsers() التي تحذف حسابات النظام، فكان الاحتياط بمدير النظام ميتاً - وهو
+  // بالضبط الحالة التي وُضع لها: نظام بلا مدير جودة نشط.
+  const [deciderPool, setDeciderPool] = useState<typeof allUsers>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getAllUsers().then(us => { if (!cancelled) setDeciderPool(us); });
+    return () => { cancelled = true; };
+  }, []);
+  const gateDeciderIds = useMemo(
+    () => gateDecidersIn(deciderPool.length > 0 ? deciderPool : allUsers),
+    [deciderPool, allUsers]
+  );
 
   const scheduleState = audit ? scheduleOf(audit) : null;
   const myScheduleParty = audit && currentUser ? schedulePartyFor(audit, currentUser.id) : null;
@@ -1683,17 +1696,31 @@ export default function AuditDetailPage() {
   };
 
   // التحقق من الصلاحيات
+  //
+  // THIS CONDITION USED TO CONTAIN A CONTRADICTION:
+  //     currentDecision === 'modification_requested' && currentDecision === null
+  // one value, two different required values - always false. So the whole clause
+  // collapsed to "only while NO decision has been recorded". The moment the quality
+  // manager returned an audit for modification, rejected it or postponed it, they could
+  // never decide on it again: the audit sat in qms_review with no control for anybody -
+  // not the auditor, not the quality manager, not the administrator. A dead end reached
+  // by using the feature exactly as intended.
+  //
+  // A decision may be revisited whenever the audit is still in quality review and has
+  // not been approved. Approval is what moves it on, so it is the only terminal one.
   const canMakeQMSDecision =
-    currentUser?.role === 'quality_manager' &&
+    mayDecideThisAudit &&
     audit?.status === 'qms_review' &&
-    (!audit?.qmsApprovalData?.currentDecision ||
-      audit?.qmsApprovalData?.currentDecision === 'modification_requested' &&
-      audit?.qmsApprovalData?.currentDecision === null);
+    audit?.qmsApprovalData?.currentDecision !== 'approved';
 
+  // المراجع يصحّح حين تُعاد إليه المراجعة - سواء طُلب تعديل أو رُفضت.
+  // 'rejected' كان يترك المراجع بلا صلاحية تعديل، وهو الطرف الوحيد القادر على التصحيح.
   const canEditAudit =
     audit?.status === 'qms_review' &&
-    audit?.qmsApprovalData?.currentDecision === 'modification_requested' &&
-    audit?.auditorIds?.includes(currentUser?.id || '');
+    (audit?.qmsApprovalData?.currentDecision === 'modification_requested' ||
+      audit?.qmsApprovalData?.currentDecision === 'rejected') &&
+    (audit?.auditorIds?.includes(currentUser?.id || '') ||
+      audit?.leadAuditorId === currentUser?.id);
 
   const canReply =
     audit?.status === 'qms_review' &&
@@ -1846,7 +1873,12 @@ export default function AuditDetailPage() {
   const isLeadAuditor = currentUser?.id === audit.leadAuditorId;
 
   // Check if user is quality manager
-  const isQualityManager = currentUser?.role === 'quality_manager';
+  // مدير النظام مدير جودة لكل غرض في هذه الصفحة.
+  // firestore.rules تعامله كذلك (isQualityStaff)، وmayDecideGate كذلك، لكن كل ضابط في
+  // الواجهة كان يطابق النص 'quality_manager' وحده - فكان مدير النظام يُعدّ معتمِداً في
+  // لوحة التحكم ثم لا يجد أي زر اعتماد حين يفتح المراجعة.
+  const isQualityManager =
+    currentUser?.role === 'quality_manager' || currentUser?.role === 'system_admin';
 
   // Check if user is from the audited department
   const isFromAuditedDepartment = currentUser?.departmentId === audit.departmentId;
@@ -1906,6 +1938,10 @@ export default function AuditDetailPage() {
     if (audit.currentStage >= workflowStages.length - 1) return false;
     if (isWaitingForApproval) return false;
     if (!canAdvanceStages) return false;
+    // مراجعة ما زالت تنتظر موافقة مدير الجودة على إنشائها لا تبدأ. كان بالإمكان دفعها
+    // إلى التنفيذ فتُمحى حالة pending_approval ومعها طلب الموافقة نفسه.
+    if (audit.status === 'pending_approval') return false;
+    if (isCancelledAudit(audit.status)) return false;
 
     // Stage 0 (planning) -> Stage 1 (execution)
     // Requires: a date both sides accepted, and a checklist quality has approved
@@ -1943,6 +1979,14 @@ export default function AuditDetailPage() {
 
   // Reason why can't move to next stage
   const cantMoveReason = (() => {
+    if (audit.status === 'pending_approval') {
+      return language === 'ar'
+        ? 'المراجعة ما زالت بانتظار موافقة إدارة الجودة على إنشائها.'
+        : 'This audit is still awaiting the quality department\'s approval of its creation.';
+    }
+    if (isCancelledAudit(audit.status)) {
+      return language === 'ar' ? 'المراجعة ملغاة.' : 'This audit is cancelled.';
+    }
     if (!canAdvanceStages) {
       return language === 'ar'
         ? 'تحريك المراجعة بين المراحل من صلاحية فريق المراجعة وإدارة الجودة.'
