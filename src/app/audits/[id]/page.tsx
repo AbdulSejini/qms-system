@@ -2111,6 +2111,66 @@ export default function AuditDetailPage() {
           </CardContent>
         </Card>
 
+        {/* ============================================================
+            البوابة 1: تأكيد الموعد - المراجع والمراجَع عليه
+            A planned date is a PROPOSAL until both sides accept it. Neither the
+            request nor the response existed anywhere in the UI before.
+           ============================================================ */}
+        {audit.currentStage === 0 && (
+          <div className="mt-6 p-4 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="flex items-start gap-3">
+                <CalendarCheck className={`h-5 w-5 mt-0.5 ${scheduleConfirmed ? 'text-green-600' : scheduleContested ? 'text-amber-600' : 'text-[var(--foreground-secondary)]'}`} />
+                <div>
+                  <p className="font-semibold">
+                    {language === 'ar' ? 'تأكيد موعد المراجعة' : 'Schedule Confirmation'}
+                  </p>
+                  <p className="text-sm text-[var(--foreground-secondary)] mt-1">
+                    {scheduleConfirmed
+                      ? (language === 'ar' ? 'أكّد الطرفان الموعد.' : 'Both parties have accepted the date.')
+                      : scheduleContested
+                        ? (language === 'ar' ? 'طُلب تغيير الموعد - المراجعة لا تمضي حتى يُحسم ذلك.' : 'A reschedule was requested - the audit does not proceed until this is settled.')
+                        : (language === 'ar'
+                            ? `الموعد المقترح ${audit.startDate} في انتظار: ${awaitingScheduleFrom(audit).map(pt => pt === 'auditor' ? 'المراجع' : 'المراجَع عليه').join('، ') || '-'}`
+                            : `Proposed for ${audit.startDate}, awaiting: ${awaitingScheduleFrom(audit).join(', ') || '-'}`)}
+                  </p>
+                  {scheduleState && (['auditor', 'auditee'] as const).map(pt => {
+                    const r = scheduleState[pt];
+                    if (r.status === 'pending') return null;
+                    return (
+                      <p key={pt} className="text-xs text-[var(--foreground-secondary)] mt-1">
+                        {(language === 'ar' ? (pt === 'auditor' ? 'المراجع' : 'المراجَع عليه') : pt)}
+                        {': '}
+                        {r.status === 'accepted'
+                          ? (language === 'ar' ? 'وافق' : 'accepted')
+                          : (language === 'ar' ? `طلب تغيير الموعد - ${r.comment || ''}` : `reschedule requested - ${r.comment || ''}`)}
+                        {r.proposedStartDate ? ` (${r.proposedStartDate})` : ''}
+                      </p>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {canDecideGates && !audit.schedule && (
+                  <Button size="sm" variant="outline" onClick={handleRequestScheduleConfirmation}>
+                    {language === 'ar' ? 'طلب تأكيد الموعد' : 'Request Confirmation'}
+                  </Button>
+                )}
+                {myScheduleParty && scheduleState?.[myScheduleParty].status === 'pending' && (
+                  <>
+                    <Button size="sm" onClick={() => handleRespondToSchedule(true)}>
+                      {language === 'ar' ? 'أوافق على الموعد' : 'Accept Date'}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setShowScheduleModal(true)}>
+                      {language === 'ar' ? 'أطلب موعداً آخر' : 'Request Another Date'}
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Current Stage Instructions */}
         <Card className={`border-2 ${isWaitingForApproval ? 'border-yellow-500' : 'border-[var(--primary)]'}`}>
           <CardContent className="p-6">
@@ -2770,66 +2830,6 @@ export default function AuditDetailPage() {
                 )}
 
                 {/* تنبيه قبل الانتقال للمرحلة التالية */}
-                {/* ============================================================
-                    البوابة 1: تأكيد الموعد - المراجع والمراجَع عليه
-                    A planned date is a PROPOSAL until both sides accept it. Neither the
-                    request nor the response existed anywhere in the UI before.
-                   ============================================================ */}
-                {audit.currentStage === 0 && (
-                  <div className="mt-6 p-4 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]">
-                    <div className="flex items-start justify-between gap-4 flex-wrap">
-                      <div className="flex items-start gap-3">
-                        <CalendarCheck className={`h-5 w-5 mt-0.5 ${scheduleConfirmed ? 'text-green-600' : scheduleContested ? 'text-amber-600' : 'text-[var(--foreground-secondary)]'}`} />
-                        <div>
-                          <p className="font-semibold">
-                            {language === 'ar' ? 'تأكيد موعد المراجعة' : 'Schedule Confirmation'}
-                          </p>
-                          <p className="text-sm text-[var(--foreground-secondary)] mt-1">
-                            {scheduleConfirmed
-                              ? (language === 'ar' ? 'أكّد الطرفان الموعد.' : 'Both parties have accepted the date.')
-                              : scheduleContested
-                                ? (language === 'ar' ? 'طُلب تغيير الموعد - المراجعة لا تمضي حتى يُحسم ذلك.' : 'A reschedule was requested - the audit does not proceed until this is settled.')
-                                : (language === 'ar'
-                                    ? `الموعد المقترح ${audit.startDate} في انتظار: ${awaitingScheduleFrom(audit).map(pt => pt === 'auditor' ? 'المراجع' : 'المراجَع عليه').join('، ') || '-'}`
-                                    : `Proposed for ${audit.startDate}, awaiting: ${awaitingScheduleFrom(audit).join(', ') || '-'}`)}
-                          </p>
-                          {scheduleState && (['auditor', 'auditee'] as const).map(pt => {
-                            const r = scheduleState[pt];
-                            if (r.status === 'pending') return null;
-                            return (
-                              <p key={pt} className="text-xs text-[var(--foreground-secondary)] mt-1">
-                                {(language === 'ar' ? (pt === 'auditor' ? 'المراجع' : 'المراجَع عليه') : pt)}
-                                {': '}
-                                {r.status === 'accepted'
-                                  ? (language === 'ar' ? 'وافق' : 'accepted')
-                                  : (language === 'ar' ? `طلب تغيير الموعد - ${r.comment || ''}` : `reschedule requested - ${r.comment || ''}`)}
-                                {r.proposedStartDate ? ` (${r.proposedStartDate})` : ''}
-                              </p>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {canDecideGates && !audit.schedule && (
-                          <Button size="sm" variant="outline" onClick={handleRequestScheduleConfirmation}>
-                            {language === 'ar' ? 'طلب تأكيد الموعد' : 'Request Confirmation'}
-                          </Button>
-                        )}
-                        {myScheduleParty && scheduleState?.[myScheduleParty].status === 'pending' && (
-                          <>
-                            <Button size="sm" onClick={() => handleRespondToSchedule(true)}>
-                              {language === 'ar' ? 'أوافق على الموعد' : 'Accept Date'}
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={() => setShowScheduleModal(true)}>
-                              {language === 'ar' ? 'أطلب موعداً آخر' : 'Request Another Date'}
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 {/* ============================================================
                     البوابة 2: اعتماد قائمة الأسئلة قبل التنفيذ
                     An audit run against questions nobody approved is an audit whose

@@ -91,13 +91,6 @@ export default function NewAuditPage() {
     clause: string;
   }
 
-  // Get default lead auditor (current user if they can be auditor)
-  const getDefaultLeadAuditorId = () => {
-    if (currentUser && auditors.some(a => a.id === currentUser.id)) {
-      return currentUser.id;
-    }
-    return '';
-  };
 
   // Get today's date in YYYY-MM-DD format
   const getTodayDate = () => {
@@ -111,7 +104,12 @@ export default function NewAuditPage() {
     type: 'internal' as 'internal' | 'external' | 'surveillance' | 'certification',
     departmentId: '',
     sectionId: '',
-    leadAuditorId: getDefaultLeadAuditorId(),
+    // كان هنا getDefaultLeadAuditorId() وهي تقرأ `auditors` المعرَّفة بـ const أدناه.
+    // وسيط useState يُقيَّم في كل رندر، فكان الوصول يقع في المنطقة الميتة الزمنية
+    // (TDZ) ويُلقي ReferenceError في أول رندر يكون فيه currentUser غير فارغ - أي
+    // في كل مرة يُفتح فيها إنشاء مراجعة جديدة بعد تحميل المستخدم. الحقل يبدأ فارغاً
+    // ويُملأ من useEffect أدناه، بعد أن تصبح قائمة المراجعين موجودة فعلاً.
+    leadAuditorId: '',
     auditorIds: [] as string[],
     startDate: getTodayDate(),
     endDate: getTodayDate(), // Same day by default
@@ -134,6 +132,15 @@ export default function NewAuditPage() {
       ),
     [allUsers, formData.departmentId, formData.sectionId]
   );
+
+  // رئيس الفريق الافتراضي: المستخدم الحالي إن كان مؤهلاً لمراجعة هذه الإدارة.
+  // يُضبط بعد حساب `auditors`، لا قبله.
+  useEffect(() => {
+    if (formData.leadAuditorId) return;
+    if (currentUser && auditors.some(a => a.id === currentUser.id)) {
+      setFormData(prev => (prev.leadAuditorId ? prev : { ...prev, leadAuditorId: currentUser.id }));
+    }
+  }, [auditors, currentUser, formData.leadAuditorId]);
 
   // Question form state
   const [newQuestion, setNewQuestion] = useState({ questionAr: '', questionEn: '', clause: '' });

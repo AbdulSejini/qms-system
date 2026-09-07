@@ -280,6 +280,69 @@ export default function DashboardPage() {
         });
       });
 
+    // ============================================================
+    // ما ينتظر الأدوار الأخرى - كان لا يظهر لأحد.
+    //
+    // Everything above is gated on canApproveAudits, which DEFAULT_PERMISSIONS grants to
+    // system_admin and quality_manager alone. Every other role - the auditor waiting to
+    // accept a date or fix a returned checklist, the department manager who has to
+    // confirm a date, answer a finding or act on a corrective action - opened the
+    // dashboard and was told, in a calm empty state, that nothing was waiting on them.
+    // There was no inbox for them anywhere in the product: they had to already know the
+    // audit's URL. "The approvals never arrive" is as often no inbox as a failed write.
+    // ============================================================
+    const openAudits = rawAudits.filter(a => a.status !== 'completed' && a.status !== 'cancelled');
+    const titleOf = (a: any) => language === 'ar' ? (a.titleAr || 'مراجعة') : (a.titleEn || 'Audit');
+    const push = (a: any, subtitleAr: string, subtitleEn: string, suffix: string) => {
+      items.push({
+        id: `audit-${a.id}-${suffix}`,
+        kind: 'audit',
+        title: titleOf(a),
+        subtitle: language === 'ar' ? subtitleAr : subtitleEn,
+        href: `/audits/${a.id}`,
+      });
+    };
+
+    openAudits.forEach(a => {
+      const onTeam = a.leadAuditorId === currentUser.id ||
+        (a.teamMemberIds || []).includes(currentUser.id) ||
+        (a.auditorIds || []).includes(currentUser.id);
+      const isAuditee = a.auditeeId === currentUser.id;
+      if (!onTeam && !isAuditee) return;
+
+      // 1. الموعد ينتظر ردّي
+      const myParty = onTeam ? 'auditor' : 'auditee';
+      const myResponse = a.schedule?.[myParty];
+      if (myResponse?.status === 'pending') {
+        push(a, 'بانتظار تأكيدك لموعد المراجعة', 'Awaiting your confirmation of the audit date', 'schedule');
+      }
+
+      // 2. قائمة أسئلة أُعيدت للتعديل - على المراجع
+      if (onTeam && a.questionsGate?.status === 'rejected') {
+        push(a, 'أُعيدت قائمة الأسئلة للتعديل', 'The checklist was returned for revision', 'questions-rejected');
+      }
+
+      // 3. أجوبة أُعيدت للتعديل - على المراجع
+      if (onTeam && a.answersGate?.status === 'rejected') {
+        push(a, 'أُعيدت الأجوبة للتعديل', 'The answers were returned for revision', 'answers-rejected');
+      }
+
+      // 4. ملاحظات تنتظر ردّ الإدارة المُراجَعة
+      if (isAuditee) {
+        const awaiting = (a.findings || []).filter(
+          (f: any) => f.status !== 'closed' && !f.departmentResponse
+        ).length;
+        if (awaiting > 0) {
+          push(
+            a,
+            `${awaiting} ملاحظة تنتظر ردّ إدارتك`,
+            `${awaiting} finding(s) awaiting your department's response`,
+            'findings'
+          );
+        }
+      }
+    });
+
     return items;
   }, [rawAudits, rawPlans, departments, currentUser, hasPermission, language]);
 

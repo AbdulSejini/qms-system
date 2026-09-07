@@ -148,6 +148,11 @@ interface Audit {
   };
   createdAt: string;
   createdBy?: string;
+  // الجهة المُراجَع عليها والبوابات الثلاث - تُقرأ لتحديد ما يظهر لمن، ولا تُكتب من هنا
+  auditeeId?: string;
+  schedule?: FirestoreAudit['schedule'];
+  questionsGate?: FirestoreAudit['questionsGate'];
+  answersGate?: FirestoreAudit['answersGate'];
 }
 
 // No demo data - start with empty audits
@@ -195,6 +200,10 @@ export default function AuditsPage() {
         findings: fa.findings || [],
         createdAt: fa.createdAt,
         createdBy: fa.createdBy,
+        auditeeId: fa.auditeeId,
+        schedule: fa.schedule,
+        questionsGate: fa.questionsGate,
+        answersGate: fa.answersGate,
       }));
       setAuditsData(convertedAudits);
       setActionError(null);
@@ -332,6 +341,20 @@ export default function AuditsPage() {
   ];
 
   // Filter and sort audits
+  // Check if user is an auditor in an audit
+  const isUserAuditor = (audit: Audit) => {
+    return audit.leadAuditorId === currentUser?.id ||
+      audit.auditorIds?.includes(currentUser?.id || '') ||
+      audit.createdBy === currentUser?.id;
+  };
+
+  // Check if user is an auditee (their department is being audited)
+  // الجهة المُراجَع عليها: الشخص المسمّى في auditeeId، أو أي موظف في الإدارة محل المراجعة
+  const isNamedAuditee = (audit: Audit) => !!currentUser && audit.auditeeId === currentUser.id;
+  const isUserAuditee = (audit: Audit) => {
+    return isNamedAuditee(audit) || audit.departmentId === currentUser?.departmentId;
+  };
+
   const filteredAudits = useMemo(() => {
     // First filter by user access and view mode
     const accessibleAudits = auditsData.filter(audit => {
@@ -345,7 +368,7 @@ export default function AuditsPage() {
 
       if (viewMode === 'as_auditee') {
         if (!isUserAuditee(audit)) return false;
-        // Auditee can see after QMS approval (stage 3+) or if department head (stage 2+)
+        if (isNamedAuditee(audit)) return true;   // من أول يوم - عليه تأكيد الموعد
         if (audit.currentStage >= 3) return true;
         if ((currentUser?.role === 'department_manager' || currentUser?.role === 'section_head') && audit.currentStage >= 2) return true;
         return false;
@@ -361,12 +384,23 @@ export default function AuditsPage() {
       // User can see audits where they are part of the team
       if (audit.auditorIds?.includes(currentUser?.id || '')) return true;
 
-      // User can see audits where their department is being audited (auditee)
-      // Only show after QMS approval (currentStage >= 3) or if user is department head
+      // المراجع الخارجي: يرى البرنامج كاملاً ولا يكتب شيئاً - وهذا هو تعريف دوره.
+      // canViewAllData كانت ممنوحة له في DEFAULT_PERMISSIONS ولا يقرؤها أحد هنا،
+      // فكانت قائمته فارغة دائماً.
+      if (currentUser?.role === 'external_auditor') return true;
+
+      // THE NAMED AUDITEE SEES THE AUDIT FROM THE START.
+      // This used to require currentStage >= 2 for everyone in the audited department -
+      // but the auditee's FIRST obligation, confirming the date, happens at stage 0.
+      // The person whose confirmation the audit is waiting on could not find the audit
+      // in their own list. What they may READ inside it is governed by mayViewAnswers on
+      // the detail page, which is where that belongs.
+      if (isNamedAuditee(audit)) return true;
+
+      // Other employees of the audited department keep the staged visibility: they see
+      // the audit once quality has reviewed it, not while it is being conducted.
       if (audit.departmentId === currentUser?.departmentId) {
-        // Show if audit has been approved by QMS (stage 3+)
         if (audit.currentStage >= 3) return true;
-        // Or if user is department/section head, show scheduled audits (stage 2+)
         if ((currentUser?.role === 'department_manager' || currentUser?.role === 'section_head') && audit.currentStage >= 2) return true;
       }
 
@@ -419,18 +453,6 @@ export default function AuditsPage() {
 
     return sorted;
   }, [auditsData, searchQuery, selectedType, selectedStatus, sortBy, sortOrder, language]);
-
-  // Check if user is an auditor in an audit
-  const isUserAuditor = (audit: Audit) => {
-    return audit.leadAuditorId === currentUser?.id ||
-      audit.auditorIds?.includes(currentUser?.id || '') ||
-      audit.createdBy === currentUser?.id;
-  };
-
-  // Check if user is an auditee (their department is being audited)
-  const isUserAuditee = (audit: Audit) => {
-    return audit.departmentId === currentUser?.departmentId;
-  };
 
   // Audits where user is auditor
   const auditsAsAuditor = useMemo(() => {
