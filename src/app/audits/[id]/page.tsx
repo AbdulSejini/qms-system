@@ -26,6 +26,7 @@ import {
   CheckCircle,
   AlertCircle,
   CalendarCheck,
+  XCircle,
   X,
   Plus,
   Shield,
@@ -60,7 +61,13 @@ import type {
   AuditFinding as Finding, FindingComment, DepartmentResponse,
   Audit as Audit0,
 } from '@/types';
-import { FINDING_CATEGORY_A, FINDING_CATEGORY_B } from '@/types';
+import {
+  FINDING_CATEGORY_A,
+  FINDING_CATEGORY_B,
+  STATUS_DETERMINED_STAGES,
+  isCancelledAudit,
+  stageIndexFromStatus,
+} from '@/types';
 import {
   answersGateOf,
   areAnswersApproved,
@@ -196,6 +203,7 @@ interface Audit {
   // البوابات الثلاث - تُكتب بواسطة src/lib/audit-workflow.ts كتابةً حقلية،
   // ولذلك هي مقروءة هنا وغير مُدرجة في payload الحفظ: الحفظ العام لا يجوز أن
   // يعيد كتابة اعتماد صدر بعد آخر قراءة للصفحة.
+  rejectionReason?: string;
   schedule?: Audit0['schedule'];
   questionsGate?: Audit0['questionsGate'];
   answersGate?: Audit0['answersGate'];
@@ -236,8 +244,7 @@ type StoredAuditExtras = Pick<Audit,
   'correctiveActionsApprovalComment'
 >;
 
-// حالات تحدد المرحلة بذاتها: المرحلة المخزّنة معها لا يُعتد بها لأنها قد تكون قديمة
-const STATUS_DETERMINED_STAGES = ['completed', 'cancelled'];
+
 
 export default function AuditDetailPage() {
   const router = useRouter();
@@ -367,6 +374,7 @@ export default function AuditDetailPage() {
             leadAuditorId: firestoreAudit.leadAuditorId,
             auditorIds: firestoreAudit.teamMemberIds || [],
             auditeeId: firestoreAudit.auditeeId,
+            rejectionReason: firestoreAudit.rejectionReason,
             schedule: firestoreAudit.schedule,
             questionsGate: firestoreAudit.questionsGate,
             answersGate: firestoreAudit.answersGate,
@@ -399,25 +407,11 @@ export default function AuditDetailPage() {
     loadAudit();
   }, [auditId]);
 
-  // Helper to get stage from status
-  const getStageFromStatus = (status: string): number => {
-    const stageMap: Record<string, number> = {
-      'draft': 0,
-      'pending_approval': 0,
-      'approved': 0,
-      'planning': 0,
-      'questions_preparation': 0,
-      'execution': 1,
-      'in_progress': 1,
-      'qms_review': 2,
-      'corrective_actions': 3,
-      'verification': 4,
-      'completed': 5,
-      'cancelled': 5,
-      'postponed': 0,
-    };
-    return stageMap[status] || 0;
-  };
+  // Helper to get stage from status.
+  // The local map that used to live here mapped 'cancelled' to 5, i.e. onto 'completed',
+  // so a rejected audit was displayed as finished at the last step of the progress bar.
+  // stageIndexFromStatus in @/types is now the one map for both audit screens.
+  const getStageFromStatus = stageIndexFromStatus;
 
   // Save audit changes to Firestore
   const saveAudit = async (updatedAudit: Audit): Promise<boolean> => {
@@ -497,6 +491,8 @@ export default function AuditDetailPage() {
   // Move to next stage
   const handleMoveToNextStage = () => {
     if (!audit || audit.currentStage >= workflowStages.length - 1) return;
+    // الشرط يُفحص هنا أيضاً، لا في الزر وحده: زر معطَّل ليس ضابطاً.
+    if (!canMoveToNext) return;
 
     const fromStage = audit.currentStage;
     const toStage = audit.currentStage + 1;
@@ -1845,15 +1841,44 @@ export default function AuditDetailPage() {
   // Stage 5: completed
 
   // Check if can move to next stage
+  // كل ملاحظة أُغلقت أو جرى التحقق منها - شرط إقفال المراجعة
+  const allFindingsClosed = audit.findings.every(f => f.status === 'closed');
+  const openFindingsCount = audit.findings.filter(f => f.status !== 'closed').length;
+
+  // من يملك تحريك المراجعة بين المراحل. لم يكن هناك أي فحص للدور: أي مستخدم يصل
+  // للصفحة كان بوسعه دفع المراجعة إلى "مكتمل".
+  const canAdvanceStages = isLeadAuditor || isAuditor || isQualityManager ||
+    currentUser?.role === 'system_admin';
+
+  // EVERY stage now names its condition.
+  //
+  // This used to check stages 1 and 3 and then `return true`, so stage 0 -> 1 and
+  // stage 4 -> 5 had no condition at all. An audit could be pushed out of planning with
+  // no questions, no approved checklist and an unconfirmed date, and - the one that
+  // matters - could be marked COMPLETED straight out of verification with every finding
+  // still open. That is "the process ended when it should not have".
   const canMoveToNext = (() => {
     // Basic checks
     if (audit.currentStage >= workflowStages.length - 1) return false;
     if (isWaitingForApproval) return false;
+    if (!canAdvanceStages) return false;
+
+    // Stage 0 (planning) -> Stage 1 (execution)
+    // Requires: a date both sides accepted, and a checklist quality has approved
+    if (audit.currentStage === 0) {
+      return audit.questions.length > 0 && scheduleConfirmed && questionsApproved;
+    }
 
     // Stage 1 (execution) -> Stage 2 (qms_review)
     // Requires: execution confirmed AND all questions answered
     if (audit.currentStage === 1) {
       return isExecutionConfirmed && allQuestionsAnswered;
+    }
+
+    // Stage 2 (qms_review) -> Stage 3 (corrective_actions)
+    // Requires: the answers gate actually approved, not merely a stage number
+    if (audit.currentStage === 2) {
+      return answersApproved;
     }
 
     // Stage 3 (corrective_actions) -> Stage 4 (verification)
@@ -1862,11 +1887,57 @@ export default function AuditDetailPage() {
       return areCorrectiveActionsApproved && (audit.findings.length === 0 || allFindingsHaveDepartmentResponse);
     }
 
+    // Stage 4 (verification) -> Stage 5 (completed)
+    // Requires: every finding closed. An audit is not finished while it still has open
+    // non-conformities against the department; closing it would erase the obligation.
+    if (audit.currentStage === 4) {
+      return allFindingsClosed;
+    }
+
     return true;
   })();
 
   // Reason why can't move to next stage
   const cantMoveReason = (() => {
+    if (!canAdvanceStages) {
+      return language === 'ar'
+        ? 'تحريك المراجعة بين المراحل من صلاحية فريق المراجعة وإدارة الجودة.'
+        : 'Only the audit team and the quality department can move the audit between stages.';
+    }
+
+    // Stage 0 (planning)
+    if (audit.currentStage === 0) {
+      if (audit.questions.length === 0) {
+        return language === 'ar'
+          ? 'يجب إضافة سؤال واحد على الأقل قبل بدء التنفيذ.'
+          : 'Add at least one question before execution can start.';
+      }
+      if (!scheduleConfirmed) {
+        return language === 'ar'
+          ? 'الموعد لم يُؤكَّد بعد من المراجع والمراجَع عليه. المراجعة لا تبدأ على موعد لم يتفق عليه الطرفان.'
+          : 'The date has not been accepted by both the auditor and the auditee yet.';
+      }
+      if (!questionsApproved) {
+        return language === 'ar'
+          ? 'قائمة الأسئلة لم تعتمدها إدارة الجودة بعد. مراجعة تُجرى بأسئلة لم يعتمدها أحد هي مراجعة لم يوافق أحد على نطاقها.'
+          : 'The checklist has not been approved by the quality department yet.';
+      }
+    }
+
+    // Stage 2 (qms_review)
+    if (audit.currentStage === 2 && !answersApproved) {
+      return language === 'ar'
+        ? 'أجوبة المراجعة لم تعتمدها إدارة الجودة بعد، ولا تُعرض على الإدارة المُراجَعة قبل ذلك.'
+        : 'The answers have not been approved by the quality department yet, and are not shown to the auditee before that.';
+    }
+
+    // Stage 4 (verification)
+    if (audit.currentStage === 4 && !allFindingsClosed) {
+      return language === 'ar'
+        ? `لا يمكن إقفال المراجعة و${openFindingsCount} ملاحظة لم تُغلق بعد. أغلق الملاحظات المتبقية أولاً.`
+        : `The audit cannot be closed while ${openFindingsCount} finding(s) remain open. Close them first.`;
+    }
+
     // Stage 1 (execution)
     if (audit.currentStage === 1) {
       if (!isExecutionConfirmed && !allQuestionsAnswered) {
@@ -1946,7 +2017,24 @@ export default function AuditDetailPage() {
         {/* Progress Steps */}
         <Card>
           <CardContent className="p-6">
-            <div className="flex items-center justify-between overflow-x-auto pb-2">
+            {/* مراجعة ملغاة/مرفوضة: كانت تُعرض على أنها "مكتملة" في آخر خطوة من الشريط،
+                لأن getStageFromStatus كانت تربط 'cancelled' بالمرحلة 5. */}
+            {isCancelledAudit(audit.status) && (
+              <div className="mb-4 flex items-start gap-3 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+                <XCircle className="h-5 w-5 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold">
+                    {language === 'ar' ? 'هذه المراجعة ملغاة' : 'This audit is cancelled'}
+                  </p>
+                  {audit.rejectionReason && (
+                    <p className="mt-1">
+                      {language === 'ar' ? 'السبب: ' : 'Reason: '}{audit.rejectionReason}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className={`flex items-center justify-between overflow-x-auto pb-2 ${isCancelledAudit(audit.status) ? 'opacity-40' : ''}`}>
               {workflowStages.map((stage, idx) => {
                 const Icon = stage.icon;
                 const isCompleted = idx < audit.currentStage;

@@ -533,6 +533,46 @@ export const stageIndexFromId = (id: string): number => {
   return found === -1 ? 0 : found;
 };
 
+// THE ONE STATUS -> STAGE MAP.
+//
+// The audit detail page and the audit list each carried their own copy of this, over
+// arrays of six and seven entries respectively, so the SAME stored number meant a
+// different stage on each screen: index 2 was 'execution' on the list and 'qms_review'
+// on the detail page. An audit shown mid-execution in one place was shown awaiting
+// quality review in the other, and a stage index written by one screen was read as a
+// different stage by the other.
+//
+// AUDIT_STAGE_ORDER above is the only scale. 'questions_preparation' is a legacy status
+// with no stage of its own - checklist preparation happens inside 'planning', which is
+// what the questionsGate now records - so it maps to planning rather than shifting
+// everything after it by one.
+const STATUS_TO_STAGE: Record<string, number> = {
+  draft: 0,
+  pending_approval: 0,
+  approved: 0,
+  planning: 0,
+  questions_preparation: 0,
+  postponed: 0,
+  execution: 1,
+  in_progress: 1,
+  qms_review: 2,
+  corrective_actions: 3,
+  verification: 4,
+  completed: 5,
+  // ملغاة ليست مكتملة. كانت تُربط بالمرحلة 5، فتُعرض المراجعة المرفوضة على أنها
+  // "مكتملة" في آخر خطوة من الشريط - وهذا أسوأ من عدم عرض شيء.
+  cancelled: 0,
+};
+
+export const stageIndexFromStatus = (status: string | undefined): number =>
+  STATUS_TO_STAGE[status ?? ''] ?? 0;
+
+// الحالات النهائية التي تحدد المرحلة بنفسها، فأي مرحلة مخزّنة معها تكون قديمة
+export const STATUS_DETERMINED_STAGES = ['completed', 'cancelled'];
+
+// مراجعة أُلغيت أو رُفضت - ليست في الشريط أصلاً
+export const isCancelledAudit = (status: string | undefined): boolean => status === 'cancelled';
+
 // ===========================================
 // Annual Audit Plan Types - خطة المراجعة الداخلية السنوية
 // ===========================================

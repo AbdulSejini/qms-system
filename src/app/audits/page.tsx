@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout';
 // موحَّدة في @/types - كانت نسخاً محلية تختلف عن المخزَّن فعلاً
 import type { AuditFinding as Finding, AuditQuestion } from '@/types';
-import { FINDING_CATEGORY_A, FINDING_CATEGORY_B } from '@/types';
+import { FINDING_CATEGORY_A, FINDING_CATEGORY_B, stageIndexFromStatus, isCancelledAudit } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui';
@@ -57,22 +57,22 @@ import {
 // ===========================================
 // سير عمل المراجعة المنطقي
 // ===========================================
+// شريط المراحل - نفس ترتيب AUDIT_STAGE_ORDER في @/types، ست مراحل لا سبع.
+//
+// This array used to have SEVEN entries ('questions_preparation' had a step of its own),
+// while the audit detail page had six. The same stored currentStage therefore named a
+// different stage on each screen - index 2 was 'execution' here and 'qms_review' there -
+// so an audit shown mid-execution in the list was shown awaiting quality review when you
+// opened it. Checklist preparation is part of planning, and what records its approval is
+// the questionsGate, not a stage.
 const workflowStages = [
   {
     id: 'planning',
-    stepAr: 'التخطيط',
-    stepEn: 'Planning',
+    stepAr: 'التخطيط وإعداد الأسئلة',
+    stepEn: 'Planning & Questions',
     icon: Calendar,
-    descriptionAr: 'تحديد نطاق المراجعة والفريق والتواريخ',
-    descriptionEn: 'Define audit scope, team, and dates',
-  },
-  {
-    id: 'questions_preparation',
-    stepAr: 'إعداد الأسئلة',
-    stepEn: 'Questions Prep',
-    icon: FileQuestion,
-    descriptionAr: 'إعداد قائمة أسئلة المراجعة',
-    descriptionEn: 'Prepare audit questions checklist',
+    descriptionAr: 'تحديد نطاق المراجعة والفريق والتواريخ وإعداد الأسئلة',
+    descriptionEn: 'Define audit scope, team, dates and prepare questions',
   },
   {
     id: 'execution',
@@ -213,24 +213,9 @@ export default function AuditsPage() {
   }, [language]);
 
   // Helper to get stage from status
-  const getStageFromStatus = (status: string): number => {
-    const stageMap: Record<string, number> = {
-      'draft': 0,
-      'pending_approval': 0,
-      'approved': 0,
-      'planning': 0,
-      'questions_preparation': 1,
-      'execution': 2,
-      'in_progress': 2,
-      'qms_review': 3,
-      'corrective_actions': 4,
-      'verification': 5,
-      'completed': 6,
-      'cancelled': 6,
-      'postponed': 0,
-    };
-    return stageMap[status] || 0;
-  };
+  // The local seven-entry map that used to live here is gone; stageIndexFromStatus in
+  // @/types is the one scale both this page and the audit detail page read.
+  const getStageFromStatus = stageIndexFromStatus;
 
   // Role view mode - auditor vs auditee
   const [viewMode, setViewMode] = useState<'all' | 'as_auditor' | 'as_auditee'>('all');
@@ -711,73 +696,23 @@ export default function AuditsPage() {
     setNewAudit({ ...newAudit, auditorIds: newAudit.auditorIds.filter(id => id !== auditorId) });
   };
 
-  // Move to next stage
-  const moveToNextStage = () => {
-    if (!selectedAudit || selectedAudit.currentStage >= workflowStages.length - 1) return;
-
-    const nextStage = selectedAudit.currentStage + 1;
-    const updatedAudit = {
-      ...selectedAudit,
-      currentStage: nextStage,
-      status: workflowStages[nextStage].id,
-    };
-
-    setAuditsData(prev => prev.map(a => a.id === selectedAudit.id ? updatedAudit : a));
-    setSelectedAudit(updatedAudit);
+  // THESE THREE HANDLERS WROTE NOTHING TO FIRESTORE.
+  //
+  // moveToNextStage, handleAddQuestion and handleAddFinding each built an updated audit
+  // and put it into React state only. Nothing was persisted: a question added here was
+  // gone on the next reload - and immediately, since this page loads `questions: []` and
+  // never reads them back. A stage "advanced" here reverted the moment the snapshot
+  // listener fired.
+  //
+  // They are not restored as real writes, because doing so would create a second path
+  // into the audit that bypasses every gate the detail page enforces - the schedule
+  // confirmation, the checklist approval, the answers approval, the finding
+  // notifications and the completion conditions. The audit detail page is the one place
+  // an audit is edited. These now take the reader there.
+  const openAuditDetail = () => {
+    if (selectedAudit) router.push(`/audits/${selectedAudit.id}`);
   };
 
-  // Add question
-  const handleAddQuestion = () => {
-    if (!selectedAudit || !newQuestion.questionAr) return;
-
-    const question: AuditQuestion = {
-      id: `q${Date.now()}`,
-      questionAr: newQuestion.questionAr,
-      questionEn: newQuestion.questionEn || newQuestion.questionAr,
-      clause: newQuestion.clause,
-      status: 'pending',
-    };
-
-    const updatedAudit = {
-      ...selectedAudit,
-      questions: [...selectedAudit.questions, question],
-    };
-
-    setAuditsData(prev => prev.map(a => a.id === selectedAudit.id ? updatedAudit : a));
-    setSelectedAudit(updatedAudit);
-    setNewQuestion({ questionAr: '', questionEn: '', clause: '' });
-    setShowQuestionModal(false);
-  };
-
-  // Add finding
-  const handleAddFinding = () => {
-    if (!selectedAudit || !newFinding.finding || !newFinding.categoryB) return;
-
-    const finding: Finding = {
-      id: `f${Date.now()}`,
-      reportNumber: `FND-${new Date().getFullYear()}-${String(selectedAudit.findings.length + 1).padStart(3, '0')}`,
-      departmentId: selectedAudit.departmentId,
-      sectionId: selectedAudit.sectionId,
-      clause: newFinding.clause,
-      finding: newFinding.finding,
-      evidence: newFinding.evidence,
-      categoryA: newFinding.categoryA || 'quality',
-      categoryB: newFinding.categoryB,
-      estimatedClosingDate: newFinding.estimatedClosingDate,
-      status: 'open',
-      createdAt: new Date().toISOString().split('T')[0],
-    };
-
-    const updatedAudit = {
-      ...selectedAudit,
-      findings: [...selectedAudit.findings, finding],
-    };
-
-    setAuditsData(prev => prev.map(a => a.id === selectedAudit.id ? updatedAudit : a));
-    setSelectedAudit(updatedAudit);
-    setNewFinding({ clause: '', finding: '', evidence: '', categoryA: '', categoryB: '', estimatedClosingDate: '' });
-    setShowFindingModal(false);
-  };
 
   // QMS Approval
   const handleQMSApproval = async (approved: boolean) => {
@@ -1910,9 +1845,9 @@ export default function AuditsPage() {
                 <Button variant="outline" onClick={() => setShowDetailModal(false)}>
                   {t('common.close')}
                 </Button>
-                {selectedAudit.currentStage < workflowStages.length - 1 && selectedAudit.currentStage !== 3 && (
-                  <Button leftIcon={<Arrow className="h-4 w-4" />} onClick={moveToNextStage}>
-                    {language === 'ar' ? 'الانتقال للمرحلة التالية' : 'Move to Next Stage'}
+                {selectedAudit.currentStage < workflowStages.length - 1 && (
+                  <Button leftIcon={<Arrow className="h-4 w-4" />} onClick={openAuditDetail}>
+                    {language === 'ar' ? 'فتح المراجعة لإدارة المراحل' : 'Open Audit to Manage Stages'}
                   </Button>
                 )}
               </div>
@@ -1973,8 +1908,8 @@ export default function AuditsPage() {
                 <Button variant="outline" onClick={() => setShowQuestionModal(false)}>
                   {t('common.cancel')}
                 </Button>
-                <Button onClick={handleAddQuestion} disabled={!newQuestion.questionAr}>
-                  {language === 'ar' ? 'إضافة' : 'Add'}
+                <Button onClick={openAuditDetail}>
+                  {language === 'ar' ? 'إضافة من صفحة المراجعة' : 'Add on the Audit Page'}
                 </Button>
               </div>
             </div>
@@ -2081,8 +2016,8 @@ export default function AuditsPage() {
                 <Button variant="outline" onClick={() => setShowFindingModal(false)}>
                   {t('common.cancel')}
                 </Button>
-                <Button onClick={handleAddFinding} disabled={!newFinding.finding || !newFinding.categoryB}>
-                  {language === 'ar' ? 'إضافة' : 'Add'}
+                <Button onClick={openAuditDetail}>
+                  {language === 'ar' ? 'إضافة من صفحة المراجعة' : 'Add on the Audit Page'}
                 </Button>
               </div>
             </div>
