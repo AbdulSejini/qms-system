@@ -166,10 +166,35 @@ const notify = (
   recipientId: string | undefined,
   n: { type: Parameters<typeof addNotification>[0]['type']; title: string; message: string; auditId: string; senderId: string }
 ): void => {
-  if (!recipientId) return;
+  // An undefined recipient used to return in silence. That is how every notification
+  // addressed to the auditee disappeared for as long as auditeeId went unwritten: the
+  // send was skipped, nothing was logged, and the sender was told the decision had gone
+  // out. A dropped recipient is now loud, even though it still does not fail the write.
+  if (!recipientId) {
+    logger.error(
+      `Audit notification dropped - no recipient for "${n.title}" on audit ${n.auditId}. ` +
+      'Somebody who should have been told was not.'
+    );
+    return;
+  }
   void addNotification({ ...n, recipientId }).catch(error =>
     logger.error('Could not send audit-workflow notification:', error)
   );
+};
+
+// كل من يحق له البتّ في بوابة اعتماد - مديرو الجودة، ومدير النظام احتياطاً.
+//
+// The gate functions used to take a single optional `qualityManagerId`. With one quality
+// manager on leave, or none configured, the request went nowhere and notify() swallowed
+// it. Approval requests now go to EVERY active decider, and a caller that resolves nobody
+// gets an empty array back and can say so instead of pretending the request was sent.
+export const gateDecidersIn = (
+  users: Pick<User, 'id' | 'role' | 'isActive'>[]
+): string[] => {
+  const managers = users.filter(u => u.isActive && u.role === 'quality_manager').map(u => u.id);
+  if (managers.length > 0) return managers;
+  // لا يوجد مدير جودة نشط - لا تُفقد الطلبات، تذهب لمدير النظام
+  return users.filter(u => u.isActive && u.role === 'system_admin').map(u => u.id);
 };
 
 const log = (
@@ -322,8 +347,14 @@ export const submitGateForApproval = async (
   kind: GateKind,
   audit: Pick<Audit, 'id' | 'titleAr' | 'titleEn'>,
   actor: Pick<User, 'id' | 'fullNameAr' | 'fullNameEn' | 'email' | 'role'>,
-  qualityManagerId?: string
-): Promise<boolean> => {
+  deciderIds: string[]
+): Promise<{ ok: boolean; notified: number; error?: 'no_decider' }> => {
+  // لا يُرسل طلب اعتماد إلى لا أحد. الحالة "قيد الاعتماد" مع صفر مُعتمِدين تعني مراجعة
+  // معلّقة إلى الأبد ينتظر صاحبها رداً لن يأتي.
+  if (deciderIds.length === 0) {
+    return { ok: false, notified: 0, error: 'no_decider' };
+  }
+
   const gate: ApprovalGate = {
     status: 'pending_approval',
     submittedBy: actor.id,
@@ -331,15 +362,17 @@ export const submitGateForApproval = async (
   };
 
   const ok = await updateAudit(audit.id, { [GATE_FIELD[kind]]: gate } as Partial<Audit>);
-  if (!ok) return false;
+  if (!ok) return { ok: false, notified: 0 };
 
-  notify(qualityManagerId, {
-    type: kind === 'questions' ? 'questions_approval_request' : 'answers_approval_request',
-    title: `طلب اعتماد ${GATE_LABEL_AR[kind]}`,
-    message: `أرسل ${nameOf(actor)} ${GATE_LABEL_AR[kind]} لمراجعة "${audit.titleAr}" لاعتمادها.`,
-    auditId: audit.id,
-    senderId: actor.id,
-  });
+  deciderIds.forEach(recipientId =>
+    notify(recipientId, {
+      type: kind === 'questions' ? 'questions_approval_request' : 'answers_approval_request',
+      title: `طلب اعتماد ${GATE_LABEL_AR[kind]}`,
+      message: `أرسل ${nameOf(actor)} ${GATE_LABEL_AR[kind]} لمراجعة "${audit.titleAr}" لاعتمادها.`,
+      auditId: audit.id,
+      senderId: actor.id,
+    })
+  );
 
   log(actor, {
     action: 'submit',
@@ -348,7 +381,7 @@ export const submitGateForApproval = async (
     summaryAr: `أرسل ${nameOf(actor)} ${GATE_LABEL_AR[kind]} لمراجعة "${audit.titleAr}" لاعتمادها من إدارة الجودة.`,
     summaryEn: `${nameOf(actor)} submitted ${GATE_LABEL_EN[kind]} for "${audit.titleEn}" for quality approval.`,
   });
-  return true;
+  return { ok: true, notified: deciderIds.length };
 };
 
 // The quality manager decides. A rejection needs a reason - the auditor has to know what
@@ -359,8 +392,19 @@ export const decideGate = async (
   decision: 'approved' | 'rejected',
   comment: string | undefined,
   actor: Pick<User, 'id' | 'fullNameAr' | 'fullNameEn' | 'email' | 'role'>
-): Promise<{ ok: boolean; error?: 'comment_required' | 'not_permitted' }> => {
+): Promise<{ ok: boolean; error?: 'comment_required' | 'not_permitted' | 'not_independent' }> => {
   if (!mayDecideGate(actor)) return { ok: false, error: 'not_permitted' };
+  // لا يعتمد أحد عمله. ISO 9001:2015 بند 9.2.2(ج).
+  // A quality manager who is also on this audit's team would otherwise be approving their
+  // own checklist and their own answers, which is the one thing the gate exists to prevent.
+  // system_admin is exempt as the break-glass path, so a one-person department cannot
+  // deadlock its own audit programme.
+  if (
+    actor.role !== 'system_admin' &&
+    (audit.leadAuditorId === actor.id || (audit.auditorIds ?? []).includes(actor.id))
+  ) {
+    return { ok: false, error: 'not_independent' };
+  }
   if (decision === 'rejected' && !comment?.trim()) return { ok: false, error: 'comment_required' };
 
   const previous = kind === 'questions' ? questionsGateOf(audit) : answersGateOf(audit);

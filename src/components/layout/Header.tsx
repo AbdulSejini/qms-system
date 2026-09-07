@@ -288,7 +288,9 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
                       <div
                         key={notification.id}
                         className={cn(
-                          'relative flex items-start gap-3 px-4 py-3 border-b border-[var(--border)] last:border-b-0 cursor-pointer transition-colors hover:bg-[var(--background-tertiary)]',
+                          // `group` كانت ناقصة، فبقي زر الحذف opacity-0 دائماً: هدف نقر
+                          // غير مرئي فوق كل تنبيه يحذفه بلا أن يرى المستخدم ما ضغط عليه.
+                          'group relative flex items-start gap-3 px-4 py-3 border-b border-[var(--border)] last:border-b-0 cursor-pointer transition-colors hover:bg-[var(--background-tertiary)]',
                           !notification.read && 'bg-[var(--primary)]/5'
                         )}
                         onClick={() => handleNotificationClick(notification)}
@@ -309,6 +311,16 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
                           notification.type === 'plan_approval_request' && 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400',
                           notification.type === 'plan_approved' && 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400',
                           notification.type === 'plan_rejected' && 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400',
+                          // بوابات الاعتماد الثلاث - لم تكن لها أيقونات لأنها لم تكن تُرسل أصلاً
+                          notification.type === 'schedule_confirmation_request' && 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400',
+                          notification.type === 'schedule_accepted' && 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400',
+                          notification.type === 'schedule_reschedule_requested' && 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400',
+                          notification.type === 'questions_approval_request' && 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400',
+                          notification.type === 'questions_approved' && 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400',
+                          notification.type === 'questions_rejected' && 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400',
+                          notification.type === 'answers_approval_request' && 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400',
+                          notification.type === 'answers_approved' && 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400',
+                          notification.type === 'answers_rejected' && 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400',
                           notification.type === 'general' && 'bg-gray-100 dark:bg-gray-900/30 text-gray-600 dark:text-gray-400'
                         )}>
                           {notification.type === 'audit_approval_request' && <ClipboardCheck className="h-5 w-5" />}
@@ -324,6 +336,15 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
                           {notification.type === 'plan_approval_request' && <CalendarRange className="h-5 w-5" />}
                           {notification.type === 'plan_approved' && <CalendarCheck className="h-5 w-5" />}
                           {notification.type === 'plan_rejected' && <CalendarX className="h-5 w-5" />}
+                          {notification.type === 'schedule_confirmation_request' && <CalendarRange className="h-5 w-5" />}
+                          {notification.type === 'schedule_accepted' && <CalendarCheck className="h-5 w-5" />}
+                          {notification.type === 'schedule_reschedule_requested' && <CalendarX className="h-5 w-5" />}
+                          {notification.type === 'questions_approval_request' && <ClipboardCheck className="h-5 w-5" />}
+                          {notification.type === 'questions_approved' && <Check className="h-5 w-5" />}
+                          {notification.type === 'questions_rejected' && <Edit3 className="h-5 w-5" />}
+                          {notification.type === 'answers_approval_request' && <ClipboardCheck className="h-5 w-5" />}
+                          {notification.type === 'answers_approved' && <Check className="h-5 w-5" />}
+                          {notification.type === 'answers_rejected' && <Edit3 className="h-5 w-5" />}
                           {notification.type === 'general' && <Bell className="h-5 w-5" />}
                         </div>
 

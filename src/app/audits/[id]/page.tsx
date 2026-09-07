@@ -25,6 +25,7 @@ import {
   Info,
   CheckCircle,
   AlertCircle,
+  CalendarCheck,
   X,
   Plus,
   Shield,
@@ -57,9 +58,28 @@ import type {
   // موحَّدة في @/types بدل نسخ محلية كانت تختلف عنها في التفاصيل
   AttachmentFile, AuditQuestion, ExtensionRequest, AuditActivityLogEntry as ActivityLogEntry,
   AuditFinding as Finding, FindingComment, DepartmentResponse,
+  Audit as Audit0,
 } from '@/types';
 import { FINDING_CATEGORY_A, FINDING_CATEGORY_B } from '@/types';
-import { resolveAuditeeId } from '@/lib/audit-workflow';
+import {
+  answersGateOf,
+  areAnswersApproved,
+  areQuestionsApproved,
+  awaitingScheduleFrom,
+  decideGate,
+  gateDecidersIn,
+  isRescheduleRequested,
+  isScheduleConfirmed,
+  mayDecideGate,
+  mayViewAnswers,
+  questionsGateOf,
+  requestScheduleConfirmation,
+  resolveAuditeeId,
+  respondToSchedule,
+  scheduleOf,
+  schedulePartyFor,
+  submitGateForApproval,
+} from '@/lib/audit-workflow';
 import { OneDrivePicker } from '@/components/ui/OneDrivePicker';
 import type { OneDriveFile } from '@/lib/onedrive';
 import { Cloud } from 'lucide-react';
@@ -173,6 +193,12 @@ interface Audit {
   // الجهة المُراجَع عليها - رئيس القسم أو مدير الإدارة محل المراجعة.
   // firestore.rules تمنحه صلاحية الكتابة عبر هذا الحقل، وبدونه يُرفض كل ما يكتبه.
   auditeeId?: string;
+  // البوابات الثلاث - تُكتب بواسطة src/lib/audit-workflow.ts كتابةً حقلية،
+  // ولذلك هي مقروءة هنا وغير مُدرجة في payload الحفظ: الحفظ العام لا يجوز أن
+  // يعيد كتابة اعتماد صدر بعد آخر قراءة للصفحة.
+  schedule?: Audit0['schedule'];
+  questionsGate?: Audit0['questionsGate'];
+  answersGate?: Audit0['answersGate'];
   startDate: string;
   endDate: string;
   scope: string;
@@ -228,6 +254,10 @@ export default function AuditDetailPage() {
   const [loading, setLoading] = useState(true);
   // آخر فشل في الحفظ - يُعرض كشريط أحمر بدل أن يمر بصمت
   const [saveError, setSaveError] = useState<string | null>(null);
+  // نموذج الرد على الموعد وبوابات الاعتماد
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleResponseForm, setScheduleResponseForm] = useState({ comment: '', proposedStartDate: '' });
+  const [gateDecisionComment, setGateDecisionComment] = useState('');
   const [activeTab, setActiveTab] = useState<'details' | 'questions' | 'findings' | 'approval' | 'activity' | 'my_findings'>('details');
 
   // Modals
@@ -337,6 +367,9 @@ export default function AuditDetailPage() {
             leadAuditorId: firestoreAudit.leadAuditorId,
             auditorIds: firestoreAudit.teamMemberIds || [],
             auditeeId: firestoreAudit.auditeeId,
+            schedule: firestoreAudit.schedule,
+            questionsGate: firestoreAudit.questionsGate,
+            answersGate: firestoreAudit.answersGate,
             startDate: firestoreAudit.startDate,
             endDate: firestoreAudit.endDate,
             scope: firestoreAudit.scope || '',
@@ -626,6 +659,147 @@ export default function AuditDetailPage() {
   };
 
 
+  // ===========================================
+  // البوابات الثلاث - src/lib/audit-workflow.ts
+  // ===========================================
+  //
+  // The module that defines these gates existed in full and was never called by anything:
+  // no screen imported it, no audit ever grew a `schedule`, `questionsGate` or
+  // `answersGate` field, and the nine notification types it is the sole producer of had
+  // never been written to Firestore. The date was never confirmed with anybody, the
+  // checklist was never approved before the audit ran, and the answers were never approved
+  // before the auditee saw them. This wires it in.
+  //
+  // Every handler here writes through audit-workflow, which uses a FIELD-LEVEL updateDoc.
+  // That matters: a gate decision must not travel through saveAudit()'s 22-field payload,
+  // or a quality manager's approval would be overwritten by the next save an auditor makes
+  // from a page they loaded before it.
+
+  // من يبتّ في الاعتماد - كل مديري الجودة النشطين، ومدير النظام إن لم يوجد أحد
+  const gateDeciderIds = useMemo(() => gateDecidersIn(allUsers), [allUsers]);
+
+  const scheduleState = audit ? scheduleOf(audit) : null;
+  const myScheduleParty = audit && currentUser ? schedulePartyFor(audit, currentUser.id) : null;
+  const scheduleConfirmed = audit ? isScheduleConfirmed(audit) : false;
+  const scheduleContested = audit ? isRescheduleRequested(audit) : false;
+  const questionsGate = audit ? questionsGateOf(audit) : null;
+  const answersGate = audit ? answersGateOf(audit) : null;
+  const questionsApproved = audit ? areQuestionsApproved(audit) : false;
+  const answersApproved = audit ? areAnswersApproved(audit) : false;
+  const canDecideGates = currentUser ? mayDecideGate(currentUser) : false;
+  // استقلالية المُعتمِد: لا يعتمد أحد عمله - ISO 9001:2015 بند 9.2.2(ج)
+  const isOnAuditTeam = !!audit && !!currentUser &&
+    (audit.leadAuditorId === currentUser.id || (audit.auditorIds || []).includes(currentUser.id));
+  const mayDecideThisAudit = canDecideGates &&
+    (currentUser?.role === 'system_admin' || !isOnAuditTeam);
+
+  // ما يراه المستخدم من الأجوبة. القاعدة كانت معرَّفة ولم تُطبَّق قط.
+  const canViewAnswers = audit && currentUser ? mayViewAnswers(audit, currentUser) : false;
+
+  // إعادة تحميل المراجعة من Firestore بعد كتابة حقلية لا تمر عبر saveAudit
+  const reloadAudit = async () => {
+    const fresh = await getAuditById(auditId);
+    if (fresh) {
+      setAudit(prev => (prev ? {
+        ...prev,
+        schedule: fresh.schedule,
+        questionsGate: fresh.questionsGate,
+        answersGate: fresh.answersGate,
+      } : prev));
+    }
+  };
+
+  // 1. الموعد - طلب التأكيد من الطرفين
+  const handleRequestScheduleConfirmation = async () => {
+    if (!audit || !currentUser || !canDecideGates) return;
+    const ok = await requestScheduleConfirmation(audit, currentUser);
+    if (!ok) {
+      setSaveError(language === 'ar'
+        ? 'تعذّر إرسال طلب تأكيد الموعد.'
+        : 'The schedule confirmation request could not be sent.');
+      return;
+    }
+    setSaveError(null);
+    await reloadAudit();
+  };
+
+  // 1. الموعد - رد أحد الطرفين
+  const handleRespondToSchedule = async (accept: boolean) => {
+    if (!audit || !currentUser || !myScheduleParty) return;
+    const result = await respondToSchedule(
+      audit,
+      myScheduleParty,
+      {
+        accept,
+        comment: scheduleResponseForm.comment,
+        proposedStartDate: scheduleResponseForm.proposedStartDate || undefined,
+      },
+      currentUser,
+      gateDeciderIds[0]
+    );
+    if (!result.ok) {
+      setSaveError(
+        result.error === 'comment_required'
+          ? (language === 'ar'
+              ? 'طلب تغيير الموعد يحتاج سبباً. اكتب السبب حتى يعرف مدير الجودة على أي أساس يعيد الجدولة.'
+              : 'A reschedule request needs a reason, so the quality manager knows what to act on.')
+          : (language === 'ar' ? 'تعذّر تسجيل ردّك على الموعد.' : 'Your schedule response could not be recorded.')
+      );
+      return;
+    }
+    setSaveError(null);
+    setScheduleResponseForm({ comment: '', proposedStartDate: '' });
+    setShowScheduleModal(false);
+    await reloadAudit();
+  };
+
+  // 2 و 3. إرسال بوابة للاعتماد
+  const handleSubmitGate = async (kind: 'questions' | 'answers') => {
+    if (!audit || !currentUser) return;
+    const result = await submitGateForApproval(kind, audit, currentUser, gateDeciderIds);
+    if (!result.ok) {
+      setSaveError(
+        result.error === 'no_decider'
+          ? (language === 'ar'
+              ? 'لا يوجد مدير جودة نشط لاستلام هذا الطلب. لم يُرسل الطلب - عيّن مدير جودة أولاً حتى لا تبقى المراجعة معلّقة على اعتماد لا أحد يستطيع منحه.'
+              : 'There is no active quality manager to receive this request. Nothing was sent - assign one first, so the audit is not left waiting on an approval nobody can give.')
+          : (language === 'ar' ? 'تعذّر إرسال طلب الاعتماد.' : 'The approval request could not be sent.')
+      );
+      return;
+    }
+    setSaveError(null);
+    await reloadAudit();
+  };
+
+  // 2 و 3. البتّ في بوابة
+  const handleDecideGate = async (
+    kind: 'questions' | 'answers',
+    decision: 'approved' | 'rejected',
+    comment: string
+  ) => {
+    if (!audit || !currentUser) return;
+    const result = await decideGate(kind, audit, decision, comment, currentUser);
+    if (!result.ok) {
+      setSaveError(
+        result.error === 'comment_required'
+          ? (language === 'ar'
+              ? 'الرفض يحتاج سبباً - "مرفوض" وحدها لا تخبر المراجع بما عليه تغييره.'
+              : 'A rejection needs a reason - "rejected" on its own tells the auditor nothing.')
+          : result.error === 'not_independent'
+            ? (language === 'ar'
+                ? 'لا يمكنك اعتماد مراجعة أنت عضو في فريقها. يجب أن يعتمدها مدير جودة آخر - ISO 9001:2015 بند 9.2.2(ج).'
+                : 'You cannot approve an audit you are on the team of. Another quality manager must decide - ISO 9001:2015 clause 9.2.2(c).')
+            : result.error === 'not_permitted'
+              ? (language === 'ar' ? 'لا تملك صلاحية البتّ في هذا الاعتماد.' : 'You do not have permission to decide this approval.')
+              : (language === 'ar' ? 'تعذّر تسجيل القرار.' : 'The decision could not be recorded.')
+      );
+      return;
+    }
+    setSaveError(null);
+    setGateDecisionComment('');
+    await reloadAudit();
+  };
+
   // إرسال للموافقة من إدارة الجودة
   const handleSubmitForQMSApproval = async () => {
     if (!audit || audit.currentStage !== 1) return; // مرحلة التنفيذ هي 1 الآن
@@ -646,6 +820,11 @@ export default function AuditDetailPage() {
     };
     // إن لم تُكتب المرحلة فلا يوجد ما يُراجَع؛ إشعار مدير الجودة عندها كذب مهذّب.
     if (!(await saveAudit(updatedAudit))) return;
+
+    // بوابة الأجوبة: الانتقال إلى مراجعة الجودة هو بعينه إرسال الأجوبة للاعتماد.
+    // تُسجَّل في answersGate لأن هذا هو ما تقرأه قاعدة إظهار الأجوبة للمراجَع عليه -
+    // قبل الاعتماد لا يرى شيئاً، وهذا هو الغرض منها.
+    await handleSubmitGate('answers');
 
     // إرسال إشعار لمدير الجودة via Firestore
     const allUsersData = await getAllUsers();
@@ -1308,6 +1487,12 @@ export default function AuditDetailPage() {
     });
 
     if (!(await saveAudit(updatedAudit))) return;
+
+    // القرار نفسه يُسجَّل في بوابة الأجوبة، لا في qmsApprovalData وحدها. اعتماد الأجوبة
+    // هو ما يفتح رؤيتها للمراجَع عليه (mayViewAnswers)، والرفض يعيدها للمراجع مع السبب.
+    if (decision === 'approved' || decision === 'rejected') {
+      await handleDecideGate('answers', decision, qmsComment);
+    }
 
     // القرار مكتوب الآن - وعندها فقط يُعلن
     await Promise.all(pendingAnnouncements.map(send => send()));
@@ -2324,15 +2509,25 @@ export default function AuditDetailPage() {
                                 {language === 'ar' ? 'البند: ' : 'Clause: '}{q.clause}
                               </p>
                             )}
-                            {q.answer && (
+                            {/* قاعدة الإظهار: لا يرى المراجَع عليه إجابةً لم تعتمدها إدارة الجودة.
+                                mayViewAnswers كانت معرَّفة ولم تُستدعَ في أي مكان، فكان كل من
+                                هو خارج فريق المراجعة يقرأ حكماً لم يُراجَع بعد. */}
+                            {q.answer && (canViewAnswers ? (
                               <div className="mt-2 p-2 rounded bg-[var(--background-secondary)] text-sm">
                                 <span className="font-medium text-[var(--foreground-secondary)]">
                                   {language === 'ar' ? 'الإجابة: ' : 'Answer: '}
                                 </span>
                                 {q.answer}
                               </div>
-                            )}
-                            {q.notes && (
+                            ) : (
+                              <div className="mt-2 p-2 rounded border border-dashed border-[var(--border)] text-xs text-[var(--foreground-secondary)] flex items-center gap-2">
+                                <Lock className="h-3 w-3 shrink-0" />
+                                {language === 'ar'
+                                  ? 'الإجابة قيد المراجعة لدى إدارة الجودة ولا تُعرض قبل اعتمادها.'
+                                  : 'This answer is under quality review and is not shown before it is approved.'}
+                              </div>
+                            ))}
+                            {q.notes && canViewAnswers && (
                               <div className="mt-1 text-xs text-[var(--foreground-secondary)] italic">
                                 {language === 'ar' ? 'ملاحظات: ' : 'Notes: '}{q.notes}
                               </div>
@@ -2443,6 +2638,127 @@ export default function AuditDetailPage() {
                 )}
 
                 {/* تنبيه قبل الانتقال للمرحلة التالية */}
+                {/* ============================================================
+                    البوابة 1: تأكيد الموعد - المراجع والمراجَع عليه
+                    A planned date is a PROPOSAL until both sides accept it. Neither the
+                    request nor the response existed anywhere in the UI before.
+                   ============================================================ */}
+                {audit.currentStage === 0 && (
+                  <div className="mt-6 p-4 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]">
+                    <div className="flex items-start justify-between gap-4 flex-wrap">
+                      <div className="flex items-start gap-3">
+                        <CalendarCheck className={`h-5 w-5 mt-0.5 ${scheduleConfirmed ? 'text-green-600' : scheduleContested ? 'text-amber-600' : 'text-[var(--foreground-secondary)]'}`} />
+                        <div>
+                          <p className="font-semibold">
+                            {language === 'ar' ? 'تأكيد موعد المراجعة' : 'Schedule Confirmation'}
+                          </p>
+                          <p className="text-sm text-[var(--foreground-secondary)] mt-1">
+                            {scheduleConfirmed
+                              ? (language === 'ar' ? 'أكّد الطرفان الموعد.' : 'Both parties have accepted the date.')
+                              : scheduleContested
+                                ? (language === 'ar' ? 'طُلب تغيير الموعد - المراجعة لا تمضي حتى يُحسم ذلك.' : 'A reschedule was requested - the audit does not proceed until this is settled.')
+                                : (language === 'ar'
+                                    ? `الموعد المقترح ${audit.startDate} في انتظار: ${awaitingScheduleFrom(audit).map(pt => pt === 'auditor' ? 'المراجع' : 'المراجَع عليه').join('، ') || '-'}`
+                                    : `Proposed for ${audit.startDate}, awaiting: ${awaitingScheduleFrom(audit).join(', ') || '-'}`)}
+                          </p>
+                          {scheduleState && (['auditor', 'auditee'] as const).map(pt => {
+                            const r = scheduleState[pt];
+                            if (r.status === 'pending') return null;
+                            return (
+                              <p key={pt} className="text-xs text-[var(--foreground-secondary)] mt-1">
+                                {(language === 'ar' ? (pt === 'auditor' ? 'المراجع' : 'المراجَع عليه') : pt)}
+                                {': '}
+                                {r.status === 'accepted'
+                                  ? (language === 'ar' ? 'وافق' : 'accepted')
+                                  : (language === 'ar' ? `طلب تغيير الموعد - ${r.comment || ''}` : `reschedule requested - ${r.comment || ''}`)}
+                                {r.proposedStartDate ? ` (${r.proposedStartDate})` : ''}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {canDecideGates && !audit.schedule && (
+                          <Button size="sm" variant="outline" onClick={handleRequestScheduleConfirmation}>
+                            {language === 'ar' ? 'طلب تأكيد الموعد' : 'Request Confirmation'}
+                          </Button>
+                        )}
+                        {myScheduleParty && scheduleState?.[myScheduleParty].status === 'pending' && (
+                          <>
+                            <Button size="sm" onClick={() => handleRespondToSchedule(true)}>
+                              {language === 'ar' ? 'أوافق على الموعد' : 'Accept Date'}
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => setShowScheduleModal(true)}>
+                              {language === 'ar' ? 'أطلب موعداً آخر' : 'Request Another Date'}
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ============================================================
+                    البوابة 2: اعتماد قائمة الأسئلة قبل التنفيذ
+                    An audit run against questions nobody approved is an audit whose
+                    scope nobody agreed to.
+                   ============================================================ */}
+                {audit.currentStage === 0 && (
+                  <div className="mt-4 p-4 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]">
+                    <div className="flex items-start justify-between gap-4 flex-wrap">
+                      <div className="flex items-start gap-3">
+                        <ClipboardCheck className={`h-5 w-5 mt-0.5 ${questionsApproved ? 'text-green-600' : questionsGate?.status === 'rejected' ? 'text-red-600' : 'text-[var(--foreground-secondary)]'}`} />
+                        <div>
+                          <p className="font-semibold">
+                            {language === 'ar' ? 'اعتماد قائمة الأسئلة' : 'Checklist Approval'}
+                          </p>
+                          <p className="text-sm text-[var(--foreground-secondary)] mt-1">
+                            {questionsApproved
+                              ? (language === 'ar' ? 'اعتمدت إدارة الجودة قائمة الأسئلة.' : 'The quality department has approved the checklist.')
+                              : questionsGate?.status === 'pending_approval'
+                                ? (language === 'ar' ? 'القائمة مرسلة لإدارة الجودة وفي انتظار الاعتماد.' : 'Submitted to the quality department, awaiting approval.')
+                                : questionsGate?.status === 'rejected'
+                                  ? (language === 'ar' ? `أُعيدت القائمة للتعديل. السبب: ${questionsGate.comment || '-'}` : `Returned for revision. Reason: ${questionsGate.comment || '-'}`)
+                                  : (language === 'ar' ? 'لم تُرسل القائمة للاعتماد بعد.' : 'The checklist has not been submitted for approval yet.')}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {(isLeadAuditor || isAuditor) &&
+                          (questionsGate?.status === 'draft' || questionsGate?.status === 'rejected') && (
+                          <Button
+                            size="sm"
+                            onClick={() => handleSubmitGate('questions')}
+                            disabled={audit.questions.length === 0}
+                            title={audit.questions.length === 0
+                              ? (language === 'ar' ? 'أضف سؤالاً واحداً على الأقل' : 'Add at least one question')
+                              : undefined}
+                          >
+                            {language === 'ar' ? 'إرسال القائمة للاعتماد' : 'Submit for Approval'}
+                          </Button>
+                        )}
+                        {mayDecideThisAudit && questionsGate?.status === 'pending_approval' && (
+                          <>
+                            <input
+                              type="text"
+                              value={gateDecisionComment}
+                              onChange={e => setGateDecisionComment(e.target.value)}
+                              placeholder={language === 'ar' ? 'سبب الرفض (مطلوب للرفض)' : 'Rejection reason (required to reject)'}
+                              className="rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-sm"
+                            />
+                            <Button size="sm" onClick={() => handleDecideGate('questions', 'approved', gateDecisionComment)}>
+                              {language === 'ar' ? 'اعتماد' : 'Approve'}
+                            </Button>
+                            <Button size="sm" variant="outline" className="text-red-600" onClick={() => handleDecideGate('questions', 'rejected', gateDecisionComment)}>
+                              {language === 'ar' ? 'إعادة للتعديل' : 'Return'}
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {audit.currentStage === 0 && audit.questions.length > 0 && (
                   <div className="mt-6 p-4 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
                     <div className="flex items-start gap-3">
@@ -5142,6 +5458,54 @@ export default function AuditDetailPage() {
                 </Button>
                 <Button onClick={handleSaveAuditEdit} disabled={!editAuditForm.titleAr || !editAuditForm.departmentId || !editAuditForm.leadAuditorId || !editAuditForm.startDate}>
                   {language === 'ar' ? 'حفظ التعديلات' : 'Save Changes'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* طلب موعد آخر - يحتاج سبباً دائماً، فالرفض بلا سبب لا يترك لمدير الجودة ما يتصرف به */}
+        {showScheduleModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="w-full max-w-md rounded-lg bg-[var(--background)] p-6 shadow-xl">
+              <h3 className="text-lg font-semibold">
+                {language === 'ar' ? 'طلب موعد آخر' : 'Request Another Date'}
+              </h3>
+              <p className="mt-1 text-sm text-[var(--foreground-secondary)]">
+                {language === 'ar'
+                  ? 'اذكر سبب عدم مناسبة الموعد، واقترح موعداً بديلاً إن أمكن.'
+                  : 'Give the reason this date does not work, and suggest an alternative if you can.'}
+              </p>
+
+              <label className="mt-4 block text-sm font-medium">
+                {language === 'ar' ? 'السبب (مطلوب)' : 'Reason (required)'}
+              </label>
+              <textarea
+                value={scheduleResponseForm.comment}
+                onChange={e => setScheduleResponseForm(f => ({ ...f, comment: e.target.value }))}
+                rows={3}
+                className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--background)] p-2 text-sm"
+              />
+
+              <label className="mt-3 block text-sm font-medium">
+                {language === 'ar' ? 'الموعد البديل المقترح' : 'Suggested alternative date'}
+              </label>
+              <input
+                type="date"
+                value={scheduleResponseForm.proposedStartDate}
+                onChange={e => setScheduleResponseForm(f => ({ ...f, proposedStartDate: e.target.value }))}
+                className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--background)] p-2 text-sm"
+              />
+
+              <div className="mt-5 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowScheduleModal(false)}>
+                  {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                </Button>
+                <Button
+                  onClick={() => handleRespondToSchedule(false)}
+                  disabled={!scheduleResponseForm.comment.trim()}
+                >
+                  {language === 'ar' ? 'إرسال الطلب' : 'Send Request'}
                 </Button>
               </div>
             </div>
