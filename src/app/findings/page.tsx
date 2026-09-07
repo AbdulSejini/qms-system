@@ -167,7 +167,16 @@ export default function FindingsPage() {
               descriptionAr: f.evidence || '',
               descriptionEn: f.evidence || '',
               severity: f.categoryB === 'major_nc' ? 'major' : f.categoryB === 'minor_nc' ? 'minor' : f.categoryB === 'observation' ? 'observation' : 'minor',
-              status: f.status === 'closed' ? 'closed' : f.status === 'in_progress' ? 'in_progress' : f.status === 'pending_verification' ? 'verified' : 'open',
+              // 'pending_verification' يعني أن الإجراء قُدّم وينتظر تحقّق المراجع - وهي
+              // ملاحظة مفتوحة. كانت تُترجَم إلى 'verified' فتُعرض خضراء "تم التحقق"،
+              // وتُحتسب ضمن المغلقة، ويُخفى عنها تنبيه التأخير وزر اتخاذ الإجراء.
+              status: f.status === 'closed'
+                ? 'closed'
+                : f.status === 'pending_verification'
+                  ? 'pending_verification'
+                  : f.status === 'in_progress'
+                    ? 'in_progress'
+                    : 'open',
               clause: f.clause || '',
               departmentId: f.departmentId,
               sectionId: f.sectionId,
@@ -379,6 +388,7 @@ export default function FindingsPage() {
     { value: 'open', labelAr: 'مفتوحة', labelEn: 'Open' },
     { value: 'in_progress', labelAr: 'قيد المعالجة', labelEn: 'In Progress' },
     { value: 'closed', labelAr: 'مغلقة', labelEn: 'Closed' },
+    { value: 'pending_verification', labelAr: 'بانتظار التحقق', labelEn: 'Awaiting Verification' },
     { value: 'verified', labelAr: 'تم التحقق', labelEn: 'Verified' },
   ];
 
@@ -414,7 +424,10 @@ export default function FindingsPage() {
     return matchesSearch && matchesSeverity && matchesStatus;
   });
 
-  const openCount = combinedFindings.filter(f => f.status === 'open').length;
+  // المفتوحة تشمل ما ينتظر التحقق: الإجراء قُدّم ولم يُتحقق منه بعد، والملاحظة قائمة.
+  const openCount = combinedFindings.filter(
+    f => f.status === 'open' || f.status === 'pending_verification'
+  ).length;
   const inProgressCount = combinedFindings.filter(f => f.status === 'in_progress').length;
   const closedCount = combinedFindings.filter(f => f.status === 'closed' || f.status === 'verified').length;
   const criticalCount = combinedFindings.filter(f => f.severity === 'critical' && f.status !== 'closed' && f.status !== 'verified').length;
@@ -477,8 +490,9 @@ export default function FindingsPage() {
           // Status only moves forward from 'open' - never downgrade a closed/verified finding
           status: editForm.correctiveAction && (!f.status || f.status === 'open') ? 'in_progress' : f.status,
           departmentResponse: {
-            approvedBy: currentUser?.id || '',
-            approvedAt: new Date().toISOString(),
+            // مَن ردّ، لا مَن اعتمد - الاعتماد يمنحه غير من كتب الإجراء
+            respondedBy: currentUser?.id || '',
+            respondedAt: new Date().toISOString(),
             closingDate: editForm.closingDate,
             comment: editForm.comment,
             attachments: editForm.attachments.map(file => ({

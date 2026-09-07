@@ -1088,13 +1088,59 @@ export default function AuditDetailPage() {
     setShowAnswerModal(true);
   };
 
+  // ===========================================
+  // إشعارات سلسلة الإجراء التصحيحي - لم تكن موجودة إطلاقاً
+  // ===========================================
+  //
+  // Not one event between "a finding is raised" and "a finding is closed" told anybody
+  // anything. The auditor was never told a corrective action had been submitted, the
+  // auditee was never told an extension had been granted or refused, and nobody was ever
+  // told a finding had been closed. The chain ran on people remembering to look.
+  const notifyAuditParties = async (
+    to: string[],
+    type: Parameters<typeof addNotification>[0]['type'],
+    titleAr: string, titleEn: string,
+    messageAr: string, messageEn: string
+  ) => {
+    const recipients = Array.from(new Set(to.filter(id => id && id !== currentUser?.id)));
+    await Promise.all(recipients.map(recipientId => addNotification({
+      type,
+      title: language === 'ar' ? titleAr : titleEn,
+      message: language === 'ar' ? messageAr : messageEn,
+      recipientId,
+      senderId: currentUser?.id,
+      auditId: audit?.id,
+    })));
+  };
+
+  // فريق المراجعة: رئيس الفريق والمراجعون
+  const auditTeamIds = (a: Audit): string[] =>
+    [a.leadAuditorId, ...(a.auditorIds || [])].filter(Boolean) as string[];
+
+  // رقم بلاغ الملاحظة - مشتق من أعلى رقم مستخدم فعلاً، لا من طول المصفوفة.
+  //
+  // `findings.length + 1` يتكرر بمجرد حذف ملاحظة: قائمة فيها F001 F002 F003 تصبح بعد
+  // حذف F002 طولها 2، فالملاحظة التالية تُرقَّم F003 وهو رقم قائم بالفعل. ورقم البلاغ
+  // هو ما تُراسَل به الإدارة وتُتابَع به الملاحظة، فتكراره يخلط ملاحظتين مختلفتين في
+  // سجل واحد.
+  const nextReportNumber = (a: Audit): string => {
+    const prefix = `${a.number}-F`;
+    const highest = (a.findings || []).reduce((max, f) => {
+      const suffix = (f.reportNumber || '').startsWith(prefix)
+        ? Number((f.reportNumber || '').slice(prefix.length))
+        : NaN;
+      return Number.isFinite(suffix) && suffix > max ? suffix : max;
+    }, 0);
+    return `${prefix}${String(highest + 1).padStart(3, '0')}`;
+  };
+
   // Add finding
   const handleAddFinding = async () => {
     if (!audit || !newFinding.finding || !newFinding.categoryA || !newFinding.categoryB || !newFinding.clause || !newFinding.evidence || !newFinding.estimatedClosingDate) return;
 
     const finding: Finding = {
       id: `f-${Date.now()}`,
-      reportNumber: `${audit.number}-F${String(audit.findings.length + 1).padStart(3, '0')}`,
+      reportNumber: nextReportNumber(audit),
       departmentId: newFinding.departmentId || audit.departmentId,
       sectionId: newFinding.sectionId || audit.sectionId,
       clause: newFinding.clause,
@@ -1206,7 +1252,7 @@ export default function AuditDetailPage() {
   };
 
   // Handle extension request
-  const handleExtensionRequest = () => {
+  const handleExtensionRequest = async () => {
     if (!audit || !selectedFinding || !extensionRequest.newDate || !extensionRequest.reason) return;
 
     const newExtension: ExtensionRequest = {
@@ -1224,15 +1270,31 @@ export default function AuditDetailPage() {
         : f
     );
 
-    saveAudit({ ...audit, findings: updatedFindings });
+    if (!(await saveAudit({ ...audit, findings: updatedFindings }))) return;
+
+    // طلب التمديد يحتاج من يبتّ فيه - وإلا بقي في المستند بلا علم أحد
+    await notifyAuditParties(
+      auditTeamIds(audit),
+      'corrective_action_response_required',
+      'طلب تمديد موعد إغلاق ملاحظة', 'Finding closing-date extension request',
+      `طُلب تمديد موعد إغلاق الملاحظة ${selectedFinding.reportNumber} إلى ${extensionRequest.newDate}. السبب: ${extensionRequest.reason}`,
+      `An extension to ${extensionRequest.newDate} was requested for finding ${selectedFinding.reportNumber}. Reason: ${extensionRequest.reason}`
+    );
+
     setExtensionRequest({ newDate: '', reason: '' });
     setSelectedFinding(null);
     setShowExtensionModal(false);
   };
 
   // Handle extension response (approve/reject)
-  const handleExtensionResponse = (findingId: string, extensionId: string, approved: boolean) => {
+  const handleExtensionResponse = async (findingId: string, extensionId: string, approved: boolean) => {
     if (!audit) return;
+    if (!(isLeadAuditor || isAuditor || isQualityManager)) {
+      setSaveError(language === 'ar'
+        ? 'البتّ في طلب التمديد من صلاحية فريق المراجعة وإدارة الجودة.'
+        : 'Only the audit team and the quality department can decide an extension request.');
+      return;
+    }
 
     const updatedFindings: Finding[] = audit.findings.map(f => {
       if (f.id === findingId) {
@@ -1261,7 +1323,23 @@ export default function AuditDetailPage() {
       return f;
     });
 
-    saveAudit({ ...audit, findings: updatedFindings });
+    if (!(await saveAudit({ ...audit, findings: updatedFindings }))) return;
+
+    // من طلب التمديد يُبلَّغ بالقرار - كان القرار يُكتب ولا يعلم به الطالب
+    const target = audit.findings.find(f => f.id === findingId);
+    const request = target?.extensionRequests?.find(er => er.id === extensionId);
+    await notifyAuditParties(
+      [request?.requestedBy || '', audit.auditeeId || ''],
+      'general',
+      approved ? 'الموافقة على تمديد موعد الإغلاق' : 'رفض تمديد موعد الإغلاق',
+      approved ? 'Extension approved' : 'Extension rejected',
+      approved
+        ? `تمت الموافقة على تمديد موعد إغلاق الملاحظة ${target?.reportNumber || ''} إلى ${request?.newDate || ''}.`
+        : `رُفض طلب تمديد موعد إغلاق الملاحظة ${target?.reportNumber || ''}. الموعد باقٍ كما هو.`,
+      approved
+        ? `The extension for finding ${target?.reportNumber || ''} was approved; the new closing date is ${request?.newDate || ''}.`
+        : `The extension request for finding ${target?.reportNumber || ''} was rejected; the closing date stands.`
+    );
   };
 
   // Handle corrective action
@@ -1285,21 +1363,39 @@ export default function AuditDetailPage() {
     setShowCorrectiveActionModal(false);
   };
 
-  // Handle verify finding
-  const handleVerifyFinding = (findingId: string) => {
+  // Handle verify finding.
+  // إغلاق الملاحظة تصرّف نهائي في سجل مراجعة: يقرره فريق المراجعة أو إدارة الجودة، لا
+  // من صدرت عليه الملاحظة. لم يكن على هذا الزر أي فحص للدور رغم أن تسميته للمراجع.
+  const handleVerifyFinding = async (findingId: string) => {
     if (!audit) return;
+    if (!(isLeadAuditor || isAuditor || isQualityManager)) {
+      setSaveError(language === 'ar'
+        ? 'إغلاق الملاحظة من صلاحية فريق المراجعة وإدارة الجودة.'
+        : 'Only the audit team and the quality department can close a finding.');
+      return;
+    }
 
+    const finding = audit.findings.find(f => f.id === findingId);
     const updatedFindings = audit.findings.map(f =>
       f.id === findingId
         ? { ...f, status: 'closed' as const, closedAt: new Date().toISOString() }
         : f
     );
 
-    saveAudit({ ...audit, findings: updatedFindings });
+    if (!(await saveAudit({ ...audit, findings: updatedFindings }))) return;
+
+    // الإدارة تُبلَّغ بإغلاق ملاحظتها - وإلا بقيت تتابع شيئاً أُغلق
+    await notifyAuditParties(
+      [audit.auditeeId || ''],
+      'general',
+      'إغلاق ملاحظة', 'Finding closed',
+      `أُغلقت الملاحظة ${finding?.reportNumber || ''} في المراجعة ${audit.number} بعد التحقق من الإجراء التصحيحي.`,
+      `Finding ${finding?.reportNumber || ''} on audit ${audit.number} has been closed after verification of the corrective action.`
+    );
   };
 
   // Handle auditee response to finding
-  const handleAuditeeResponse = () => {
+  const handleAuditeeResponse = async () => {
     if (!audit || !selectedFinding || !auditeeResponseForm.closingDate) return;
 
     const updatedFindings = audit.findings.map(f =>
@@ -1307,8 +1403,9 @@ export default function AuditDetailPage() {
         ? {
           ...f,
           departmentResponse: {
-            approvedBy: currentUser?.id || '',
-            approvedAt: new Date().toISOString(),
+            // مَن ردّ، لا مَن اعتمد - انظر DepartmentResponse في @/types
+            respondedBy: currentUser?.id || '',
+            respondedAt: new Date().toISOString(),
             closingDate: auditeeResponseForm.closingDate,
             comment: auditeeResponseForm.comment || undefined,
             attachments: auditeeResponseForm.attachments.map(file => ({
@@ -1338,11 +1435,20 @@ export default function AuditDetailPage() {
       },
     };
 
-    saveAudit({
+    if (!(await saveAudit({
       ...audit,
       findings: updatedFindings,
       activityLog: [...(audit.activityLog || []), activityEntry],
-    });
+    }))) return;
+
+    // فريق المراجعة يُبلَّغ بأن الإجراء التصحيحي قُدّم - هو من عليه التحقق منه
+    await notifyAuditParties(
+      auditTeamIds(audit),
+      'corrective_action_response_required',
+      'رد على ملاحظة مراجعة', 'Response to an audit finding',
+      `قدّمت الإدارة إجراءها التصحيحي للملاحظة ${selectedFinding.reportNumber} في المراجعة ${audit.number}، بتاريخ إغلاق ${auditeeResponseForm.closingDate}.`,
+      `The department submitted its corrective action for finding ${selectedFinding.reportNumber} on audit ${audit.number}, with a closing date of ${auditeeResponseForm.closingDate}.`
+    );
 
     // Reset form and close modal
     setAuditeeResponseForm({ comment: '', closingDate: '', attachments: [] });

@@ -371,10 +371,22 @@ export interface FindingComment {
   attachments?: AttachmentFile[];
 }
 
-// رد الإدارة على الإجراء التصحيحي
+// رد الإدارة على الإجراء التصحيحي.
+//
+// هذا رَدّ، لا اعتماد. الحقلان approvedBy/approvedAt كانا يُملآن بمُعرّف من كتب الإجراء
+// التصحيحي نفسه، أي أن السجل كان يشهد بأن الإدارة اعتمدت عملها - وهي شهادة زائفة في
+// سجل مراجعة. الاعتماد الحقيقي للإجراء التصحيحي هو qmsApprovedCorrectiveAction على
+// الملاحظة، ويمنحه غير من كتبه.
+//
+// respondedBy/respondedAt هما الحقلان الصحيحان. approvedBy/approvedAt مُبقيان اختياريين
+// للبيانات القديمة وحدها ولا يُكتبان بعد اليوم.
 export interface DepartmentResponse {
-  approvedBy: string;
-  approvedAt: string;
+  respondedBy?: string;
+  respondedAt?: string;
+  /** @deprecated بيانات قديمة فقط - لم تكن اعتماداً قط. استخدم respondedBy. */
+  approvedBy?: string;
+  /** @deprecated بيانات قديمة فقط. استخدم respondedAt. */
+  approvedAt?: string;
   closingDate: string;
   comment?: string;
   attachments?: AttachmentFile[];
