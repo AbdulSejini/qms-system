@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { Button, Badge } from '@/components/ui';
@@ -40,6 +41,10 @@ interface CalendarEvent {
   priority: 'low' | 'medium' | 'high' | 'critical';
   status?: string;
   relatedId?: string;
+  // هل يخصّني شخصياً - كرئيس فريق أو مراجع أو مراجَع عليه
+  isMine?: boolean;
+  // حالة تأكيد الموعد: موعد مقترح ليس حجزاً مؤكَّداً
+  scheduleState?: 'confirmed' | 'awaiting' | 'contested';
 }
 
 // Helper functions
@@ -67,11 +72,14 @@ const getPriorityFromSeverity = (severity: string): 'low' | 'medium' | 'high' | 
 };
 
 export default function CalendarPage() {
+  const router = useRouter();
   const { t, language, isRTL } = useTranslation();
   const { currentUser, hasPermission, users: allUsers, departments: allDepartments, sections: allSections } = useAuth();
 
   // State
-  const [currentDate, setCurrentDate] = useState(new Date(2026, 1, 1)); // February 2026
+  // اليوم هو اليوم. كان مثبَّتاً على 1 فبراير 2026 في أربعة مواضع، فيفتح التقويم على
+  // شهر خاطئ، ويظلّل يوماً خاطئاً، ويحسب "هذا الأسبوع" من تاريخ ثابت لا علاقة له بالآن.
+  const [currentDate, setCurrentDate] = useState(() => new Date());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'month' | 'list'>('month');
   const [filterType, setFilterType] = useState<string>('all');
@@ -99,6 +107,22 @@ export default function CalendarPage() {
               priority: audit.type === 'external' ? 'critical' : 'high',
               status: audit.status,
               relatedId: audit.id,
+              isMine:
+                audit.leadAuditorId === currentUser?.id ||
+                (audit.teamMemberIds || []).includes(currentUser?.id) ||
+                (audit.auditorIds || []).includes(currentUser?.id) ||
+                audit.auditeeId === currentUser?.id,
+              // التقويم كان يرسم التاريخ المقترح كأنه حجز مؤكَّد ولا يقرأ `schedule` إطلاقاً،
+              // فيظهر موعد لم يوافق عليه أحد - أو موعد طُلب تغييره - كأنه مستقر.
+              scheduleState: !audit.schedule
+                ? 'awaiting'
+                : (audit.schedule.auditor?.status === 'reschedule_requested' ||
+                   audit.schedule.auditee?.status === 'reschedule_requested')
+                  ? 'contested'
+                  : (audit.schedule.auditor?.status === 'accepted' &&
+                     audit.schedule.auditee?.status === 'accepted')
+                    ? 'confirmed'
+                    : 'awaiting',
             });
           }
 
@@ -117,6 +141,11 @@ export default function CalendarPage() {
                   priority: getPriorityFromSeverity(finding.categoryB === 'major_nc' ? 'major' : finding.categoryB === 'minor_nc' ? 'minor' : 'observation'),
                   status: finding.status || 'open',
                   relatedId: finding.id,
+                  isMine:
+                    audit.leadAuditorId === currentUser?.id ||
+                    (audit.teamMemberIds || []).includes(currentUser?.id) ||
+                    (audit.auditorIds || []).includes(currentUser?.id) ||
+                    audit.auditeeId === currentUser?.id,
                 });
               }
             });
@@ -127,7 +156,8 @@ export default function CalendarPage() {
     });
 
     return () => unsubscribe();
-  }, []);
+    // currentUser مطلوب: isMine يُحسب داخل هذا المستمع
+  }, [currentUser?.id]);
 
   // Filter events based on user role and permissions
   const filteredEvents = useMemo(() => {
@@ -138,11 +168,14 @@ export default function CalendarPage() {
       filtered = filtered.filter(e => e.type === filterType);
     }
 
-    // Role-based filtering
+    // Role-based filtering.
+    // كان الفلتر على الإدارة محل المراجعة وحدها، ورئيس فريق المراجعة بحكم شرط الاستقلالية
+    // ينتمي دائماً إلى إدارة أخرى - فلم يكن يرى مواعيد المراجعات التي يقودها في تقويمه.
     if (!hasPermission('canViewAllData')) {
-      // Non-admin users see only their department's events
       filtered = filtered.filter(e =>
-        !e.departmentId || e.departmentId === currentUser?.departmentId
+        !e.departmentId ||
+        e.departmentId === currentUser?.departmentId ||
+        e.isMine === true
       );
     }
 
@@ -173,7 +206,7 @@ export default function CalendarPage() {
   };
 
   const goToToday = () => {
-    setCurrentDate(new Date(2026, 1, 1)); // For demo, using Feb 2026
+    setCurrentDate(new Date());
   };
 
   // Calendar data
@@ -245,8 +278,8 @@ export default function CalendarPage() {
 
   // Upcoming events (next 7 days from Feb 1, 2026)
   const upcomingEvents = useMemo(() => {
-    const today = new Date(2026, 1, 1);
-    const nextWeek = new Date(2026, 1, 8);
+    const today = new Date();
+    const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
     return filteredEvents
       .filter(e => {
         const eventDate = new Date(e.date);
@@ -367,7 +400,7 @@ export default function CalendarPage() {
                         const day = i + 1;
                         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const dayEvents = getEventsForDate(dateStr);
-                        const isToday = dateStr === '2026-02-01'; // Demo: Feb 1 is "today"
+                        const isToday = dateStr === new Date().toISOString().split('T')[0];
                         const isSelected = dateStr === selectedDate;
 
                         return (
@@ -659,9 +692,37 @@ export default function CalendarPage() {
                   )}
                 </div>
 
+                {/* حالة تأكيد الموعد - الموعد المقترح ليس حجزاً مؤكَّداً */}
+                {selectedEvent.type === 'audit' && selectedEvent.scheduleState && (
+                  <div className={`rounded-lg border p-3 text-sm ${
+                    selectedEvent.scheduleState === 'confirmed'
+                      ? 'border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300'
+                      : selectedEvent.scheduleState === 'contested'
+                        ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300'
+                        : 'border-[var(--border)] bg-[var(--background-secondary)] text-[var(--foreground-secondary)]'
+                  }`}>
+                    {selectedEvent.scheduleState === 'confirmed'
+                      ? (language === 'ar' ? 'الموعد مؤكَّد من المراجع والمراجَع عليه.' : 'The date is confirmed by both the auditor and the auditee.')
+                      : selectedEvent.scheduleState === 'contested'
+                        ? (language === 'ar' ? 'طُلب تغيير هذا الموعد - غير مستقر.' : 'A reschedule has been requested - this date is not settled.')
+                        : (language === 'ar' ? 'موعد مقترح، لم يُؤكَّد بعد من الطرفين.' : 'Proposed date, not yet accepted by both parties.')}
+                  </div>
+                )}
+
                 {selectedEvent.relatedId && (
                   <div className="pt-4 border-t border-[var(--border)]">
-                    <Button variant="outline" className="w-full">
+                    {/* كان هذا الزر بلا onClick إطلاقاً - يُضغط ولا يحدث شيء */}
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => {
+                        const auditId = selectedEvent.id.startsWith('audit-')
+                          ? selectedEvent.relatedId
+                          : selectedEvent.id.replace(/^finding-/, '').split('|')[0];
+                        setShowEventModal(false);
+                        router.push(selectedEvent.type === 'audit' ? `/audits/${auditId}` : '/findings');
+                      }}
+                    >
                       <Eye className="h-4 w-4 me-2" />
                       {language === 'ar' ? 'عرض التفاصيل' : 'View Details'}
                     </Button>

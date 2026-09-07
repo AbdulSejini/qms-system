@@ -8,7 +8,7 @@ import { Button, Badge } from '@/components/ui';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { subscribeToAudits } from '@/lib/firestore';
+import { subscribeToAudits, addNotification } from '@/lib/firestore';
 import { Department, Section, User as UserType } from '@/types';
 import {
   ClipboardList,
@@ -126,7 +126,13 @@ export default function FollowUpPage() {
             assignedTo: audit.leadAuditorId || '',
             departmentId: audit.departmentId || '',
             relatedAuditId: audit.id,
-            progress: audit.status === 'execution' ? 50 : audit.status === 'awaiting_management' ? 75 : 25,
+            // 'awaiting_management' ليست من AuditStoredStatus ولا يكتبها أحد، فكانت
+            // هذه المقارنة ميتة والشريط يقف عند 25% أو 50% أبداً.
+            progress: audit.status === 'verification' ? 90
+              : audit.status === 'corrective_actions' ? 75
+                : audit.status === 'qms_review' ? 65
+                  : audit.status === 'execution' ? 50
+                    : 25,
             lastUpdate: audit.updatedAt || audit.createdAt,
             createdAt: audit.createdAt,
           });
@@ -390,9 +396,42 @@ export default function FollowUpPage() {
     setShowSendReminderModal(true);
   };
 
-  const confirmSendReminder = () => {
-    // In real app, send notification
-    alert(language === 'ar' ? 'تم إرسال التذكير بنجاح' : 'Reminder sent successfully');
+  // THE ONLY REMINDER BUTTON IN THE PRODUCT USED TO SEND NOTHING.
+  // It popped an alert saying "تم إرسال التذكير بنجاح" and closed the dialog. No
+  // notification was written, nobody was reminded, and the operator had every reason to
+  // believe they had chased the department. Combined with the fact that nothing else in
+  // the product ever notifies about an overdue item, an overdue finding could sit
+  // untouched indefinitely while somebody pressed this button every week.
+  const [reminderError, setReminderError] = useState<string | null>(null);
+  const [isSendingReminder, setIsSendingReminder] = useState(false);
+
+  const confirmSendReminder = async () => {
+    if (!selectedItem || isSendingReminder) return;
+    setIsSendingReminder(true);
+    setReminderError(null);
+
+    const overdue = selectedItem.status === 'overdue';
+    const sent = await addNotification({
+      type: 'corrective_action_response_required',
+      title: language === 'ar'
+        ? (overdue ? 'تذكير: بند متأخر عن موعده' : 'تذكير بموعد استحقاق')
+        : (overdue ? 'Reminder: item past its due date' : 'Due-date reminder'),
+      message: language === 'ar'
+        ? `${selectedItem.title} - تاريخ الاستحقاق ${selectedItem.dueDate}${overdue ? ' (متأخر)' : ''}.`
+        : `${selectedItem.titleEn || selectedItem.title} - due ${selectedItem.dueDate}${overdue ? ' (overdue)' : ''}.`,
+      recipientId: selectedItem.assignedTo,
+      senderId: currentUser?.id,
+      auditId: selectedItem.relatedAuditId,
+    });
+    setIsSendingReminder(false);
+
+    if (!sent) {
+      setReminderError(language === 'ar'
+        ? 'تعذّر إرسال التذكير. لم يُبلَّغ أحد - تأكد من وجود مسؤول معيّن لهذا البند وأعد المحاولة.'
+        : 'The reminder could not be sent. Nobody was notified - check that this item has an assignee and try again.');
+      return;
+    }
+
     setShowSendReminderModal(false);
     setSelectedItem(null);
   };
@@ -882,13 +921,21 @@ export default function FollowUpPage() {
                 </p>
               </div>
 
+              {reminderError && (
+                <p role="alert" className="mb-3 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+                  {reminderError}
+                </p>
+              )}
+
               <div className="flex items-center justify-end gap-3">
                 <Button variant="outline" onClick={() => setShowSendReminderModal(false)}>
                   {language === 'ar' ? 'إلغاء' : 'Cancel'}
                 </Button>
-                <Button onClick={confirmSendReminder}>
+                <Button onClick={confirmSendReminder} disabled={isSendingReminder || !selectedItem?.assignedTo}>
                   <Send className="h-4 w-4 me-2" />
-                  {language === 'ar' ? 'إرسال' : 'Send'}
+                  {isSendingReminder
+                    ? (language === 'ar' ? 'جارٍ الإرسال...' : 'Sending...')
+                    : (language === 'ar' ? 'إرسال' : 'Send')}
                 </Button>
               </div>
             </div>
