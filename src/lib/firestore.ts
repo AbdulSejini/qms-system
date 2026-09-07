@@ -892,6 +892,28 @@ export const deleteAudit = async (auditId: string): Promise<boolean> => {
   }
 };
 
+// Subscribe to ONE audit (real-time).
+//
+// The audit detail page was a one-shot getAuditById on mount. Two people working the same
+// audit therefore never saw each other: the quality manager approved the answers and the
+// auditor's screen went on showing them as unapproved until they reloaded by hand - and
+// the auditor's next save wrote back a document assembled before the approval existed.
+// "The approval doesn't arrive" was, in part, exactly this.
+export const subscribeToAudit = (
+  auditId: string,
+  callback: (audit: Audit | null) => void,
+  onError?: (error: SubscriptionError) => void
+): Unsubscribe => {
+  const auditRef = doc(db, COLLECTIONS.AUDITS, auditId);
+
+  return onSnapshot(auditRef, (snapshot) => {
+    callback(snapshot.exists() ? ({ id: snapshot.id, ...snapshot.data() } as Audit) : null);
+  }, (error) => {
+    console.error('Error listening to audit:', error);
+    onError?.(describeSnapshotError(error));
+  });
+};
+
 // Subscribe to audits (real-time)
 export const subscribeToAudits = (
   callback: (audits: Audit[]) => void,

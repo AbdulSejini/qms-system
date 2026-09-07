@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { DashboardLayout } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle, Skeleton } from '@/components/ui';
@@ -8,6 +8,7 @@ import { Button, Badge } from '@/components/ui';
 import { useTranslation } from '@/contexts/LanguageContext';
 import {
   getAuditById,
+  subscribeToAudit,
   getAuditNumber,
   updateAudit as updateAuditInFirestore,
   addNotification,
@@ -261,6 +262,8 @@ export default function AuditDetailPage() {
   const [loading, setLoading] = useState(true);
   // آخر فشل في الحفظ - يُعرض كشريط أحمر بدل أن يمر بصمت
   const [saveError, setSaveError] = useState<string | null>(null);
+  // آخر نسخة وردت من Firestore - يُقارَن بها الحفظ فلا يُكتب إلا ما تغيّر فعلاً
+  const storedAuditRef = useRef<Record<string, unknown> | null>(null);
   // نموذج الرد على الموعد وبوابات الاعتماد
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [scheduleResponseForm, setScheduleResponseForm] = useState({ comment: '', proposedStartDate: '' });
@@ -346,11 +349,18 @@ export default function AuditDetailPage() {
   const getSection = (id: string) => allSections.find(s => s.id === id);
   const getUser = (id: string) => allUsers.find(u => u.id === id);
 
-  // Load audit data from Firestore
+  // Load audit data from Firestore - LIVE.
+  //
+  // This was a one-shot read on mount. Two people on the same audit therefore never saw
+  // each other's work: the quality manager approved the answers and the auditor's screen
+  // kept showing them unapproved until a manual reload - and the auditor's next save
+  // wrote back a document assembled before the approval existed, undoing it. A live
+  // listener is what makes an approval "arrive" without anyone pressing refresh.
   useEffect(() => {
-    const loadAudit = async () => {
-      try {
-        const firestoreAudit = await getAuditById(auditId);
+    const unsubscribe = subscribeToAudit(
+      auditId,
+      (firestoreAudit) => {
+        storedAuditRef.current = (firestoreAudit as unknown as Record<string, unknown>) ?? null;
         if (firestoreAudit) {
           // حقول محفوظة في نفس مستند Firestore لكنها غير معرّفة في نوع Audit هناك
           const storedExtras = firestoreAudit as typeof firestoreAudit & StoredAuditExtras;
@@ -399,13 +409,19 @@ export default function AuditDetailPage() {
           };
           setAudit(convertedAudit);
         }
-      } catch (error) {
-        console.error('Error loading audit:', error);
+        setLoading(false);
+      },
+      () => {
+        setSaveError(
+          language === 'ar'
+            ? 'تعذّر متابعة تحديثات هذه المراجعة. ما تراه قد يكون قديماً - أعد تحميل الصفحة.'
+            : 'Live updates for this audit could not be followed. What you see may be stale - reload the page.'
+        );
+        setLoading(false);
       }
-      setLoading(false);
-    };
-    loadAudit();
-  }, [auditId]);
+    );
+    return () => unsubscribe();
+  }, [auditId, language]);
 
   // Helper to get stage from status.
   // The local map that used to live here mapped 'cancelled' to 5, i.e. onto 'completed',
@@ -446,6 +462,32 @@ export default function AuditDetailPage() {
       correctiveActionsApprovedBy: updatedAudit.correctiveActionsApprovedBy,
       correctiveActionsApprovalComment: updatedAudit.correctiveActionsApprovalComment,
     };
+    // ONLY WHAT CHANGED IS WRITTEN.
+    //
+    // This payload names 22 top-level fields and every action sent all of them, rebuilt
+    // from React state: answering one question rewrote the stage, the status, the whole
+    // findings array, the whole activity log and the QMS approval block. Two people
+    // working one audit overwrote each other by simply doing their own jobs - the
+    // auditor's save would put back a currentStage and a qmsApprovalData captured before
+    // the quality manager's decision existed, silently undoing an approval that HAD been
+    // recorded. Diffing against the last document Firestore actually sent us reduces each
+    // action to the fields it really touches.
+    const stored = storedAuditRef.current;
+    const changed: Record<string, unknown> = stored
+      ? Object.fromEntries(
+          Object.entries(payload).filter(
+            ([key, value]) => JSON.stringify(value) !== JSON.stringify(stored[key])
+          )
+        )
+      : payload;
+
+    // لا شيء تغيّر - لا كتابة، ولا رسالة خطأ
+    if (Object.keys(changed).length === 0) {
+      setSaveError(null);
+      setAudit(updatedAudit);
+      return true;
+    }
+
     // THE WRITE IS THE OPERATION. This used to be a bare `await` whose boolean was
     // dropped on the floor, followed by an unconditional setAudit(): a write refused by
     // firestore.rules, or lost to a dead connection, produced a screen showing the change
@@ -455,7 +497,7 @@ export default function AuditDetailPage() {
     //
     // On failure local state is deliberately NOT committed, so the screen falls back to
     // what is actually stored rather than showing a change that does not exist.
-    const ok = await updateAuditInFirestore(auditId, payload);
+    const ok = await updateAuditInFirestore(auditId, changed);
     if (!ok) {
       setSaveError(
         language === 'ar'
@@ -692,7 +734,9 @@ export default function AuditDetailPage() {
   // ما يراه المستخدم من الأجوبة. القاعدة كانت معرَّفة ولم تُطبَّق قط.
   const canViewAnswers = audit && currentUser ? mayViewAnswers(audit, currentUser) : false;
 
-  // إعادة تحميل المراجعة من Firestore بعد كتابة حقلية لا تمر عبر saveAudit
+  // الكتابات الحقلية للبوابات لا تمر عبر saveAudit، والمستمع الحي أعلاه يلتقطها
+  // من تلقائه. أُبقيت الدالة نقطة واحدة يمكن انتظارها بعد قرار حتى لا يتسابق
+  // الزر مع اللقطة القادمة.
   const reloadAudit = async () => {
     const fresh = await getAuditById(auditId);
     if (fresh) {

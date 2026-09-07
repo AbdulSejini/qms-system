@@ -13,7 +13,8 @@
     "emulator": "export JAVA_HOME=\"/opt/homebrew/opt/openjdk@21\" && export PATH=\"$JAVA_HOME/bin:$PATH\" && firebase emulators:start --project demo-qms --only auth,firestore",
     "dev:emulator": "set -a && . ./.env.emulator && set +a && next dev --port 3001",
     "seed:emulator": "FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 GCLOUD_PROJECT=demo-qms node scripts/seed-emulator.mjs",
-    "seed:demo-audit": "FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GCLOUD_PROJECT=demo-qms node scripts/seed-demo-audit.mjs"
+    "seed:demo-audit": "FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GCLOUD_PROJECT=demo-qms node scripts/seed-demo-audit.mjs",
+    "e2e:emulator": "node scripts/e2e-approval-lifecycle.mjs"
   },
   "dependencies": {
     "@types/bcryptjs": "^2.4.6",
