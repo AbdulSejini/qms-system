@@ -169,8 +169,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await initSystem();
         if (isStale()) return;
 
-        // ربط حساب Auth بمستند المستخدم الأصلي عبر authUsers/{uid} وحده
-        const resolved = await resolveAppUser(firebaseUser.uid, firebaseUser.email);
+        // ربط حساب Auth بمستند المستخدم الأصلي عبر authUsers/{uid} وحده.
+        //
+        // A TRANSIENT FAILURE ON THE FIRST RESOLUTION USED TO LOOK LIKE BEING SIGNED OUT.
+        // The 'unavailable' branch below deliberately keeps the existing session rather
+        // than ejecting the user over a network blip - but on the FIRST resolution after
+        // a reload there is no existing session to keep: currentUser is still null,
+        // isLoading is cleared, and ProtectedRoute bounces a perfectly valid session to
+        // the login page. A brief Firestore hiccup during page load therefore read, to
+        // the user, as being logged out. A temporary fault is retried before it is
+        // allowed to settle into "not signed in".
+        let resolved = await resolveAppUser(firebaseUser.uid, firebaseUser.email);
+        for (let attempt = 1; attempt <= 2 && !resolved.ok && resolved.reason === 'unavailable'; attempt++) {
+          await new Promise(done => setTimeout(done, attempt * 600));
+          if (isStale()) return;
+          resolved = await resolveAppUser(firebaseUser.uid, firebaseUser.email);
+        }
         // انتهت الجلسة أو تغيّرت أثناء انتظار Firestore - لا نلمس الحالة الحالية
         if (isStale()) return;
 
@@ -337,9 +351,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const targetUser = users.find(u => u.id === userId);
     if (targetUser?.isSystemAccount) return false;
 
+    // DEFAULT_PERMISSIONS sets canManageUsers to FALSE for quality_manager, so the second
+    // clause was never true: the reset button on the Users page - a page the quality
+    // manager is explicitly allowed to open - did nothing when they pressed it. The
+    // Firestore rules already accept a quality_manager here (they write authUsers and
+    // passwords), so the client check was the odd one out. It now matches the page's own
+    // access rule and the rules file.
     const canReset =
-      currentUser.role === 'system_admin' ||
-      (currentUser.role === 'quality_manager' && permissions.canManageUsers);
+      currentUser.role === 'system_admin' || currentUser.role === 'quality_manager';
 
     if (!canReset) return false;
 

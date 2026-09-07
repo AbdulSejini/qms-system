@@ -858,6 +858,26 @@ service cloud.firestore {
                 'rejectionReason', 'approverComment'];
       }
 
+      // MEASURED HEADROOM ON THIS COLLECTION - read before adding any branch.
+      //
+      // Every legitimate update here is comfortably inside the 1000-expression budget:
+      // linking an audit onto a line of an APPROVED plan - the last and most expensive
+      // branch, and the one the new-audit wizard exercises on every creation - succeeds on
+      // plans of 1, 4, 8, 12, 16 and 24 lines (measured on the emulator).
+      //
+      // The DENIAL path is a different matter: when no branch matches, all of them are
+      // evaluated, and that already reports "maximum of 1000 expressions" instead of a
+      // rule verdict. Denials are still denials, so nothing is broken today - but it means
+      // the margin is thin, and Firestore surfaces an overrun as PERMISSION_DENIED,
+      // indistinguishable from a real authorization failure. That is how plan approval
+      // died in production here once already.
+      //
+      // SO: before adding a condition to any branch below, measure. A mirrored
+      // unlink-the-deleted-audit branch was written and rejected for exactly this - it
+      // broke emulator seeding outright. Prefer solving it in the client (see the comment
+      // over deleteAudit in src/lib/firestore.ts), or free budget first by merging shared
+      // prefixes, the way authorWorks() merges what used to be two functions.
+
       function changedKeys() {
         return request.resource.data.diff(resource.data).affectedKeys();
       }
@@ -919,20 +939,6 @@ service cloud.firestore {
                && stampNotForged(changed, 'approverComment');
       }
 
-      // (1) The author works on the plan - items, titles, anything but the
-      //     decision stamps. Only while it is a draft or has come back
-      //     rejected: the content is frozen from the moment it is submitted,
-      //     so what the approver decides on is what they were shown.
-      //     Matches canEditPlan on the plans page (author or system_admin,
-      //     status draft or rejected).
-      function authorEditsContent(uid, role, changed) {
-        return role in ['system_admin', 'quality_manager']
-               && (isSelfId(uid, author()) || role == 'system_admin')
-               && currentStatus() in ['draft', 'rejected']
-               && nextStatus() == currentStatus()
-               && stampsNotForged(changed)
-               && identityUnchanged();
-      }
 
       // (2) The author submits it to the approver they picked
       //     (handleSubmitForApproval writes status, approverId and submittedAt;
@@ -944,16 +950,37 @@ service cloud.firestore {
       //     has no approval step, which is the defect this rule exists for -
       //     and the check has to live here, because the plans page excludes
       //     only the submitter from the approver list, not the author.
-      function authorSubmits(uid, role, changed) {
+      //     THESE TWO ARE ONE FUNCTION, AND THAT IS DELIBERATE. Written as
+      //     separate branches - authorEditsContent and authorSubmits - they
+      //     shared a four-condition prefix INCLUDING stampsNotForged(), which is
+      //     six stamp checks of two get()s each, and the whole prefix was
+      //     therefore evaluated TWICE on every update. That is what pushed the
+      //     ruleset onto the 1000-expression ceiling: a denied update on this
+      //     collection reported "maximum of 1000 expressions" rather than a rule
+      //     verdict, which means a legitimate write evaluated late in the chain
+      //     was one small change away from being refused for the same reason -
+      //     and Firestore surfaces that overrun as PERMISSION_DENIED,
+      //     indistinguishable from a real authorization failure. That is how
+      //     plan approval died in production here once already.
+      //
+      //     The shared prefix is now evaluated once and the two moves are the
+      //     cheap disjunction at the end. Semantics are unchanged: editing keeps
+      //     the status where it was and freezes identity; submitting moves it to
+      //     'pending_approval', touches only author fields, and names a real
+      //     approver who is neither the author nor the submitter.
+      function authorWorks(uid, role, changed) {
         return role in ['system_admin', 'quality_manager']
                && (isSelfId(uid, author()) || role == 'system_admin')
                && currentStatus() in ['draft', 'rejected']
-               && nextStatus() == 'pending_approval'
-               && changed.hasOnly(authorFields())
                && stampsNotForged(changed)
-               && request.resource.data.get('approverId', '') != ''
-               && request.resource.data.get('approverId', '') != author()
-               && request.resource.data.get('approverId', '') != uid;
+               && (
+                    (nextStatus() == currentStatus() && identityUnchanged())
+                    || (nextStatus() == 'pending_approval'
+                        && changed.hasOnly(authorFields())
+                        && request.resource.data.get('approverId', '') != ''
+                        && request.resource.data.get('approverId', '') != author()
+                        && request.resource.data.get('approverId', '') != uid)
+                  );
       }
 
       // (3) The approver NAMED ON THIS PLAN records the decision, once, and
@@ -1090,8 +1117,7 @@ service cloud.firestore {
       //         reading userId and role straight off the mapping is precisely
       //         what appUserId() and appRole() would have returned.
       function canUpdate(uid, role, changed) {
-        return authorEditsContent(uid, role, changed)
-               || authorSubmits(uid, role, changed)
+        return authorWorks(uid, role, changed)
                || authorRecalls(uid, role, changed)
                || approverDecides(uid, changed)
                || linksCreatedAuditToItem(changed);

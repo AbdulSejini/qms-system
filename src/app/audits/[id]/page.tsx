@@ -55,6 +55,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { logger } from '@/lib/logger';
 import type {
   QMSDecision, QMSComment, QMSModificationEntry, QMSApprovalData,
   // موحَّدة في @/types بدل نسخ محلية كانت تختلف عنها في التفاصيل
@@ -1189,11 +1190,19 @@ export default function AuditDetailPage() {
       .filter(u => u.role === 'quality_manager' && u.isActive)
       .map(u => u.id);
 
-    // Deduplicate and never notify the user who raised the finding
+    // WHO HEARS ABOUT A FINDING, AND WHEN.
+    //
+    // This used to notify every employee of the audited department the instant the auditor
+    // typed the finding - the raw text, before any quality review. That is the same
+    // unreviewed judgement the answers gate exists to keep from the auditee, published to
+    // the whole department by a different route. The people producing and checking the
+    // finding hear about it now; the department hears once the answers are approved and
+    // the corrective action is asked for.
     const recipientIds = Array.from(new Set([
-      ...deptEmployees.map(e => e.id),
       ...auditTeamIds,
       ...qualityManagerIds,
+      // بعد اعتماد الأجوبة تكون الملاحظة مُراجَعة، فتُبلَّغ بها الإدارة
+      ...(answersApproved ? deptEmployees.map(e => e.id) : []),
     ])).filter(id => id && id !== currentUser?.id);
 
     if (recipientIds.length > 0) {
@@ -1461,6 +1470,8 @@ export default function AuditDetailPage() {
   // ===========================================
 
   // إرسال إشعار via Firestore
+  // إشعار بلا مستقبِلين لا يُرسل - وكان ذلك يحدث بصمت تام. يُسجَّل الآن، فمن أُريد
+  // إبلاغه ولم يُبلَّغ يترك أثراً بدل أن يختفي.
   const sendNotification = async (notification: {
     type: string;
     title: string;
@@ -1469,6 +1480,16 @@ export default function AuditDetailPage() {
     forRole?: string;
     forUserIds?: string[];
   }) => {
+    if (
+      (!notification.forUserIds || notification.forUserIds.length === 0) &&
+      !notification.forRole
+    ) {
+      logger.error(
+        `Audit notification "${notification.title}" had no recipients on audit ${notification.auditId}. Nobody was told.`
+      );
+      return;
+    }
+
     // If notification is for specific users
     if (notification.forUserIds && notification.forUserIds.length > 0) {
       for (const userId of notification.forUserIds) {

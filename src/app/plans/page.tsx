@@ -599,10 +599,20 @@ function PlansPageContent() {
     }
 
     setIsSubmitting(true);
+    // ختوم الرفض تُمحى عند إعادة الإرسال.
+    //
+    // كانت تبقى كما هي، فتصل الخطة إلى حالة "معتمدة" وهي تحمل rejectedBy وrejectedAt
+    // وسبب رفض من دورة سابقة - سجل يقول إن الخطة اعتُمدت ورُفضت معاً، وأي شاشة تقرأ
+    // rejectionReason تعرض رفضاً قديماً على خطة معتمدة. قواعد Firestore تسمح بمحوها
+    // أصلاً (stampNotForged تقبل التغيير إن كان إلى قيمة فارغة)، ولم يكن العميل يفعل.
     const saved = await updateAnnualPlan(selectedPlan.id, {
       status: 'pending_approval',
       approverId: selectedApproverId,
       submittedAt: new Date().toISOString(),
+      rejectedBy: '',
+      rejectedAt: '',
+      rejectionReason: '',
+      approverComment: '',
     });
 
     if (!saved) {
