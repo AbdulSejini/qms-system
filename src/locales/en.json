@@ -29,7 +29,9 @@
     "download": "Download",
     "upload": "Upload",
     "darkMode": "Dark Mode",
-    "lightMode": "Light Mode"
+    "lightMode": "Light Mode",
+    "approve": "Approve",
+    "reject": "Reject"
   },
   "navigation": {
     "dashboard": "Dashboard",
@@ -207,7 +209,8 @@
       "month": "Planned Month",
       "auditType": "Audit Type",
       "leadAuditor": "Lead Auditor",
-      "auditCreated": "Audit Created"
+      "auditCreated": "Audit Created",
+      "team": "Audit Team"
     },
     "form": {
       "year": "Year",
@@ -216,7 +219,9 @@
       "selectDepartment": "Select Department",
       "allSections": "All Sections",
       "selectLater": "Decide later",
-      "notes": "Notes"
+      "notes": "Notes",
+      "addTeamMember": "Add a team member",
+      "noMoreAuditors": "No auditors available"
     },
     "detail": {
       "itemsTitle": "Planned Audits",
@@ -229,7 +234,8 @@
       "rejectionReason": "Rejection reason",
       "readOnly": "This plan is approved and can no longer be edited.",
       "auditCreatedYes": "Created",
-      "auditCreatedNo": "Not yet"
+      "auditCreatedNo": "Not yet",
+      "amendmentPending": "Amendment awaiting approval"
     },
     "actions": {
       "open": "Open Plan",
@@ -238,7 +244,10 @@
       "removeItem": "Remove Item",
       "submitForApproval": "Submit for Approval",
       "approve": "Approve",
-      "reject": "Reject"
+      "reject": "Reject",
+      "amendItem": "Amend the month or the team",
+      "approveAmendment": "Approve the amendment",
+      "rejectAmendment": "Reject the amendment"
     },
     "submit": {
       "title": "Submit Plan for Approval",
@@ -254,7 +263,8 @@
     },
     "delete": {
       "title": "Delete Annual Plan",
-      "description": "This plan and all its planned audits will be deleted"
+      "description": "This plan and all its planned audits will be deleted",
+      "cascade": "The plan disappears at once from every page - the dashboard and the plan list - its notifications (the approval request and the approver's decision) are removed with it, and the deletion is written to the system activity log."
     },
     "empty": {
       "noPlans": "No annual plans yet",
@@ -276,7 +286,21 @@
       "reasonRequired": "A rejection reason is required.",
       "decisionFailed": "Could not save the decision. Check your connection and try again.",
       "deleteFailed": "Could not delete the plan. Check your connection and try again.",
-      "notificationFailed": "The plan was saved, but the notification could not be sent."
+      "notificationFailed": "The plan was saved, but the notification could not be sent.",
+      "itemGone": "This planned line is no longer in the plan.",
+      "nothingChanged": "Nothing has been changed yet.",
+      "amendReasonRequired": "A reason is required - the approver sees it.",
+      "amendFailed": "Could not save the amendment. Check your connection and try again."
+    },
+    "amend": {
+      "title": "Amend a planned audit",
+      "explainer": "Any change to the month or the audit team goes to the plan’s own approver, and the line stands as approved until they decide. They are shown exactly what changed: before against after.",
+      "reason": "Reason for the change",
+      "reasonPlaceholder": "Required - shown to the approver with the request",
+      "auditExists": "An audit was created from this line. This amends the plan only; the audit’s own dates and team are changed on the audit page.",
+      "rejectReason": "Reason for rejection",
+      "currentState": "Approved now",
+      "proposedState": "Proposed"
     }
   },
   "findings": {

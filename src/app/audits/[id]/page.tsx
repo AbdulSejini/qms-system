@@ -56,6 +56,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { logger } from '@/lib/logger';
+import { recordActivity } from '@/lib/activity-log';
 import type {
   QMSDecision, QMSComment, QMSModificationEntry, QMSApprovalData,
   // موحَّدة في @/types بدل نسخ محلية كانت تختلف عنها في التفاصيل
@@ -77,6 +78,7 @@ import {
   awaitingScheduleFrom,
   decideGate,
   gateDecidersIn,
+  isIndependentOf,
   isRescheduleRequested,
   isScheduleConfirmed,
   mayDecideGate,
@@ -301,6 +303,18 @@ export default function AuditDetailPage() {
     startDate: '',
     endDate: '',
   });
+
+  // المراجعون المعروضون في نافذة التعديل: المستقلون عن الإدارة محل المراجعة وحدهم -
+  // نفس الحارس المطبّق في معالج إنشاء المراجعة وفي بنود الخطة السنوية. كانت هذه
+  // النافذة تعرض الجميع، فيُعاد تشكيل الفريق من داخل الإدارة التي تُراجَع، وهو ما
+  // يُبطل استقلالية المراجعة كلها. الإدارة تُقرأ من النموذج لا من المراجعة، لأنها
+  // قد تكون قد تغيّرت في النافذة نفسها.
+  const editAuditors = useMemo(
+    () => auditors.filter(u =>
+      isIndependentOf(u, editAuditForm.departmentId, editAuditForm.sectionId || undefined)
+    ),
+    [auditors, editAuditForm.departmentId, editAuditForm.sectionId]
+  );
 
   // Selected finding for actions
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
@@ -1733,9 +1747,22 @@ export default function AuditDetailPage() {
     setShowEditAuditModal(true);
   };
 
-  // حفظ تعديلات بيانات المراجعة (لمدير الجودة فقط)
-  const handleSaveAuditEdit = () => {
-    if (!audit || !isQualityManager) return;
+  // حفظ تعديلات بيانات المراجعة - إعادة جدولة أو إعادة تشكيل فريق.
+  //
+  // المراجعة تُنشأ من بند الخطة ثم تعيش أسابيع: يتأجل الموعد، ويُنقل مراجع، ويُضاف
+  // آخر. هذا مسموح في أي مرحلة ما دامت المراجعة لم تُقفل أو تُلغَ - وهو ما يفرضه
+  // canEditAuditDetails أدناه.
+  //
+  // والتعديل هنا ليس تحرير حقول في نموذج: من أُضيف إلى الفريق لا يعلم أنه صار
+  // مراجعاً، ومن أُخرج منه يبقى ينتظر عملاً لم يعد له، والموعد الجديد لا يصل إلى
+  // من عليه أن يحضره. لذلك يُتبَع كل تغيير بمن يجب أن يسمعه:
+  //   - عضو أُضيف أو رُفع رئيساً: يُبلَّغ بانضمامه؛
+  //   - عضو أُخرج: يُبلَّغ بخروجه صراحةً؛
+  //   - وإن تحرك التاريخ: يُبلَّغ كل من بقي في الفريق بالموعد الجديد.
+  // ويُسجَّل التغيير في سجل نشاط النظام أيضاً، لا في سجل المراجعة وحده: من غيّر
+  // موعد مراجعة أو فريقها سؤالٌ يُطرح بعد شهور.
+  const handleSaveAuditEdit = async () => {
+    if (!audit || !canEditAuditDetails) return;
 
     // جمع التغييرات لتسجيلها
     const changes: string[] = [];
@@ -1783,6 +1810,71 @@ export default function AuditDetailPage() {
 
     saveAudit(updatedAudit);
     setShowEditAuditModal(false);
+
+    if (changes.length === 0) return;
+
+    // من دخل الفريق ومن خرج منه - المقارنة على الفريق كاملاً، رئيسه وأعضاءه
+    const before = [...new Set([audit.leadAuditorId, ...(audit.auditorIds || [])])].filter(Boolean);
+    const after = [...new Set(allAuditorIds)].filter(Boolean);
+    const added = after.filter(id => !before.includes(id));
+    const removed = before.filter(id => !after.includes(id));
+    const dateMoved =
+      editAuditForm.startDate !== audit.startDate || editAuditForm.endDate !== (audit.endDate || '');
+    const auditNumber = getAuditNumber(audit);
+    const when = `${editAuditForm.startDate}${editAuditForm.endDate ? ` → ${editAuditForm.endDate}` : ''}`;
+
+    if (added.length > 0) {
+      await sendNotification({
+        type: 'audit_team_assignment',
+        title: language === 'ar' ? 'أُضفت إلى فريق مراجعة' : 'You were added to an audit team',
+        message: language === 'ar'
+          ? `أضافك ${getUser(currentUser?.id || '')?.fullNameAr || 'مدير الجودة'} إلى فريق المراجعة ${auditNumber} - "${audit.titleAr}"، وموعدها ${when}.`
+          : `${getUser(currentUser?.id || '')?.fullNameEn || 'The quality manager'} added you to audit ${auditNumber} - "${audit.titleEn}", scheduled ${when}.`,
+        auditId: audit.id,
+        forUserIds: added,
+      });
+    }
+
+    if (removed.length > 0) {
+      await sendNotification({
+        type: 'general',
+        title: language === 'ar' ? 'أُخرجت من فريق مراجعة' : 'You were removed from an audit team',
+        message: language === 'ar'
+          ? `لم تعد ضمن فريق المراجعة ${auditNumber} - "${audit.titleAr}". لا مطلوب منك عليها بعد الآن.`
+          : `You are no longer on the team for audit ${auditNumber} - "${audit.titleEn}". Nothing on it is expected from you any more.`,
+        auditId: audit.id,
+        forUserIds: removed,
+      });
+    }
+
+    // الموعد الجديد يصل من بقي في الفريق - أما من أُضيف فقد حمله إشعار انضمامه
+    const staying = after.filter(id => !added.includes(id));
+    if (dateMoved && staying.length > 0) {
+      await sendNotification({
+        type: 'audit_scheduled',
+        title: language === 'ar' ? 'تغيّر موعد المراجعة' : 'An audit was rescheduled',
+        message: language === 'ar'
+          ? `نُقلت المراجعة ${auditNumber} - "${audit.titleAr}" من ${audit.startDate}${audit.endDate ? ` → ${audit.endDate}` : ''} إلى ${when}.`
+          : `Audit ${auditNumber} - "${audit.titleEn}" moved from ${audit.startDate}${audit.endDate ? ` → ${audit.endDate}` : ''} to ${when}.`,
+        auditId: audit.id,
+        forUserIds: staying,
+      });
+    }
+
+    if (currentUser) {
+      void recordActivity({
+        actorUserId: currentUser.id,
+        actorName: currentUser.fullNameEn || currentUser.fullNameAr,
+        actorEmail: currentUser.email ?? '',
+        actorRole: currentUser.role,
+        action: 'update',
+        entity: 'audit',
+        entityId: audit.id,
+        entityLabel: `${auditNumber} - ${audit.titleAr || audit.titleEn}`,
+        summaryAr: `عدّل بيانات المراجعة ${auditNumber}: ${changes.join('، ')}`,
+        summaryEn: `Amended audit ${auditNumber}: ${changes.join('; ')}`,
+      });
+    }
   };
 
   // إرسال التعديلات من المراجع
@@ -2006,6 +2098,15 @@ export default function AuditDetailPage() {
   // لوحة التحكم ثم لا يجد أي زر اعتماد حين يفتح المراجعة.
   const isQualityManager =
     currentUser?.role === 'quality_manager' || currentUser?.role === 'system_admin';
+
+  // من يعيد الجدولة أو يعيد تشكيل الفريق، وإلى متى.
+  // إدارة الجودة ومدير النظام - ومدير النظام كان محروماً منها بلا سبب. والحد هو
+  // إقفال المراجعة: مراجعة مكتملة أو ملغاة سجلٌّ لما جرى، وتغيير موعدها أو فريقها
+  // بعد ذلك يعيد كتابة التاريخ بدل أن يصحّح خطة.
+  const canEditAuditDetails =
+    (isQualityManager || currentUser?.role === 'system_admin') &&
+    audit?.status !== 'completed' &&
+    audit?.status !== 'cancelled';
 
   // Check if user is from the audited department
   const isFromAuditedDepartment = currentUser?.departmentId === audit.departmentId;
@@ -2556,7 +2657,7 @@ export default function AuditDetailPage() {
                         <Info className="h-5 w-5 text-[var(--primary)]" />
                         {language === 'ar' ? 'تفاصيل المراجعة' : 'Audit Details'}
                       </h3>
-                      {isQualityManager && (
+                      {canEditAuditDetails && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -5555,7 +5656,7 @@ export default function AuditDetailPage() {
         )}
 
         {/* Edit Audit Modal - لمدير الجودة فقط */}
-        {showEditAuditModal && isQualityManager && (
+        {showEditAuditModal && canEditAuditDetails && (
           <div className="fixed inset-0 z-50 flex items-center justify-center">
             <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowEditAuditModal(false)} />
             <div className="relative z-50 w-full max-w-3xl rounded-xl bg-white dark:bg-gray-900 shadow-xl mx-4 max-h-[90vh] overflow-y-auto">
@@ -5688,7 +5789,7 @@ export default function AuditDetailPage() {
                         className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
                       >
                         <option value="">{language === 'ar' ? 'اختر رئيس الفريق' : 'Select Lead Auditor'}</option>
-                        {auditors.map(auditor => (
+                        {editAuditors.map(auditor => (
                           <option key={auditor.id} value={auditor.id}>
                             {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
                           </option>
@@ -5708,7 +5809,7 @@ export default function AuditDetailPage() {
                         }}
                         className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm h-24"
                       >
-                        {auditors.filter(a => a.id !== editAuditForm.leadAuditorId).map(auditor => (
+                        {editAuditors.filter(a => a.id !== editAuditForm.leadAuditorId).map(auditor => (
                           <option key={auditor.id} value={auditor.id}>
                             {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
                           </option>

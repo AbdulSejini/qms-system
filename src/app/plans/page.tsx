@@ -15,8 +15,10 @@ import {
   createAnnualPlan,
   updateAnnualPlan,
   deleteAnnualPlan,
+  deleteNotificationsForPlan,
   addNotification,
 } from '@/lib/firestore';
+import { recordActivity } from '@/lib/activity-log';
 import { AnnualPlan, AnnualPlanItem, AnnualPlanStatus, AuditType } from '@/types';
 import orgStructure from '@/data/org-structure.json';
 import {
@@ -144,6 +146,7 @@ function PlansPageContent() {
     plannedMonth: number;
     auditType: AuditType;
     leadAuditorId: string;
+    auditorIds: string[];
     notes: string;
   }>({
     departmentId: '',
@@ -151,6 +154,7 @@ function PlansPageContent() {
     plannedMonth: 1,
     auditType: 'internal',
     leadAuditorId: '',
+    auditorIds: [],
     notes: '',
   });
 
@@ -178,6 +182,27 @@ function PlansPageContent() {
   const [planToDelete, setPlanToDelete] = useState<AnnualPlan | null>(null);
   const [deleteError, setDeleteError] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // نافذة تعديل بند في خطة معتمدة - الشهر يمضي مباشرة، والفريق يمرّ بالمعتمِد
+  const [itemToAmend, setItemToAmend] = useState<AnnualPlanItem | null>(null);
+  const [amend, setAmend] = useState<{
+    plannedMonth: number;
+    leadAuditorId: string;
+    auditorIds: string[];
+    reason: string;
+  }>({ plannedMonth: 1, leadAuditorId: '', auditorIds: [], reason: '' });
+  const [amendError, setAmendError] = useState('');
+  const [isAmending, setIsAmending] = useState(false);
+
+  // قرار المعتمِد على تعديل فريق مقترح
+  const [itemDecision, setItemDecision] = useState<{ item: AnnualPlanItem; approve: boolean } | null>(null);
+  const [itemDecisionReason, setItemDecisionReason] = useState('');
+  const [itemDecisionError, setItemDecisionError] = useState('');
+  const [isDecidingItem, setIsDecidingItem] = useState(false);
+
+  // رسالة على مستوى الصفحة - تُستخدم بعد إغلاق النافذة المنبثقة: نتيجة الحذف،
+  // أو أن الخطة المطلوبة برابط الإشعار لم تعد موجودة.
+  const [pageNotice, setPageNotice] = useState('');
 
   // فتح خطة بعينها من رابط الإشعار: /plans?plan=<id>
   // المعتمِد قد يكون موظفاً عادياً لا يظهر له عنصر "الخطط" في القائمة الجانبية،
@@ -209,6 +234,25 @@ function PlansPageContent() {
     () => plans.find(p => p.id === selectedPlanId) || null,
     [plans, selectedPlanId]
   );
+
+  // خطة مطلوبة بمعرّف لا يقابله شيء - غالباً خطة حُذفت وإشعارها ما زال قائماً عند
+  // صاحبه، أو خطة حُذفت من متصفّح آخر بينما نافذتها مفتوحة هنا. الحالتان كانتا
+  // صمتاً تاماً: النافذة لا تُفتح ولا تُقال كلمة، فيبقى القارئ يظن أن الرابط معطوب.
+  // مشتقّة لا محفوظة: لا setState في العرض ولا في useEffect، والرسالة تختفي وحدها
+  // متى ما أُغلقت الخطة. الشرط plansLoaded ضروري لأن القائمة فارغة قبل وصول أول
+  // لقطة من الاشتراك، فتبدو كل خطة عندها "غير موجودة".
+  const missingPlanNotice = plansLoaded && selectedPlanId && !selectedPlan
+    ? (language === 'ar'
+      ? 'الخطة المطلوبة لم تعد موجودة - يبدو أنها حُذفت. إن كنت وصلت إليها من تنبيه فبإمكانك حذف ذلك التنبيه.'
+      : 'The requested plan no longer exists - it appears to have been deleted. If a notification brought you here, you can dismiss it.')
+    : '';
+
+  // إغلاق شريط الرسالة: يمسح رسالة الحذف، ويُغلق الخطة المفقودة معها فيختفي
+  // التنبيه المشتقّ ويُنظَّف ?plan= من العنوان.
+  const dismissPageNotice = () => {
+    setPageNotice('');
+    if (missingPlanNotice) closePlanDetail();
+  };
 
   // ===========================================
   // الهيكل التنظيمي - نفضّل بيانات Firestore ونرجع للملف عند غيابها
@@ -283,6 +327,51 @@ function PlansPageContent() {
       ),
     [allUsers, newItem.departmentId, newItem.sectionId]
   );
+
+  // أعضاء الفريق المتاحون للإضافة الآن: مراجع مستقل، ليس رئيس الفريق، ولم يُضف بعد.
+  const availableTeamAuditors = useMemo(
+    () => auditors.filter(
+      a => a.id !== newItem.leadAuditorId && !newItem.auditorIds.includes(a.id)
+    ),
+    [auditors, newItem.leadAuditorId, newItem.auditorIds]
+  );
+
+  // تغيير الإدارة أو القسم يغيّر من هو مستقل عن الجهة محل المراجعة. من لم يعد مستقلاً
+  // يخرج من الاختيار في اللحظة نفسها - وإلا بقي مختاراً وهو غائب عن القائمة، ثم انتقل
+  // مع البند إلى المراجعة، وهو بالضبط ما يمنعه فلتر الاستقلالية.
+  const keepIndependent = (ids: string[], departmentId: string, sectionId: string): string[] =>
+    ids.filter(id => {
+      const user = allUsers.find(u => u.id === id);
+      return !!user && isIndependentOf(user, departmentId, sectionId);
+    });
+
+  // مراجعو نافذة التعديل: مستقلون عن إدارة البند نفسه، لا عن إدارة نموذج الإضافة
+  const amendAuditors = useMemo(
+    () => {
+      if (!itemToAmend) return [];
+      return allUsers.filter(
+        u => u.canBeAuditor && u.isActive &&
+          isIndependentOf(u, itemToAmend.departmentId, itemToAmend.sectionId)
+      );
+    },
+    [allUsers, itemToAmend]
+  );
+
+  const availableAmendAuditors = useMemo(
+    () => amendAuditors.filter(
+      a => a.id !== amend.leadAuditorId && !amend.auditorIds.includes(a.id)
+    ),
+    [amendAuditors, amend.leadAuditorId, amend.auditorIds]
+  );
+
+  const addTeamMember = (auditorId: string) => {
+    if (!auditorId || newItem.auditorIds.includes(auditorId)) return;
+    setNewItem({ ...newItem, auditorIds: [...newItem.auditorIds, auditorId] });
+  };
+
+  const removeTeamMember = (auditorId: string) => {
+    setNewItem({ ...newItem, auditorIds: newItem.auditorIds.filter(id => id !== auditorId) });
+  };
 
   // من ترفضه القواعد معتمِداً، فلا يُعرض في القائمة أصلاً. قاعدة authorSubmits في
   // firestore.rules تشترط approverId != createdBy و approverId != المستخدم الذي
@@ -362,6 +451,9 @@ function PlansPageContent() {
   const isItemDelivered = (item: AnnualPlanItem): boolean =>
     !!item.auditId && liveAuditIds.has(item.auditId);
 
+  // هل على هذه الخطة تعديل فريق معلّق؟ يُستخدم في شريط التنبيه أعلى تفاصيل الخطة
+  const pendingAmendments = (plan: AnnualPlan): AnnualPlanItem[] =>
+    (plan.items || []).filter(i => !!i.pendingAmendment);
   const getPlanProgress = (plan: AnnualPlan) => {
     const items = plan.items || [];
     const created = items.filter(isItemDelivered).length;
@@ -494,6 +586,7 @@ function PlansPageContent() {
       plannedMonth: 1,
       auditType: 'internal',
       leadAuditorId: '',
+      auditorIds: [],
       notes: '',
     });
   };
@@ -516,6 +609,10 @@ function PlansPageContent() {
       plannedMonth: newItem.plannedMonth,
       auditType: newItem.auditType,
       leadAuditorId: newItem.leadAuditorId || undefined,
+      // رئيس الفريق لا يُكرَّر داخل الأعضاء - الحقلان منفصلان في البند وفي المراجعة
+      auditorIds: newItem.auditorIds.length > 0
+        ? newItem.auditorIds.filter(id => id !== newItem.leadAuditorId)
+        : undefined,
       notes: newItem.notes.trim() || undefined,
     };
 
@@ -532,6 +629,298 @@ function PlansPageContent() {
     }
 
     resetItemForm();
+  };
+
+  // ===========================================
+  // تعديل بند في خطة معتمدة
+  // ===========================================
+  //
+  // الخطة السنوية تُعتمد في يناير وتُنفَّذ على مدى سنة كاملة: يستقيل مراجع، ويُنقل
+  // آخر، ويتعذّر شهر بسبب توقف مصنع. خطة لا تقبل التعديل بعد الاعتماد لا تُتَّبع -
+  // يُتجاوز عنها. والتعديلان ليسا سواء، فمن يقرّرهما ليس واحداً:
+  //   - الشهر: إعادة جدولة داخل سنة الخطة، وهي قرار مدير الجودة التشغيلي. تُكتب
+  //     مباشرة، ويصل المعتمِد إشعارٌ للعلم، ويُسجَّل التغيير في سجل النشاط.
+  //   - الفريق: من يراجع مَن هو جوهر ما اعتمده المعتمِد - وشرط الاستقلالية جزء
+  //     منه - فيُكتب المقترح في pendingAmendment بجانب القيم السارية، وتبقى هي
+  //     العاملة حتى يبتّ فيه المعتمِد نفسه. هذا ما تفرضه firestore.rules فرعاً
+  //     بفرع: هذه الصفحة لا تستطيع كتابة leadAuditorId ولا auditorIds على خطة
+  //     معتمدة مهما فعلت.
+  const canAmendItems = (plan: AnnualPlan): boolean =>
+    plan.status === 'approved' && canManagePlans;
+
+  // قرار التعديل للمعتمِد المسمّى في الخطة وحده - نفس شرط canDecideOnPlan
+  const canDecideItemChange = (plan: AnnualPlan): boolean =>
+    plan.status === 'approved' &&
+    !!plan.approverId &&
+    plan.approverId === currentUser?.id &&
+    plan.approverId !== plan.createdBy;
+
+  const openAmendModal = (item: AnnualPlanItem) => {
+    // المقترح المعلّق - إن وُجد - هو نقطة البداية، لا القيم السارية: تعديل مقترحٍ
+    // قائم يجب أن يبدأ مما اقتُرح فعلاً وإلا بدا وكأنه سُحب وأُعيد من الصفر.
+    const pending = item.pendingAmendment;
+    setAmend({
+      plannedMonth: item.plannedMonth,
+      leadAuditorId: (pending ? pending.leadAuditorId : item.leadAuditorId) || '',
+      auditorIds: [...((pending ? pending.auditorIds : item.auditorIds) || [])],
+      reason: pending?.reason || '',
+    });
+    setAmendError('');
+    setItemToAmend(item);
+  };
+
+  // ما الذي يتغيّر بين البند السارٍ والمقترح، بعبارة يقرأها المعتمِد. تُستعمل في
+  // الإشعار وسجل النشاط ونافذة القرار، فلا تُصاغ ثلاث مرات فتختلف ثلاث مرات.
+  const describeAmendment = (
+    item: AnnualPlanItem,
+    proposed: { plannedMonth: number; leadAuditorId: string; auditorIds: string[] }
+  ): { ar: string; en: string } => {
+    const parts: { ar: string; en: string }[] = [];
+
+    if (proposed.plannedMonth !== item.plannedMonth) {
+      parts.push({
+        ar: `الشهر: ${getMonthName(item.plannedMonth)} ← ${getMonthName(proposed.plannedMonth)}`,
+        en: `month: ${getMonthName(item.plannedMonth)} → ${getMonthName(proposed.plannedMonth)}`,
+      });
+    }
+    if ((item.leadAuditorId || '') !== proposed.leadAuditorId) {
+      const before = getUserName(item.leadAuditorId) || (language === 'ar' ? 'غير محدد' : 'unassigned');
+      const after = getUserName(proposed.leadAuditorId) || (language === 'ar' ? 'غير محدد' : 'unassigned');
+      parts.push({
+        ar: `رئيس الفريق: ${before} ← ${after}`,
+        en: `lead auditor: ${before} → ${after}`,
+      });
+    }
+    if (!sameTeam(proposed.auditorIds, item.auditorIds || [])) {
+      const names = (ids: string[]) =>
+        ids.length === 0
+          ? (language === 'ar' ? 'بلا أعضاء' : 'no members')
+          : ids.map(id => getUserName(id) || id).join(language === 'ar' ? '، ' : ', ');
+      parts.push({
+        ar: `الأعضاء: ${names(item.auditorIds || [])} ← ${names(proposed.auditorIds)}`,
+        en: `members: ${names(item.auditorIds || [])} → ${names(proposed.auditorIds)}`,
+      });
+    }
+
+    return {
+      ar: parts.length ? `التغييرات — ${parts.map(p => p.ar).join('؛ ')}.` : '',
+      en: parts.length ? `Changes — ${parts.map(p => p.en).join('; ')}.` : '',
+    };
+  };
+
+  const sameTeam = (a: string[], b: string[]): boolean =>
+    a.length === b.length && a.every(id => b.includes(id));
+
+  // كتابة بند واحد معدَّل مكان القديم - وحدها البنية التي تقبلها القواعد
+  const replaceItem = (plan: AnnualPlan, updated: AnnualPlanItem): AnnualPlanItem[] =>
+    (plan.items || []).map(i => (i.id === updated.id ? updated : i));
+
+  const handleSaveAmendment = async () => {
+    if (!selectedPlan || !itemToAmend || isAmending) return;
+    setAmendError('');
+
+    const item = (selectedPlan.items || []).find(i => i.id === itemToAmend.id);
+    if (!item) {
+      setAmendError(t('plans.errors.itemGone'));
+      return;
+    }
+
+    const proposedLead = amend.leadAuditorId || '';
+    const proposedTeam = amend.auditorIds.filter(id => id !== proposedLead);
+    const monthChanged = amend.plannedMonth !== item.plannedMonth;
+    const teamChanged =
+      proposedLead !== (item.leadAuditorId || '') ||
+      !sameTeam(proposedTeam, item.auditorIds || []);
+    const hadProposal = !!item.pendingAmendment;
+
+    if (!monthChanged && !teamChanged) {
+      // العودة إلى الحالة السارية تسحب المقترح المعلّق إن وُجد، وإلا فلا شيء ليُحفظ
+      if (!hadProposal) {
+        setAmendError(t('plans.errors.nothingChanged'));
+        return;
+      }
+      const withdrawn: AnnualPlanItem = { ...item };
+      delete withdrawn.pendingAmendment;
+
+      setIsAmending(true);
+      const saved = await updateAnnualPlan(selectedPlan.id, {
+        items: replaceItem(selectedPlan, withdrawn),
+      });
+      setIsAmending(false);
+      if (!saved) {
+        setAmendError(t('plans.errors.amendFailed'));
+        return;
+      }
+      setItemToAmend(null);
+      setDetailNotice(language === 'ar'
+        ? 'سُحب التعديل المقترح، والبند عاد إلى ما هو معتمد.'
+        : 'The proposed amendment was withdrawn; the line stands as approved.');
+      return;
+    }
+
+    if (!amend.reason.trim()) {
+      setAmendError(t('plans.errors.amendReasonRequired'));
+      return;
+    }
+
+    // المقترح يحمل الحالة المقترحة كاملة - الشهر ورئيس الفريق والأعضاء - سواء
+    // تغيّر كل منها أو بقي. المعتمِد يقرأ حالةً كاملة لا شذرة، والقاعدة تقارن
+    // النتيجة بالمقترح حقلاً بحقل.
+    const updated: AnnualPlanItem = {
+      ...item,
+      pendingAmendment: {
+        plannedMonth: amend.plannedMonth,
+        leadAuditorId: proposedLead || undefined,
+        auditorIds: proposedTeam.length > 0 ? proposedTeam : undefined,
+        requestedBy: currentUser?.id || '',
+        requestedAt: new Date().toISOString(),
+        reason: amend.reason.trim(),
+      },
+    };
+
+    setIsAmending(true);
+    const saved = await updateAnnualPlan(selectedPlan.id, {
+      items: replaceItem(selectedPlan, updated),
+    });
+
+    if (!saved) {
+      setIsAmending(false);
+      setAmendError(t('plans.errors.amendFailed'));
+      return;
+    }
+
+    const line = `${getDepartmentName(item.departmentId)}${item.sectionId ? ` / ${getSectionName(item.sectionId)}` : ''}`;
+    // ما الذي تغيّر بالضبط - يُقال للمعتمِد في الإشعار، ويُكتب في سجل النشاط
+    const changes = describeAmendment(item, {
+      plannedMonth: amend.plannedMonth,
+      leadAuditorId: proposedLead,
+      auditorIds: proposedTeam,
+    });
+
+    let notified = true;
+    if (selectedPlan.approverId) {
+      notified = !!(await addNotification({
+        type: 'plan_item_change_request',
+        title: language === 'ar' ? 'تعديل على الخطة بانتظار اعتمادك' : 'A plan amendment awaits your approval',
+        message: language === 'ar'
+          ? `طلب ${getUserName(currentUser?.id)} تعديل "${line}" في خطة ${selectedPlan.year}. ${changes.ar} السبب: ${amend.reason.trim()}`
+          : `${getUserName(currentUser?.id)} asked to amend "${line}" in the ${selectedPlan.year} plan. ${changes.en} Reason: ${amend.reason.trim()}`,
+        recipientId: selectedPlan.approverId,
+        senderId: currentUser?.id,
+        planId: selectedPlan.id,
+      }));
+    }
+    setIsAmending(false);
+
+    if (currentUser) {
+      void recordActivity({
+        actorUserId: currentUser.id,
+        actorName: currentUser.fullNameEn || currentUser.fullNameAr,
+        actorEmail: currentUser.email ?? '',
+        actorRole: currentUser.role,
+        action: 'update',
+        entity: 'annualPlan',
+        entityId: selectedPlan.id,
+        entityLabel: selectedPlan.titleAr || selectedPlan.titleEn || `${selectedPlan.year}`,
+        summaryAr: `طلب تعديل "${line}" في خطة ${selectedPlan.year} بانتظار اعتماد ${getUserName(selectedPlan.approverId)}. ${changes.ar} السبب: ${amend.reason.trim()}`,
+        summaryEn: `Requested an amendment to "${line}" in the ${selectedPlan.year} plan, awaiting approval. ${changes.en} Reason: ${amend.reason.trim()}`,
+      });
+    }
+
+    setItemToAmend(null);
+    setDetailNotice(
+      notified
+        ? (language === 'ar'
+          ? 'أُرسل التعديل إلى المعتمِد. البند يبقى على ما هو معتمد حتى يصدر قراره.'
+          : 'The amendment was sent to the approver. The line stands as approved until they decide.')
+        : t('plans.errors.notificationFailed')
+    );
+  };
+
+  // قرار المعتمِد على التعديل: اعتماد يُحلّ المقترح محلّ القيم السارية، ورفض يمحو
+  // المقترح ويُبقيها. الحالتان تستهلكان المقترح - القواعد تشترط ألا يبقى
+  // pendingAmendment على البند بعد القرار.
+  const handleItemDecision = async () => {
+    if (!selectedPlan || !itemDecision || isDecidingItem) return;
+    setItemDecisionError('');
+
+    const item = (selectedPlan.items || []).find(i => i.id === itemDecision.item.id);
+    const proposal = item?.pendingAmendment;
+    if (!item || !proposal) {
+      setItemDecisionError(t('plans.errors.itemGone'));
+      return;
+    }
+    if (!itemDecision.approve && !itemDecisionReason.trim()) {
+      setItemDecisionError(t('plans.errors.reasonRequired'));
+      return;
+    }
+
+    const updated: AnnualPlanItem = { ...item };
+    delete updated.pendingAmendment;
+    if (itemDecision.approve) {
+      updated.plannedMonth = proposal.plannedMonth;
+      updated.leadAuditorId = proposal.leadAuditorId || undefined;
+      updated.auditorIds = (proposal.auditorIds || []).length > 0 ? proposal.auditorIds : undefined;
+    }
+
+    setIsDecidingItem(true);
+    const saved = await updateAnnualPlan(selectedPlan.id, {
+      items: replaceItem(selectedPlan, updated),
+    });
+
+    if (!saved) {
+      setIsDecidingItem(false);
+      setItemDecisionError(t('plans.errors.decisionFailed'));
+      return;
+    }
+
+    const line = `${getDepartmentName(item.departmentId)}${item.sectionId ? ` / ${getSectionName(item.sectionId)}` : ''}`;
+    const changes = describeAmendment(item, {
+      plannedMonth: proposal.plannedMonth,
+      leadAuditorId: proposal.leadAuditorId || '',
+      auditorIds: proposal.auditorIds || [],
+    });
+
+    const notified = !!(await addNotification({
+      type: itemDecision.approve ? 'plan_item_change_approved' : 'plan_item_change_rejected',
+      title: itemDecision.approve
+        ? (language === 'ar' ? 'اعتُمد تعديل الخطة' : 'Plan amendment approved')
+        : (language === 'ar' ? 'رُفض تعديل الخطة' : 'Plan amendment rejected'),
+      message: itemDecision.approve
+        ? (language === 'ar'
+          ? `اعتمد ${getUserName(currentUser?.id)} تعديل "${line}" في خطة ${selectedPlan.year}، وصار نافذاً. ${changes.ar}`
+          : `${getUserName(currentUser?.id)} approved the amendment to "${line}" in the ${selectedPlan.year} plan; it is now in force. ${changes.en}`)
+        : (language === 'ar'
+          ? `رفض ${getUserName(currentUser?.id)} تعديل "${line}" في خطة ${selectedPlan.year}، والبند يبقى كما اعتُمد. ${changes.ar} السبب: ${itemDecisionReason.trim()}`
+          : `${getUserName(currentUser?.id)} rejected the amendment to "${line}" in the ${selectedPlan.year} plan; the line stands as approved. ${changes.en} Reason: ${itemDecisionReason.trim()}`),
+      recipientId: proposal.requestedBy || selectedPlan.createdBy,
+      senderId: currentUser?.id,
+      planId: selectedPlan.id,
+    }));
+    setIsDecidingItem(false);
+
+    if (currentUser) {
+      void recordActivity({
+        actorUserId: currentUser.id,
+        actorName: currentUser.fullNameEn || currentUser.fullNameAr,
+        actorEmail: currentUser.email ?? '',
+        actorRole: currentUser.role,
+        action: itemDecision.approve ? 'approve' : 'reject',
+        entity: 'annualPlan',
+        entityId: selectedPlan.id,
+        entityLabel: selectedPlan.titleAr || selectedPlan.titleEn || `${selectedPlan.year}`,
+        summaryAr: itemDecision.approve
+          ? `اعتمد تعديل "${line}" في خطة ${selectedPlan.year}. ${changes.ar}`
+          : `رفض تعديل "${line}" في خطة ${selectedPlan.year}. ${changes.ar} السبب: ${itemDecisionReason.trim()}`,
+        summaryEn: itemDecision.approve
+          ? `Approved the amendment to "${line}" in the ${selectedPlan.year} plan. ${changes.en}`
+          : `Rejected the amendment to "${line}" in the ${selectedPlan.year} plan. Reason: ${itemDecisionReason.trim()}`,
+      });
+    }
+
+    setItemDecision(null);
+    setItemDecisionReason('');
+    setDetailNotice(notified ? '' : t('plans.errors.notificationFailed'));
   };
 
   // حذف بند من الخطة
@@ -704,6 +1093,11 @@ function PlansPageContent() {
     });
     if (item.sectionId) params.set('sectionId', item.sectionId);
     if (item.leadAuditorId) params.set('leadAuditorId', item.leadAuditorId);
+    // بقية الفريق تنتقل معه: النموذج يقرأها ويملأ بها فريق المراجعة، فلا يُعاد
+    // اختيار الأسماء نفسها يدوياً بعد أن اختارها مدير الجودة على البند.
+    if (item.auditorIds && item.auditorIds.length > 0) {
+      params.set('auditorIds', item.auditorIds.join(','));
+    }
     router.push(`/audits/new?${params.toString()}`);
   };
 
@@ -776,22 +1170,68 @@ function PlansPageContent() {
     setDetailNotice(notified ? '' : t('plans.errors.notificationFailed'));
   };
 
-  // حذف خطة - للمسودات والمرفوضة فقط
+  // حذف خطة - للمسودات والمرفوضة فقط.
+  //
+  // الحذف لا يمسّ وثيقة الخطة وحدها: الإشعارات التي أنتجتها الخطة تظهر في الجرس
+  // الموجود في رأس كل صفحة، فبقاؤها بعد الحذف يعني أن المعتمِد يظل يُطالَب باعتماد
+  // خطة لم تعد موجودة، وأن الضغط على الإشعار يفتح /plans?plan=<محذوفة> فلا يحدث شيء.
+  // لذلك يمضي الحذف على ثلاث خطوات مرتّبة: تُحذف الخطة، ثم تُنظَّف إشعاراتها، ثم
+  // يُسجَّل الحذف في سجل النشاط ليبقى في السجل أثرٌ لمن حذف ماذا ومتى.
+  //
+  // ترتيب الخطوات مقصود: نجاح حذف الخطة هو نجاح العملية. تعذُّر تنظيف إشعار أو
+  // كتابة قيد في السجل يُعرَض كملاحظة لا كفشل، وإلا فهمها المستخدم على أن الخطة
+  // لم تُحذف وأعاد المحاولة على شيء لم يعد موجوداً. باقي الصفحات (لوحة التحكم
+  // وهذه الصفحة) تقرأ الخطط عبر subscribeToAnnualPlans، فتختفي الخطة عنها لحظياً
+  // دون أي عمل إضافي هنا.
   const confirmDeletePlan = async () => {
     if (!planToDelete || isDeleting) return;
+    const plan = planToDelete;
     setDeleteError('');
 
     setIsDeleting(true);
-    const deleted = await deleteAnnualPlan(planToDelete.id);
-    setIsDeleting(false);
+    const deleted = await deleteAnnualPlan(plan.id);
 
     if (!deleted) {
+      setIsDeleting(false);
       setDeleteError(t('plans.errors.deleteFailed'));
       return;
     }
 
-    if (selectedPlanId === planToDelete.id) closePlanDetail();
+    // إشعارات الخطة: طلب الاعتماد، وإشعار السحب، وقرار المعتمِد
+    const cleanup = await deleteNotificationsForPlan(plan.id, {
+      userId: currentUser?.id || '',
+      isSystemAdmin,
+    });
+    setIsDeleting(false);
+
+    // سجل النشاط - يُكتب ولا يُنتظر (recordActivity لا ترمي أبداً)
+    if (currentUser) {
+      void recordActivity({
+        actorUserId: currentUser.id,
+        actorName: currentUser.fullNameEn || currentUser.fullNameAr,
+        actorEmail: currentUser.email ?? '',
+        actorRole: currentUser.role,
+        action: 'delete',
+        entity: 'annualPlan',
+        entityId: plan.id,
+        entityLabel: plan.titleAr || plan.titleEn || `${plan.year}`,
+        summaryAr: `حذف خطة المراجعة الداخلية السنوية ${plan.year} (${plan.items?.length || 0} بنداً مخططاً، الحالة قبل الحذف: ${plan.status === 'rejected' ? 'مرفوضة' : 'مسودة'})`,
+        summaryEn: `Deleted the ${plan.year} annual internal audit plan (${plan.items?.length || 0} planned items, status before deletion: ${plan.status})`,
+      });
+    }
+
+    if (selectedPlanId === plan.id) closePlanDetail();
     setPlanToDelete(null);
+
+    setPageNotice(
+      cleanup.failed > 0
+        ? (language === 'ar'
+          ? `حُذفت خطة ${plan.year} ولم تعد تظهر في أي صفحة، لكن تعذّر حذف بعض إشعاراتها - قد تبقى في جرس التنبيهات حتى يزيلها صاحبها.`
+          : `The ${plan.year} plan was deleted and no longer appears on any page, but some of its notifications could not be removed - they may remain in their recipient's bell until dismissed.`)
+        : (language === 'ar'
+          ? `حُذفت خطة ${plan.year} مع إشعاراتها، ولم تعد تظهر في لوحة التحكم ولا في قائمة التنبيهات.`
+          : `The ${plan.year} plan and its notifications were deleted; it no longer appears on the dashboard or in the notification list.`)
+    );
   };
 
   return (
@@ -813,6 +1253,22 @@ function PlansPageContent() {
             </Button>
           )}
         </div>
+
+        {/* نتيجة الحذف أو خطة مفقودة - تبقى حتى يُغلقها القارئ */}
+        {(pageNotice || missingPlanNotice) && (
+          <div className="flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 text-sm text-[var(--foreground-secondary)]">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--primary)]" />
+            <span className="flex-1">{pageNotice || missingPlanNotice}</span>
+            <button
+              type="button"
+              onClick={dismissPageNotice}
+              className="shrink-0 rounded p-0.5 text-[var(--foreground-muted)] hover:text-[var(--foreground)]"
+              aria-label={language === 'ar' ? 'إغلاق' : 'Dismiss'}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1210,6 +1666,20 @@ function PlansPageContent() {
                   </div>
                 )}
 
+              {/* تعديلات فريق معلّقة - المعتمِد يصل من الإشعار إلى الخطة كلها، لا إلى
+                  السطر المعنيّ، فيُقال له هنا كم بنداً ينتظره وأين ينظر. ولمدير
+                  الجودة نفس السطر: طلبه لم يُبتّ فيه بعد والفريق القديم ما زال سارياً. */}
+              {pendingAmendments(selectedPlan).length > 0 && (
+                <div className="mb-6 flex items-start gap-2 rounded-lg bg-[var(--status-warning-bg)] p-3 text-sm text-[var(--status-warning)]">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    {language === 'ar'
+                      ? `${pendingAmendments(selectedPlan).length} من بنود هذه الخطة عليه تعديل مقترح (شهر أو فريق)${canDecideItemChange(selectedPlan) ? ' بانتظار قرارك - الأزرار في عمود الإجراءات بجانب البند.' : ' بانتظار قرار المعتمِد. البند يبقى كما اعتُمد حتى ذلك الحين.'}`
+                      : `${pendingAmendments(selectedPlan).length} planned line(s) in this plan carry a proposed amendment (month or team)${canDecideItemChange(selectedPlan) ? ' awaiting your decision - the buttons are in the actions column beside each line.' : ' awaiting the approver\'s decision. The line stands as approved until then.'}`}
+                  </span>
+                </div>
+              )}
+
               {/* Items */}
               <Card className="mb-6">
                 <CardHeader>
@@ -1227,6 +1697,7 @@ function PlansPageContent() {
                         <TableHead>{t('plans.table.month')}</TableHead>
                         <TableHead>{t('plans.table.auditType')}</TableHead>
                         <TableHead>{t('plans.table.leadAuditor')}</TableHead>
+                        <TableHead>{t('plans.table.team')}</TableHead>
                         <TableHead>{t('plans.table.auditCreated')}</TableHead>
                         {showItemActions(selectedPlan) && (
                           <TableHead className="text-center">{t('common.actions')}</TableHead>
@@ -1236,7 +1707,7 @@ function PlansPageContent() {
                     <TableBody>
                       {(selectedPlan.items || []).length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={showItemActions(selectedPlan) ? 7 : 6} className="py-8 text-center text-[var(--foreground-secondary)]">
+                          <TableCell colSpan={showItemActions(selectedPlan) ? 8 : 7} className="py-8 text-center text-[var(--foreground-secondary)]">
                             {t('plans.detail.noItems')}
                           </TableCell>
                         </TableRow>
@@ -1252,14 +1723,55 @@ function PlansPageContent() {
                                 )}
                               </TableCell>
                               <TableCell className="text-sm">{getSectionName(item.sectionId) || '-'}</TableCell>
-                              <TableCell className="text-sm">{getMonthName(item.plannedMonth)}</TableCell>
+                              <TableCell className="text-sm">
+                                {getMonthName(item.plannedMonth)}
+                                {item.pendingAmendment
+                                  && item.pendingAmendment.plannedMonth !== item.plannedMonth && (
+                                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                                    {language === 'ar' ? 'مقترح: ' : 'proposed: '}
+                                    {getMonthName(item.pendingAmendment.plannedMonth)}
+                                  </p>
+                                )}
+                              </TableCell>
                               <TableCell className="text-sm">{getTypeName(item.auditType)}</TableCell>
-                              <TableCell className="text-sm">{getUserName(item.leadAuditorId) || '-'}</TableCell>
+                              {/* الفريق الساري هو المعروض دائماً؛ المقترح المعلّق يظهر تحته
+                                  موسوماً، فلا يُقرأ اقتراحٌ لم يُعتمد بعد على أنه الواقع. */}
+                              <TableCell className="text-sm">
+                                {getUserName(item.leadAuditorId) || '-'}
+                                {item.pendingAmendment && (
+                                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                                    {language === 'ar' ? 'مقترح: ' : 'proposed: '}
+                                    {getUserName(item.pendingAmendment.leadAuditorId) || (language === 'ar' ? 'يُحدد لاحقاً' : 'decide later')}
+                                  </p>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-sm">
+                                {(item.auditorIds || []).length === 0
+                                  ? '-'
+                                  : (item.auditorIds || [])
+                                    .map(id => getUserName(id) || id)
+                                    .join(language === 'ar' ? '، ' : ', ')}
+                                {item.pendingAmendment && (
+                                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                                    {language === 'ar' ? 'مقترح: ' : 'proposed: '}
+                                    {(item.pendingAmendment.auditorIds || []).length === 0
+                                      ? (language === 'ar' ? 'بلا أعضاء' : 'no members')
+                                      : (item.pendingAmendment.auditorIds || [])
+                                        .map(id => getUserName(id) || id)
+                                        .join(language === 'ar' ? '، ' : ', ')}
+                                  </p>
+                                )}
+                              </TableCell>
                               <TableCell>
                                 {item.auditId ? (
                                   <Badge variant="success">{t('plans.detail.auditCreatedYes')}</Badge>
                                 ) : (
                                   <Badge variant="draft">{t('plans.detail.auditCreatedNo')}</Badge>
+                                )}
+                                {item.pendingAmendment && (
+                                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                                    {t('plans.detail.amendmentPending')}
+                                  </p>
                                 )}
                               </TableCell>
                               {showItemActions(selectedPlan) && (
@@ -1285,6 +1797,49 @@ function PlansPageContent() {
                                           <ClipboardPlus className="h-4 w-4" />
                                         </Button>
                                       )
+                                    )}
+                                    {/* تعديل بند معتمد: الشهر أو الفريق. متاح ولو أُنشئت
+                                        المراجعة - إعادة الجدولة وتغيير الفريق واردان
+                                        في المراحل المتقدمة، وهو ما تفرضه القواعد أيضاً. */}
+                                    {canAmendItems(selectedPlan) && (
+                                      <Button
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        onClick={() => openAmendModal(item)}
+                                        title={t('plans.actions.amendItem')}
+                                      >
+                                        <CalendarRange className="h-4 w-4" />
+                                      </Button>
+                                    )}
+                                    {item.pendingAmendment && canDecideItemChange(selectedPlan) && (
+                                      <>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon-sm"
+                                          className="text-green-600 hover:text-green-700"
+                                          onClick={() => {
+                                            setItemDecisionReason('');
+                                            setItemDecisionError('');
+                                            setItemDecision({ item, approve: true });
+                                          }}
+                                          title={t('plans.actions.approveAmendment')}
+                                        >
+                                          <CheckCircle className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon-sm"
+                                          className="text-red-500 hover:text-red-700"
+                                          onClick={() => {
+                                            setItemDecisionReason('');
+                                            setItemDecisionError('');
+                                            setItemDecision({ item, approve: false });
+                                          }}
+                                          title={t('plans.actions.rejectAmendment')}
+                                        >
+                                          <XCircle className="h-4 w-4" />
+                                        </Button>
+                                      </>
                                     )}
                                     {canEditPlan(selectedPlan) && (
                                       <Button
@@ -1324,7 +1879,18 @@ function PlansPageContent() {
                         <label className="mb-1.5 block text-sm font-medium">{t('plans.table.department')} *</label>
                         <select
                           value={newItem.departmentId}
-                          onChange={(e) => setNewItem({ ...newItem, departmentId: e.target.value, sectionId: '' })}
+                          onChange={(e) => {
+                            const departmentId = e.target.value;
+                            setNewItem({
+                              ...newItem,
+                              departmentId,
+                              sectionId: '',
+                              leadAuditorId: keepIndependent(
+                                newItem.leadAuditorId ? [newItem.leadAuditorId] : [], departmentId, ''
+                              )[0] || '',
+                              auditorIds: keepIndependent(newItem.auditorIds, departmentId, ''),
+                            });
+                          }}
                           className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
                         >
                           <option value="">{t('plans.form.selectDepartment')}</option>
@@ -1339,7 +1905,17 @@ function PlansPageContent() {
                         <label className="mb-1.5 block text-sm font-medium">{t('plans.table.section')}</label>
                         <select
                           value={newItem.sectionId}
-                          onChange={(e) => setNewItem({ ...newItem, sectionId: e.target.value })}
+                          onChange={(e) => {
+                            const sectionId = e.target.value;
+                            setNewItem({
+                              ...newItem,
+                              sectionId,
+                              leadAuditorId: keepIndependent(
+                                newItem.leadAuditorId ? [newItem.leadAuditorId] : [], newItem.departmentId, sectionId
+                              )[0] || '',
+                              auditorIds: keepIndependent(newItem.auditorIds, newItem.departmentId, sectionId),
+                            });
+                          }}
                           disabled={!newItem.departmentId}
                           className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm disabled:opacity-50"
                         >
@@ -1383,7 +1959,15 @@ function PlansPageContent() {
                         <label className="mb-1.5 block text-sm font-medium">{t('plans.table.leadAuditor')}</label>
                         <select
                           value={newItem.leadAuditorId}
-                          onChange={(e) => setNewItem({ ...newItem, leadAuditorId: e.target.value })}
+                          onChange={(e) => {
+                            const leadAuditorId = e.target.value;
+                            setNewItem({
+                              ...newItem,
+                              leadAuditorId,
+                              // من رُقّي رئيساً للفريق يخرج من قائمة الأعضاء - لا يُحسب مرتين
+                              auditorIds: newItem.auditorIds.filter(id => id !== leadAuditorId),
+                            });
+                          }}
                           className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
                         >
                           <option value="">{t('plans.form.selectLater')}</option>
@@ -1393,6 +1977,49 @@ function PlansPageContent() {
                             </option>
                           ))}
                         </select>
+                      </div>
+                      {/* بقية فريق المراجعة - يُضاف عضو في كل مرة، والمضافون يظهرون
+                          كوسوم قابلة للإزالة. القائمة هي نفسها قائمة رئيس الفريق:
+                          مراجعون مستقلون عن الجهة محل المراجعة لا غير. */}
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium">{t('plans.table.team')}</label>
+                        <select
+                          value=""
+                          onChange={(e) => addTeamMember(e.target.value)}
+                          disabled={availableTeamAuditors.length === 0}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm disabled:opacity-50"
+                        >
+                          <option value="">
+                            {availableTeamAuditors.length === 0
+                              ? t('plans.form.noMoreAuditors')
+                              : t('plans.form.addTeamMember')}
+                          </option>
+                          {availableTeamAuditors.map(auditor => (
+                            <option key={auditor.id} value={auditor.id}>
+                              {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
+                            </option>
+                          ))}
+                        </select>
+                        {newItem.auditorIds.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {newItem.auditorIds.map(id => (
+                              <span
+                                key={id}
+                                className="inline-flex items-center gap-1 rounded-full bg-[var(--primary)]/10 px-3 py-1 text-xs text-[var(--primary)]"
+                              >
+                                {getUserName(id) || id}
+                                <button
+                                  type="button"
+                                  onClick={() => removeTeamMember(id)}
+                                  className="hover:text-red-500"
+                                  aria-label={language === 'ar' ? 'إزالة من الفريق' : 'Remove from the team'}
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label className="mb-1.5 block text-sm font-medium">{t('plans.form.notes')}</label>
@@ -1668,14 +2295,261 @@ function PlansPageContent() {
           </div>
         )}
 
+        {/* تعديل بند معتمد: الشهر و/أو الفريق */}
+        {itemToAmend && selectedPlan && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center">
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setItemToAmend(null)} />
+            <div className="relative z-[70] w-full max-w-lg rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4 max-h-[90vh] overflow-y-auto">
+              <h2 className="mb-1 text-lg font-semibold">{t('plans.amend.title')}</h2>
+              <p className="mb-4 text-sm text-[var(--foreground-secondary)]">
+                {getDepartmentName(itemToAmend.departmentId)}
+                {itemToAmend.sectionId ? ` / ${getSectionName(itemToAmend.sectionId)}` : ''}
+                {' · '}
+                {getMonthName(itemToAmend.plannedMonth)}
+              </p>
+
+              {/* من يقرّر ماذا - يُقال قبل الحفظ لا بعده */}
+              <div className="mb-4 rounded-lg bg-[var(--background-secondary)] p-3 text-xs text-[var(--foreground-secondary)]">
+                {t('plans.amend.explainer')}
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">{t('plans.table.month')}</label>
+                  <select
+                    value={amend.plannedMonth}
+                    onChange={(e) => setAmend({ ...amend, plannedMonth: Number(e.target.value) })}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                  >
+                    {months.map(month => (
+                      <option key={month.value} value={month.value}>
+                        {language === 'ar' ? month.labelAr : month.labelEn}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">{t('plans.table.leadAuditor')}</label>
+                  <select
+                    value={amend.leadAuditorId}
+                    onChange={(e) => {
+                      const leadAuditorId = e.target.value;
+                      setAmend({
+                        ...amend,
+                        leadAuditorId,
+                        auditorIds: amend.auditorIds.filter(id => id !== leadAuditorId),
+                      });
+                    }}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                  >
+                    <option value="">{t('plans.form.selectLater')}</option>
+                    {amendAuditors.map(auditor => (
+                      <option key={auditor.id} value={auditor.id}>
+                        {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">{t('plans.table.team')}</label>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      if (!id || amend.auditorIds.includes(id)) return;
+                      setAmend({ ...amend, auditorIds: [...amend.auditorIds, id] });
+                    }}
+                    disabled={availableAmendAuditors.length === 0}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm disabled:opacity-50"
+                  >
+                    <option value="">
+                      {availableAmendAuditors.length === 0
+                        ? t('plans.form.noMoreAuditors')
+                        : t('plans.form.addTeamMember')}
+                    </option>
+                    {availableAmendAuditors.map(auditor => (
+                      <option key={auditor.id} value={auditor.id}>
+                        {language === 'ar' ? auditor.fullNameAr : auditor.fullNameEn}
+                      </option>
+                    ))}
+                  </select>
+                  {amend.auditorIds.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {amend.auditorIds.map(id => (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 rounded-full bg-[var(--primary)]/10 px-3 py-1 text-xs text-[var(--primary)]"
+                        >
+                          {getUserName(id) || id}
+                          <button
+                            type="button"
+                            onClick={() => setAmend({ ...amend, auditorIds: amend.auditorIds.filter(x => x !== id) })}
+                            className="hover:text-red-500"
+                            aria-label={language === 'ar' ? 'إزالة من الفريق' : 'Remove from the team'}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">{t('plans.amend.reason')}</label>
+                  <textarea
+                    value={amend.reason}
+                    onChange={(e) => setAmend({ ...amend, reason: e.target.value })}
+                    rows={3}
+                    placeholder={t('plans.amend.reasonPlaceholder')}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                  />
+                </div>
+
+                {/* بند نُفِّذت مراجعته: التعديل هنا لا يمسّ المراجعة نفسها */}
+                {itemToAmend.auditId && (
+                  <div className="flex items-start gap-2 rounded-lg bg-[var(--status-warning-bg)] p-3 text-xs text-[var(--status-warning)]">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{t('plans.amend.auditExists')}</span>
+                  </div>
+                )}
+              </div>
+
+              {amendError && (
+                <div className="mt-4 flex items-start gap-2 rounded-lg bg-[var(--status-error-bg)] p-3 text-sm text-[var(--status-error)]">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{amendError}</span>
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setItemToAmend(null)}>
+                  {t('common.cancel')}
+                </Button>
+                <Button onClick={handleSaveAmendment} isLoading={isAmending}>
+                  {t('common.save')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* قرار المعتمِد على تغيير فريق مقترح */}
+        {itemDecision && selectedPlan && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center">
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setItemDecision(null)} />
+            <div className="relative z-[70] w-full max-w-lg rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4 max-h-[90vh] overflow-y-auto">
+              <h2 className="mb-1 text-lg font-semibold">
+                {itemDecision.approve ? t('plans.actions.approveAmendment') : t('plans.actions.rejectAmendment')}
+              </h2>
+              <p className="mb-4 text-sm text-[var(--foreground-secondary)]">
+                {getDepartmentName(itemDecision.item.departmentId)}
+                {itemDecision.item.sectionId ? ` / ${getSectionName(itemDecision.item.sectionId)}` : ''}
+              </p>
+
+              {/* القديم مقابل الجديد - القرار يُتخذ على المقارنة لا على الوصف */}
+              {/* القرار يُتخذ على المقارنة لا على الوصف: ما هو معتمد الآن مقابل ما
+                  يُقترح، حقلاً بحقل، والمتغيّر منها موسوم. */}
+              <div className="mb-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-[var(--border)] p-3">
+                  <p className="mb-2 text-xs font-medium text-[var(--foreground-muted)]">{t('plans.amend.currentState')}</p>
+                  <p className="text-sm">
+                    <span className="text-[var(--foreground-muted)]">{t('plans.table.month')}: </span>
+                    {getMonthName(itemDecision.item.plannedMonth)}
+                  </p>
+                  <p className="text-sm">
+                    <span className="text-[var(--foreground-muted)]">{t('plans.table.leadAuditor')}: </span>
+                    {getUserName(itemDecision.item.leadAuditorId) || '-'}
+                  </p>
+                  <p className="text-sm">
+                    <span className="text-[var(--foreground-muted)]">{t('plans.table.team')}: </span>
+                    {(itemDecision.item.auditorIds || []).map(id => getUserName(id) || id).join(language === 'ar' ? '، ' : ', ') || '-'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-[var(--primary)] p-3">
+                  <p className="mb-2 text-xs font-medium text-[var(--primary)]">{t('plans.amend.proposedState')}</p>
+                  <p className="text-sm">
+                    <span className="text-[var(--foreground-muted)]">{t('plans.table.month')}: </span>
+                    {getMonthName(itemDecision.item.pendingAmendment?.plannedMonth || itemDecision.item.plannedMonth)}
+                  </p>
+                  <p className="text-sm">
+                    <span className="text-[var(--foreground-muted)]">{t('plans.table.leadAuditor')}: </span>
+                    {getUserName(itemDecision.item.pendingAmendment?.leadAuditorId) || '-'}
+                  </p>
+                  <p className="text-sm">
+                    <span className="text-[var(--foreground-muted)]">{t('plans.table.team')}: </span>
+                    {(itemDecision.item.pendingAmendment?.auditorIds || []).map(id => getUserName(id) || id).join(language === 'ar' ? '، ' : ', ') || '-'}
+                  </p>
+                </div>
+              </div>
+
+              {/* وسطرٌ يقول ما تغيّر بالضبط، حتى لا يُقارَن الجدولان بالعين */}
+              {itemDecision.item.pendingAmendment && (
+                <div className="mb-4 rounded-lg bg-[var(--status-warning-bg)] p-3 text-sm text-[var(--status-warning)]">
+                  {describeAmendment(itemDecision.item, {
+                    plannedMonth: itemDecision.item.pendingAmendment.plannedMonth,
+                    leadAuditorId: itemDecision.item.pendingAmendment.leadAuditorId || '',
+                    auditorIds: itemDecision.item.pendingAmendment.auditorIds || [],
+                  })[language === 'ar' ? 'ar' : 'en']}
+                </div>
+              )}
+
+              {itemDecision.item.pendingAmendment?.reason && (
+                <p className="mb-4 text-sm text-[var(--foreground-secondary)]">
+                  <span className="font-medium">{t('plans.amend.reason')}: </span>
+                  {itemDecision.item.pendingAmendment.reason}
+                </p>
+              )}
+
+              {!itemDecision.approve && (
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">{t('plans.amend.rejectReason')} *</label>
+                  <textarea
+                    value={itemDecisionReason}
+                    onChange={(e) => setItemDecisionReason(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm"
+                  />
+                </div>
+              )}
+
+              {itemDecisionError && (
+                <div className="mt-4 flex items-start gap-2 rounded-lg bg-[var(--status-error-bg)] p-3 text-sm text-[var(--status-error)]">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{itemDecisionError}</span>
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setItemDecision(null)}>
+                  {t('common.cancel')}
+                </Button>
+                <Button
+                  variant={itemDecision.approve ? 'primary' : 'danger'}
+                  onClick={handleItemDecision}
+                  isLoading={isDecidingItem}
+                >
+                  {itemDecision.approve ? t('common.approve') : t('common.reject')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Delete plan modal */}
         {planToDelete && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center">
             <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setPlanToDelete(null)} />
             <div className="relative z-[60] w-full max-w-md rounded-xl bg-white dark:bg-gray-900 p-6 shadow-xl mx-4">
               <h2 className="mb-2 text-lg font-semibold">{t('plans.delete.title')}</h2>
-              <p className="mb-4 text-sm text-[var(--foreground-secondary)]">
+              <p className="mb-2 text-sm text-[var(--foreground-secondary)]">
                 {t('plans.delete.description')} ({planToDelete.year})
+              </p>
+              {/* ما يذهب مع الخطة - يُقال قبل الضغط لا بعده */}
+              <p className="mb-4 text-sm text-[var(--foreground-muted)]">
+                {t('plans.delete.cascade')}
               </p>
 
               {deleteError && (

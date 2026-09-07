@@ -43,7 +43,13 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permission> = {
     canDeleteAudits: true,
   },
   quality_manager: {
-    canManageUsers: false,
+    // مدير إدارة الجودة يدير المستخدمين: ينشئهم ويعدّلهم ويصدر لهم حسابات الدخول
+    // ويعيد تعيين كلمات المرور. هذا ما كانت firestore.rules تسمح به أصلاً
+    // (isQualityStaff على users و authUsers، بسقفه المذكور في SECURITY.md 2.2:
+    // لا يكتب دور system_admin، ولا يمسّ حساباً يحمله، ولا يغيّر دوره هو، ولا
+    // يُصدر لنفسه حساب دخول) - وكانت هذه الراية `false` تحجب عنه إعادة تعيين
+    // كلمة المرور وحدها، فيُنشئ الموظف ويصدر دخوله ثم يعجز عن مساعدته إذا نسيها.
+    canManageUsers: true,
     canManageDepartments: true,
     canManageAudits: true,
     canConductAudits: true,
@@ -593,6 +599,25 @@ export const isCancelledAudit = (status: string | undefined): boolean => status 
 export type AnnualPlanStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
 
 // بند واحد في الخطة السنوية - مراجعة مخططة لإدارة/قسم في شهر معين
+// تعديل مقترح على بند في خطة معتمدة.
+//
+// الخطة المعتمدة ليست حجراً، لكنها ليست ورقة عمل أيضاً: الشهر ومن يراجع هما جوهر ما
+// اعتمده المعتمِد، فتغيير أيٍّ منهما يمرّ به مرة أخرى. يُكتب المقترح هنا بجانب القيم
+// السارية، فتبقى القيم القديمة عاملة حتى يُبتّ فيه: اعتماد يُحلّ المقترح محلّها،
+// ورفض يمحوه ويُبقيها كما هي.
+//
+// المقترح يحمل الحقول الثلاثة كاملةً دائماً - الشهر ورئيس الفريق والأعضاء - حتى ما لم
+// يتغيّر منها. القارئ يرى الحالة المقترحة كاملة لا شذرة منها، وقاعدة القرار في
+// firestore.rules تقارن النتيجة بالمقترح حقلاً بحقل بلا استثناءات.
+export interface AnnualPlanItemAmendment {
+  plannedMonth: number;        // 1-12، الشهر المقترح
+  leadAuditorId?: string;      // رئيس الفريق المقترح ('' أو غياب = يُحدد لاحقاً)
+  auditorIds?: string[];       // أعضاء الفريق المقترحون
+  requestedBy: string;
+  requestedAt: string;         // ISO
+  reason?: string;
+}
+
 export interface AnnualPlanItem {
   id: string;
   departmentId: string;
@@ -600,6 +625,12 @@ export interface AnnualPlanItem {
   plannedMonth: number;        // 1-12
   auditType: AuditType;
   leadAuditorId?: string;
+  // بقية فريق المراجعة إلى جانب رئيسه. يختارهم مدير الجودة على البند نفسه، فينتقلون
+  // مع البند إلى نموذج إنشاء المراجعة. لا يحتوي رئيس الفريق أبداً - هو حقل مستقل.
+  auditorIds?: string[];
+  // تعديل مقترح على هذا البند بانتظار قرار معتمِد الخطة. يوجد على البنود المعتمدة
+  // وحدها - فالبند في مسودة يُعدَّل مباشرة بلا وساطة.
+  pendingAmendment?: AnnualPlanItemAmendment;
   notes?: string;
   auditId?: string;            // set once the scheduled audit is created from this line
 }
