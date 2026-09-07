@@ -338,10 +338,15 @@ export default function FindingsPage() {
     if (!finding.auditId) return false;
     const audit = auditsList.find((a: any) => a.id === finding.auditId);
     if (audit) {
+      // createdBy is deliberately NOT here. belongsToAudit() in firestore.rules admits
+      // the quality staff, the lead auditor, the team and the auditee - and nobody else,
+      // creator included. Counting the creator as an auditor labelled them with a role
+      // the database does not grant them, put the audit in their "as auditor" list, and
+      // offered them an edit whose write is refused. The client now says what the rules
+      // say. (Reading is unaffected: every active employee may read an audit.)
       return audit.leadAuditorId === currentUser?.id ||
         audit.teamMemberIds?.includes(currentUser?.id || '') ||
-        audit.auditorIds?.includes(currentUser?.id || '') ||
-        audit.createdBy === currentUser?.id;
+        audit.auditorIds?.includes(currentUser?.id || '');
     }
     return false;
   };

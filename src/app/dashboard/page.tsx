@@ -108,10 +108,30 @@ export default function DashboardPage() {
     return () => unsubscribe();
   }, []);
 
+  // المراجعات التي يراها هذا المستخدم - وهي وحدها ما تُبنى عليه الأرقام.
+  //
+  // Every stat, list and progress bar on this page counted EVERY audit in the database
+  // with no access filter, while the audits page the same person opens next is filtered.
+  // A section head was shown "12 audits, 8 open findings" on the dashboard and a table of
+  // two on /audits, with nothing to explain the difference. The rule here is the one the
+  // audit list uses.
+  const visibleAudits = useMemo(() => {
+    if (!currentUser) return [];
+    if (hasPermission('canViewAllData')) return rawAudits;
+    return rawAudits.filter(a =>
+      a.createdBy === currentUser.id ||
+      a.leadAuditorId === currentUser.id ||
+      (a.teamMemberIds || []).includes(currentUser.id) ||
+      (a.auditorIds || []).includes(currentUser.id) ||
+      a.auditeeId === currentUser.id ||
+      (a.departmentId === currentUser.departmentId && (a.currentStage ?? 0) >= 2)
+    );
+  }, [rawAudits, currentUser, hasPermission]);
+
   // Extract all findings from audits
   const allFindings = useMemo(() => {
     const findings: any[] = [];
-    rawAudits.forEach((audit: any) => {
+    visibleAudits.forEach((audit: any) => {
       if (audit.findings && Array.isArray(audit.findings)) {
         audit.findings.forEach((finding: any) => {
           findings.push({
@@ -123,14 +143,14 @@ export default function DashboardPage() {
       }
     });
     return findings;
-  }, [rawAudits]);
+  }, [visibleAudits]);
 
   // Calculate stats
   const stats = useMemo<DashboardStats>(() => {
-    const activeAudits = rawAudits.filter(a =>
+    const activeAudits = visibleAudits.filter(a =>
       a.status !== 'completed' && a.status !== 'cancelled'
     ).length;
-    const completedAudits = rawAudits.filter(a => a.status === 'completed').length;
+    const completedAudits = visibleAudits.filter(a => a.status === 'completed').length;
     const openFindings = allFindings.filter(f => f.status !== 'closed').length;
     const closedFindings = allFindings.filter(f => f.status === 'closed').length;
     const overdueFindings = allFindings.filter(f => {
@@ -140,7 +160,7 @@ export default function DashboardPage() {
     }).length;
 
     return {
-      totalAudits: rawAudits.length,
+      totalAudits: visibleAudits.length,
       activeAudits,
       completedAudits,
       totalFindings: allFindings.length,
@@ -149,11 +169,11 @@ export default function DashboardPage() {
       closedFindings,
       totalDepartments: departments.length,
     };
-  }, [rawAudits, allFindings, departments]);
+  }, [visibleAudits, allFindings, departments]);
 
   // Recent audits (last 5)
   const recentAudits = useMemo<RecentAudit[]>(() => {
-    return [...rawAudits]
+    return [...visibleAudits]
       .sort((a, b) => new Date(b.createdAt || b.startDate).getTime() - new Date(a.createdAt || a.startDate).getTime())
       .slice(0, 5)
       .map(audit => {
@@ -168,7 +188,7 @@ export default function DashboardPage() {
           departmentName: dept ? (language === 'ar' ? dept.nameAr : dept.nameEn) : '',
         };
       });
-  }, [rawAudits, departments, language]);
+  }, [visibleAudits, departments, language]);
 
   // Recent findings (last 4)
   const recentFindings = useMemo<RecentFinding[]>(() => {
@@ -349,7 +369,7 @@ export default function DashboardPage() {
   // Upcoming audits - المراجعات التي لم يحن موعد بدايتها بعد، الأقرب أولاً
   const upcomingAudits = useMemo<UpcomingAudit[]>(() => {
     const now = Date.now();
-    return rawAudits
+    return visibleAudits
       .filter(a =>
         a.status !== 'completed' &&
         a.status !== 'cancelled' &&
@@ -368,14 +388,14 @@ export default function DashboardPage() {
           daysRemaining: Math.ceil((new Date(audit.startDate).getTime() - now) / (1000 * 60 * 60 * 24)),
         };
       });
-  }, [rawAudits, departments, language]);
+  }, [visibleAudits, departments, language]);
 
   // Checklist status - الأسئلة المُجابة مقابل الإجمالي عبر المراجعات النشطة
   const checklistStatus = useMemo(() => {
     let total = 0;
     let answered = 0;
 
-    rawAudits
+    visibleAudits
       .filter(a => a.status !== 'completed' && a.status !== 'cancelled')
       .forEach(audit => {
         (audit.questions || []).forEach((q: any) => {
@@ -389,7 +409,7 @@ export default function DashboardPage() {
       answered,
       percentage: total > 0 ? Math.round((answered / total) * 100) : 0,
     };
-  }, [rawAudits]);
+  }, [visibleAudits]);
 
   const getStatusBadge = (status: string) => {
     const statusMap: Record<string, { variant: any; label: string }> = {

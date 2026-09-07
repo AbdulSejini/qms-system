@@ -477,12 +477,17 @@ export default function AuditsPage() {
   const accessibleAuditsForStats = useMemo(() => {
     return auditsData.filter(audit => {
       if (isQualityManager) return true;
+      if (currentUser?.role === 'external_auditor') return true;
       if (audit.createdBy === currentUser?.id) return true;
       if (audit.leadAuditorId === currentUser?.id) return true;
       if (audit.auditorIds?.includes(currentUser?.id || '')) return true;
+      // الجهة المُراجَع عليها كانت خارج الإحصاءات تماماً، فترى مدير الإدارة أصفاراً
+      // بينما جدوله أسفل الشاشة يعرض مراجعات إدارته.
+      if (audit.auditeeId && audit.auditeeId === currentUser?.id) return true;
+      if (audit.departmentId === currentUser?.departmentId && audit.currentStage >= 2) return true;
       return false;
     });
-  }, [auditsData, currentUser?.id, isQualityManager]);
+  }, [auditsData, currentUser?.id, currentUser?.role, currentUser?.departmentId, isQualityManager]);
 
   // Stats based on accessible audits
   const stats = {
@@ -929,7 +934,9 @@ export default function AuditsPage() {
             <div className="flex items-center justify-between overflow-x-auto pb-2">
               {workflowStages.map((stage, index) => {
                 const Icon = stage.icon;
-                const count = auditsData.filter(a => a.currentStage === index).length;
+                // كان يعدّ كل مراجعات النظام بينما الجدول أسفله مفلتر بالصلاحية، فيقول
+                // الشريط "5 في التنفيذ" ويعرض الجدول واحدة - رقمان متناقضان في شاشة واحدة.
+                const count = accessibleAuditsForStats.filter(a => a.currentStage === index).length;
                 return (
                   <div key={stage.id} className="flex items-center">
                     <div className="flex flex-col items-center min-w-[100px]">
