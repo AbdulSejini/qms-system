@@ -1,5 +1,5 @@
 {
-  "description": "Audit checklist question bank extracted from the QA department's ISO 9001 checklists. One entry per audit area.",
+  "description": "Audit checklist question bank extracted from the QA department's ISO 9001 checklists. One entry per audit area. Two areas the 2025 programme audits - PQ & Certification and Technical Assurance / Industrial Engineering - have no checklist among these documents; audits created for them start with an empty list for the auditor to build.",
   "extractedFrom": "Saudi Cable QA department checklists (46 Word documents)",
   "areas": [
     {
@@ -388,7 +388,8 @@
         "How do you handle “Risk and Opportunities Management”."
       ],
       "sectionCodes": [
-        "SM-MKT"
+        "SM-MKT",
+        "SM-MKT-COMM"
       ],
       "departmentCodes": [
         "SM"

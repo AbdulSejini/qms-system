@@ -46,11 +46,28 @@ const email = (n) => norm(n).replace(/\s+/g, '.') + '@saudicables.test';
 
 const QUALITY_MANAGER = 'mohammed a bahwairith';
 
+// ALIASES, SO THE EMULATOR MIRRORS PRODUCTION.
+//
+// The workbook spells the same person several ways, and the section `auditee` /
+// `departmentHead` cells use the short spelling while the auditor roster uses the full one:
+// "Mohammed Bahwairith" against "Mohammed A. Bahwairith", "M. K. Ashram" against
+// "Mohammed K. Al-Ashram", "Lowi Bukhsh" against "Lowi A. Bukhsh". seed-org.mjs resolves
+// those through the roster's `aliases` list; this script did not, so it created a SECOND
+// user for every alias spelling - the quality manager existed twice, once as
+// quality_manager and once as a section_head who could approve nothing and whose
+// notifications nobody would ever read. Tests run against that are not testing production.
+const canonicalName = new Map();
+for (const auditor of org.auditors || []) {
+  for (const alias of auditor.aliases || []) canonicalName.set(norm(alias), auditor.nameEn);
+}
+const canonical = (name) => canonicalName.get(norm(name)) || name;
+
 // ---- build the cast -------------------------------------------------------
 /** @type {Map<string, any>} */
 const people = new Map();
 
-const upsert = (nameEn, nameAr, position, role) => {
+const upsert = (rawNameEn, nameAr, position, role) => {
+  const nameEn = canonical(rawNameEn);
   const key = norm(nameEn);
   const existing = people.get(key);
   if (existing) {

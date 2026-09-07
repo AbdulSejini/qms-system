@@ -13,8 +13,8 @@ import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
-import { getAuth, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
+import { getAuth, connectAuthEmulator, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -62,11 +62,20 @@ export function parseFlags(argv = process.argv.slice(2)) {
 }
 
 /** Read .env.local into a plain object (same file and format the app uses). */
+// REHEARSAL AGAINST THE EMULATOR.
+//
+// Every script in here writes to the live project, and there was no way to try one first:
+// loadEnv() read .env.local and nothing else, so an operator's only rehearsal for a
+// migration was running it on production. Setting QMS_USE_EMULATOR=1 points the whole
+// toolkit at the local emulator instead - same code, same rules, no live data - which is
+// how a backfill or an import should be proved before it is applied for real.
+export const USE_EMULATOR = process.env.QMS_USE_EMULATOR === '1';
+
 export function loadEnv() {
-  const path = join(ROOT, '.env.local');
+  const path = join(ROOT, USE_EMULATOR ? '.env.emulator' : '.env.local');
   if (!existsSync(path)) {
     fail(
-      '.env.local not found - cannot read Firebase configuration',
+      `${USE_EMULATOR ? '.env.emulator' : '.env.local'} not found - cannot read Firebase configuration`,
       'Copy .env.local.example to .env.local and fill in the NEXT_PUBLIC_FIREBASE_* values.'
     );
   }
@@ -102,7 +111,19 @@ export function initFirebase(env) {
     appId: env.NEXT_PUBLIC_FIREBASE_APP_ID,
   });
 
-  return { app, db: getFirestore(app), auth: getAuth(app) };
+  const db = getFirestore(app);
+  const authInstance = getAuth(app);
+
+  if (USE_EMULATOR) {
+    const host = env.NEXT_PUBLIC_FIREBASE_EMULATOR_HOST || '127.0.0.1';
+    connectFirestoreEmulator(db, host, Number(env.NEXT_PUBLIC_FIRESTORE_EMULATOR_PORT || 8080));
+    connectAuthEmulator(authInstance, `http://${host}:${env.NEXT_PUBLIC_AUTH_EMULATOR_PORT || 9099}`, {
+      disableWarnings: true,
+    });
+    console.log(`EMULATOR MODE - ${host}, project ${env.NEXT_PUBLIC_FIREBASE_PROJECT_ID}. The live project is not touched.\n`);
+  }
+
+  return { app, db, auth: authInstance };
 }
 
 /**
