@@ -226,6 +226,8 @@ export default function AuditDetailPage() {
   // State
   const [audit, setAudit] = useState<Audit | null>(null);
   const [loading, setLoading] = useState(true);
+  // آخر فشل في الحفظ - يُعرض كشريط أحمر بدل أن يمر بصمت
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'details' | 'questions' | 'findings' | 'approval' | 'activity' | 'my_findings'>('details');
 
   // Modals
@@ -385,7 +387,7 @@ export default function AuditDetailPage() {
   };
 
   // Save audit changes to Firestore
-  const saveAudit = async (updatedAudit: Audit) => {
+  const saveAudit = async (updatedAudit: Audit): Promise<boolean> => {
     // Update in Firestore - include all important fields
     // كل حقل هنا يجب أن يُقرأ في loadAudit أيضاً، وإلا ضاع بعد إعادة التحميل
     const payload = {
@@ -417,8 +419,27 @@ export default function AuditDetailPage() {
       correctiveActionsApprovedBy: updatedAudit.correctiveActionsApprovedBy,
       correctiveActionsApprovalComment: updatedAudit.correctiveActionsApprovalComment,
     };
-    await updateAuditInFirestore(auditId, payload);
+    // THE WRITE IS THE OPERATION. This used to be a bare `await` whose boolean was
+    // dropped on the floor, followed by an unconditional setAudit(): a write refused by
+    // firestore.rules, or lost to a dead connection, produced a screen showing the change
+    // as saved. The user saw an approval granted, a stage advanced, a finding closed -
+    // and Firestore held none of it. That is the mechanism behind "I approved it and
+    // nothing arrived": nothing arrived because nothing was written.
+    //
+    // On failure local state is deliberately NOT committed, so the screen falls back to
+    // what is actually stored rather than showing a change that does not exist.
+    const ok = await updateAuditInFirestore(auditId, payload);
+    if (!ok) {
+      setSaveError(
+        language === 'ar'
+          ? 'تعذّر حفظ التغيير. لم يُكتب شيء في قاعدة البيانات - قد لا تملك صلاحية هذا الإجراء، أو انقطع الاتصال. أعد المحاولة، وإن تكرر الخطأ راجع مدير النظام.'
+          : 'The change could not be saved. Nothing was written - you may not have permission for this action, or the connection dropped. Try again, and contact the system administrator if it persists.'
+      );
+      return false;
+    }
+    setSaveError(null);
     setAudit(updatedAudit);
+    return true;
   };
 
   // Helper function to add activity log entry
@@ -513,7 +534,7 @@ export default function AuditDetailPage() {
   };
 
   // موافقة مدير الجودة على الإجراءات التصحيحية
-  const handleApproveCorrectiveActions = (comment: string) => {
+  const handleApproveCorrectiveActions = async (comment: string) => {
     if (!audit || audit.currentStage !== 3) return;
 
     const updatedAudit = {
@@ -523,7 +544,8 @@ export default function AuditDetailPage() {
       correctiveActionsApprovedBy: currentUser?.id,
       correctiveActionsApprovalComment: comment,
     };
-    saveAudit(updatedAudit);
+    // لا يُعلن قرار لم يُكتب: الإشعار يخبر الإدارة بموافقة لم تحدث، ولا سبيل لسحبه.
+    if (!(await saveAudit(updatedAudit))) return;
 
     // إرسال إشعار للإدارة المُراجَعة via Firestore
     const deptUsers = allUsers.filter(u => u.departmentId === audit.departmentId && u.isActive);
@@ -622,7 +644,8 @@ export default function AuditDetailPage() {
       currentStage: 2, // مرحلة مراجعة الجودة هي 2 الآن
       status: 'qms_review',
     };
-    saveAudit(updatedAudit);
+    // إن لم تُكتب المرحلة فلا يوجد ما يُراجَع؛ إشعار مدير الجودة عندها كذب مهذّب.
+    if (!(await saveAudit(updatedAudit))) return;
 
     // إرسال إشعار لمدير الجودة via Firestore
     const allUsersData = await getAllUsers();
@@ -834,7 +857,7 @@ export default function AuditDetailPage() {
   };
 
   // Add finding
-  const handleAddFinding = () => {
+  const handleAddFinding = async () => {
     if (!audit || !newFinding.finding || !newFinding.categoryA || !newFinding.categoryB || !newFinding.clause || !newFinding.evidence || !newFinding.estimatedClosingDate) return;
 
     const finding: Finding = {
@@ -872,7 +895,8 @@ export default function AuditDetailPage() {
       description: `تم إضافة ملاحظة جديدة (${categoryBLabels[newFinding.categoryB] || newFinding.categoryB}): "${newFinding.finding.substring(0, 50)}${newFinding.finding.length > 50 ? '...' : ''}"`,
     });
 
-    saveAudit(updatedAudit);
+    // الملاحظة تُكتب أولاً. إشعار بملاحظة لم تُحفظ يرسل الإدارة تبحث عن شيء غير موجود.
+    if (!(await saveAudit(updatedAudit))) return;
 
     // Send notification to the auditee department, the audit team and the quality managers
     const targetDepartmentId = newFinding.departmentId || audit.departmentId;
@@ -1174,6 +1198,12 @@ export default function AuditDetailPage() {
       lastUpdated: new Date().toISOString(),
     };
 
+    // الإعلانات تُؤجَّل حتى تُكتب النتيجة. كانت تُرسل قبل الحفظ، فإذا رفضت القواعد
+    // الكتابة خرج إشعار "تمت الموافقة على المراجعة" على قرار لا وجود له في قاعدة
+    // البيانات - ولا سبيل لسحب إشعار أُرسل.
+    const pendingAnnouncements: (() => Promise<unknown>)[] = [];
+    const announce = (send: () => Promise<unknown>) => { pendingAnnouncements.push(send); };
+
     let updatedAudit: Audit = {
       ...audit,
       qmsApprovalData: updatedApprovalData,
@@ -1192,8 +1222,8 @@ export default function AuditDetailPage() {
           approvedBy: currentUser?.id || '',
         },
       };
-      // إرسال إشعار للمراجعين
-      sendNotification({
+      // الإشعارات تُجمَّع ولا تُرسل قبل نجاح الكتابة - انظر أسفل الدالة
+      announce(() => sendNotification({
         type: 'audit_approved',
         title: language === 'ar' ? 'تمت الموافقة على المراجعة' : 'Audit Approved',
         message: language === 'ar'
@@ -1201,14 +1231,14 @@ export default function AuditDetailPage() {
           : `Audit ${audit.number} has been approved by QMS`,
         auditId: audit.id,
         forUserIds: audit.auditorIds,
-      });
+      }));
 
       // إرسال إشعار لموظفي الإدارة المُراجَعة (المدقق عليهم) via Firestore
       const deptUsers = allUsers.filter(u => u.departmentId === audit.departmentId && u.isActive);
       for (const user of deptUsers) {
         // لا ترسل إشعار للمراجعين (فهم يعرفون بالفعل)
         if (!audit.auditorIds.includes(user.id)) {
-          await addNotification({
+          announce(() => addNotification({
             type: 'audit_scheduled',
             title: language === 'ar' ? 'مراجعة مجدولة على إدارتكم' : 'Audit Scheduled for Your Department',
             message: language === 'ar'
@@ -1217,7 +1247,7 @@ export default function AuditDetailPage() {
             recipientId: user.id,
             senderId: currentUser?.id,
             auditId: audit.id,
-          });
+          }));
         }
       }
     } else if (decision === 'rejected') {
@@ -1230,8 +1260,7 @@ export default function AuditDetailPage() {
           approvedBy: currentUser?.id || '',
         },
       };
-      // إرسال إشعار للمراجعين
-      sendNotification({
+      announce(() => sendNotification({
         type: 'audit_rejected',
         title: language === 'ar' ? 'تم رفض المراجعة' : 'Audit Rejected',
         message: language === 'ar'
@@ -1239,10 +1268,9 @@ export default function AuditDetailPage() {
           : `Audit ${audit.number} has been rejected by QMS`,
         auditId: audit.id,
         forUserIds: audit.auditorIds,
-      });
+      }));
     } else if (decision === 'postponed') {
-      // إرسال إشعار للمراجعين
-      sendNotification({
+      announce(() => sendNotification({
         type: 'audit_postponed',
         title: language === 'ar' ? 'تم تأجيل المراجعة' : 'Audit Postponed',
         message: language === 'ar'
@@ -1250,10 +1278,9 @@ export default function AuditDetailPage() {
           : `Audit ${audit.number} has been postponed by QMS`,
         auditId: audit.id,
         forUserIds: audit.auditorIds,
-      });
+      }));
     } else if (decision === 'modification_requested') {
-      // إرسال إشعار للمراجعين لطلب التعديل
-      sendNotification({
+      announce(() => sendNotification({
         type: 'audit_modification_requested',
         title: language === 'ar' ? 'طلب تعديل على المراجعة' : 'Modification Requested',
         message: language === 'ar'
@@ -1261,7 +1288,7 @@ export default function AuditDetailPage() {
           : `QMS Manager requests modifications on audit ${audit.number}`,
         auditId: audit.id,
         forUserIds: audit.auditorIds,
-      });
+      }));
     }
 
     // Add activity log based on decision
@@ -1280,7 +1307,11 @@ export default function AuditDetailPage() {
       comment: qmsComment || undefined,
     });
 
-    saveAudit(updatedAudit);
+    if (!(await saveAudit(updatedAudit))) return;
+
+    // القرار مكتوب الآن - وعندها فقط يُعلن
+    await Promise.all(pendingAnnouncements.map(send => send()));
+
     setQmsComment('');
     setSelectedDecision(null);
     setShowQMSDecisionModal(false);
@@ -1690,6 +1721,24 @@ export default function AuditDetailPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
+        {/* فشل الحفظ - يُعرض دائماً في أعلى الصفحة حتى لا يظن المستخدم أن التغيير حُفظ */}
+        {saveError && (
+          <div
+            role="alert"
+            className="flex items-start gap-3 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+          >
+            <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+            <p className="flex-1">{saveError}</p>
+            <button
+              type="button"
+              onClick={() => setSaveError(null)}
+              className="shrink-0 underline hover:no-underline"
+            >
+              {language === 'ar' ? 'إخفاء' : 'Dismiss'}
+            </button>
+          </div>
+        )}
+
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>

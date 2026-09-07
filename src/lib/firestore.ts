@@ -702,10 +702,29 @@ export const getNotificationsForUser = async (userId: string): Promise<Notificat
   }
 };
 
+// A FAILED READ IS NOT AN EMPTY ONE.
+//
+// Every subscription below used to answer a permission denial, a missing index or a dead
+// connection by calling back with []. On screen that is indistinguishable from "you have
+// no notifications" / "there are no audits" - which is precisely the complaint that
+// approvals never arrive. The listener could have been refused at the door and the user
+// would be told, in a calm empty state, that there was nothing for them.
+//
+// `onError` is optional so existing callers keep compiling, but every screen that shows a
+// list a decision depends on should pass it and render the failure.
+export type SubscriptionError = { code: string; message: string; needsIndex: boolean };
+
+const describeSnapshotError = (error: { code?: string; message?: string }): SubscriptionError => ({
+  code: error.code ?? 'unknown',
+  message: error.message ?? String(error),
+  needsIndex: !!error.message?.includes('index'),
+});
+
 // Subscribe to notifications for a user (real-time)
 export const subscribeToNotifications = (
   userId: string,
-  callback: (notifications: Notification[]) => void
+  callback: (notifications: Notification[]) => void,
+  onError?: (error: SubscriptionError) => void
 ): Unsubscribe => {
   const notificationsRef = collection(db, COLLECTIONS.NOTIFICATIONS);
   // Simple query without orderBy to avoid composite index requirement
@@ -723,7 +742,7 @@ export const subscribeToNotifications = (
     if (error.message?.includes('index')) {
       console.error('Firestore index required. Check console for the link to create it.');
     }
-    callback([]);
+    onError?.(describeSnapshotError(error));
   });
 };
 
@@ -875,7 +894,8 @@ export const deleteAudit = async (auditId: string): Promise<boolean> => {
 
 // Subscribe to audits (real-time)
 export const subscribeToAudits = (
-  callback: (audits: Audit[]) => void
+  callback: (audits: Audit[]) => void,
+  onError?: (error: SubscriptionError) => void
 ): Unsubscribe => {
   const auditsRef = collection(db, COLLECTIONS.AUDITS);
 
@@ -884,7 +904,8 @@ export const subscribeToAudits = (
     callback(audits);
   }, (error) => {
     console.error('Error listening to audits:', error);
-    callback([]);
+    // Deliberately NOT callback([]): an empty list here reads as "no audits exist".
+    onError?.(describeSnapshotError(error));
   });
 };
 

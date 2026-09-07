@@ -164,6 +164,10 @@ export default function AuditsPage() {
   // Check if current user is quality manager
   const isQualityManager = currentUser?.role === 'quality_manager';
 
+  // آخر إجراء فشل - يُعرض بدل أن يمر بصمت وكأنه نجح.
+  // معرَّف قبل الاشتراك أدناه لأن معالج الخطأ فيه يستدعيه.
+  const [actionError, setActionError] = useState<string | null>(null);
+
   // Audits data - load from Firestore with real-time updates
   const [auditsData, setAuditsData] = useState<Audit[]>([]);
 
@@ -193,9 +197,20 @@ export default function AuditsPage() {
         createdBy: fa.createdBy,
       }));
       setAuditsData(convertedAudits);
+      setActionError(null);
+    },
+    // A denied or broken listener used to call back with [], so "you may not read the
+    // audits" and "there are no audits" rendered identically - an empty table with a
+    // calm empty state.
+    () => {
+      setActionError(
+        language === 'ar'
+          ? 'تعذّر تحميل المراجعات. القائمة أدناه قد تكون ناقصة أو قديمة - أعد تحميل الصفحة، وإن تكرر الخطأ راجع مدير النظام.'
+          : 'Audits could not be loaded. The list below may be incomplete or stale - reload the page, and contact the system administrator if it persists.'
+      );
     });
     return () => unsubscribe();
-  }, []);
+  }, [language]);
 
   // Helper to get stage from status
   const getStageFromStatus = (status: string): number => {
@@ -544,7 +559,16 @@ export default function AuditsPage() {
   const confirmDelete = async () => {
     if (auditToDelete) {
       // Delete from Firestore
-      await deleteAuditFromFirestore(auditToDelete.id);
+      const deleted = await deleteAuditFromFirestore(auditToDelete.id);
+      if (!deleted) {
+        setActionError(
+          language === 'ar'
+            ? 'تعذّر حذف المراجعة. لم يتغيّر شيء في قاعدة البيانات - قد لا تملك صلاحية الحذف.'
+            : 'The audit could not be deleted. Nothing changed - you may not have delete permission.'
+        );
+        return;
+      }
+      setActionError(null);
       setShowDeleteModal(false);
       setAuditToDelete(null);
     }
@@ -552,12 +576,22 @@ export default function AuditsPage() {
 
   // Handle approve audit (Quality Manager only)
   const handleApproveAudit = async (auditId: string) => {
-    // Update in Firestore
-    await updateAudit(auditId, {
+    // Update in Firestore. The boolean used to be dropped and the creator notified
+    // regardless, so a refused write still announced "your audit was approved".
+    const ok = await updateAudit(auditId, {
       status: 'approved',
       approvedBy: currentUser?.id,
       approvedAt: new Date().toISOString(),
     });
+    if (!ok) {
+      setActionError(
+        language === 'ar'
+          ? 'تعذّر تسجيل الموافقة. لم يُكتب شيء ولم يُبلَّغ أحد. أعد المحاولة.'
+          : 'The approval could not be recorded. Nothing was written and nobody was notified. Try again.'
+      );
+      return;
+    }
+    setActionError(null);
 
     // Add notification for the creator
     const audit = auditsData.find(a => a.id === auditId);
@@ -580,12 +614,21 @@ export default function AuditsPage() {
     const audit = auditsData.find(a => a.id === auditId);
 
     // Update in Firestore - mark as rejected
-    await updateAudit(auditId, {
+    const ok = await updateAudit(auditId, {
       status: 'cancelled',
       rejectedBy: currentUser?.id,
       rejectedAt: new Date().toISOString(),
       rejectionReason: reason,
     });
+    if (!ok) {
+      setActionError(
+        language === 'ar'
+          ? 'تعذّر تسجيل الرفض. لم يُكتب شيء ولم يُبلَّغ أحد. أعد المحاولة.'
+          : 'The rejection could not be recorded. Nothing was written and nobody was notified. Try again.'
+      );
+      return;
+    }
+    setActionError(null);
 
     // Add notification for the creator
     if (audit && audit.createdBy) {
@@ -783,6 +826,20 @@ export default function AuditsPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
+        {/* فشل إجراء - لا يُبتلع بصمت */}
+        {actionError && (
+          <div
+            role="alert"
+            className="flex items-start gap-3 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+          >
+            <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+            <p className="flex-1">{actionError}</p>
+            <button type="button" onClick={() => setActionError(null)} className="shrink-0 underline hover:no-underline">
+              {language === 'ar' ? 'إخفاء' : 'Dismiss'}
+            </button>
+          </div>
+        )}
+
         {/* Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>

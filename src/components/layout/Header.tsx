@@ -29,6 +29,7 @@ import {
   CalendarRange,
   CalendarCheck,
   CalendarX,
+  AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { MobileMenuButton } from './Sidebar';
@@ -58,6 +59,8 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [bellAnimating, setBellAnimating] = useState(false);
+  // فشل الاشتراك في التنبيهات - يُعرض بدل "لا توجد تنبيهات"، فالفرق بينهما جوهري
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
 
   // Load notifications from Firestore in real-time
   useEffect(() => {
@@ -69,16 +72,34 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
     logger.log('Subscribing to notifications for user:', currentUser.id, currentUser.fullNameEn);
 
     // Subscribe to real-time notifications from Firestore
-    const unsubscribe = subscribeToNotifications(currentUser.id, (firestoreNotifications) => {
-      logger.log('Received notifications:', firestoreNotifications.length, firestoreNotifications);
-      setNotifications(firestoreNotifications);
-    });
+    const unsubscribe = subscribeToNotifications(
+      currentUser.id,
+      (firestoreNotifications) => {
+        logger.log('Received notifications:', firestoreNotifications.length, firestoreNotifications);
+        setNotifications(firestoreNotifications);
+        setNotificationsError(null);
+      },
+      // A refused or broken listener used to call back with [], so a listener that never
+      // connected looked exactly like an empty inbox - the difference between "nothing was
+      // sent to you" and "we cannot read what was sent to you".
+      (error) => {
+        setNotificationsError(
+          error.needsIndex
+            ? (language === 'ar'
+                ? 'تعذّر تحميل التنبيهات: قاعدة البيانات تحتاج فهرساً لم يُنشأ بعد. راجع مدير النظام.'
+                : 'Notifications could not load: the database needs an index that has not been created. Contact the system administrator.')
+            : (language === 'ar'
+                ? 'تعذّر تحميل التنبيهات. قد تكون هناك تنبيهات لم تظهر لك - أعد تحميل الصفحة، وإن تكرر الخطأ راجع مدير النظام.'
+                : 'Notifications could not load. There may be notifications you are not seeing - reload the page, and contact the system administrator if it persists.')
+        );
+      }
+    );
 
     return () => {
       logger.log('Unsubscribing from notifications');
       unsubscribe();
     };
-  }, [currentUser?.id]);
+  }, [currentUser?.id, language]);
 
   // Count unread notifications
   const unreadCount = useMemo(() => {
@@ -250,7 +271,12 @@ export function Header({ onMobileMenuClick }: HeaderProps) {
 
                 {/* Notifications List */}
                 <div className="max-h-80 overflow-y-auto">
-                  {notifications.length === 0 ? (
+                  {notificationsError ? (
+                    <div className="flex flex-col items-center justify-center gap-2 px-4 py-8 text-center text-red-700 dark:text-red-400">
+                      <AlertTriangle className="h-10 w-10 opacity-70" />
+                      <p className="text-sm">{notificationsError}</p>
+                    </div>
+                  ) : notifications.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-8 text-[var(--foreground-secondary)]">
                       <Bell className="h-12 w-12 mb-3 opacity-30" />
                       <p className="text-sm">
