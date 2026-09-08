@@ -164,6 +164,12 @@ const ARABIC_NAMES = {
   'Adel Al-Jedani': 'عادل الجدعاني',
   'Hatim Zuhair': 'حاتم زهير',
   'Bassam Subhi': 'بسام صبحي',
+  // The two sections restored from the auditee workbook in commit 7891867 - Technical
+  // Assurance / Industrial Engineering and PQ & Certification - name these two people,
+  // and without a spelling here resolveCell() refuses to create them, which would leave
+  // both sections with no auditee and make the 2025 import unable to resolve them.
+  'Fawaz Saleh': 'فواز صالح',
+  'Hashim Fattani': 'هاشم الفتني',
   'Vergel Caba': 'فيرجيل كابا',
   'Moayad Asghar': 'مؤيد أصغر',
   'Abdullah Mahmood Bukhari': 'عبدالله محمود بخاري',
