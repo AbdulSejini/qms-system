@@ -118,6 +118,16 @@ const surnameOf = n => {
 const bareSurname = n => surnameOf(n).replace(/^(al|el|abu|abd|bin|ibn)\s*/, '');
 const firstNameOf = n => (normalise(n).split(' ')[0] || '');
 
+// "Tariq" vs "Tariq" -> yes. "M" vs "Mohammed" -> yes, an initial. "Abdullah" vs
+// "Sultan" -> no, two different people who happen to share a family name.
+const firstNamesCompatible = (a, b) => {
+  const x = firstNameOf(a), y = firstNameOf(b);
+  if (!x || !y) return true;
+  if (x === y) return true;
+  if (x.length === 1 || y.length === 1) return x[0] === y[0];
+  return false;
+};
+
 const byNormalised = new Map();
 const bySurname = new Map();
 const push = (map, key, u) => {
@@ -166,7 +176,13 @@ function resolvePerson(rawName, context, { auditorScope = false, report = true }
   const direct = byNormalised.get(normalise(name));
   if (direct) return direct;
 
-  const bySur = bySurname.get(bareSurname(name)) || [];
+  // A SHARED SURNAME IS NOT A PERSON. The programme names "Abdullah Qahtani" for
+  // Marketing, and Sultan Qahtani was the only Qahtani on file, so a surname-only match
+  // filed that audit against a different man in a different department. A surname match
+  // is now only accepted when the first names do not contradict - equal, or one an
+  // initial of the other ("M. Bahwairith" against "Mohammed A. Bahwairith").
+  const bySur = (bySurname.get(bareSurname(name)) || [])
+    .filter(u => firstNamesCompatible(name, u.fullNameEn));
   if (bySur.length === 1) return bySur[0];
 
   // A first name identifies somebody ONLY inside the 16-person auditor roster, which is
@@ -189,6 +205,20 @@ const splitPeople = raw => (raw || '')
   .split(/\s*[&/]\s*/)
   .map(s => s.trim())
   .filter(Boolean);
+
+// An auditee cell can name two people - STF-TA-INCOMING is "Adel Rose / Moayad", where
+// only the first is identifiable ("Moayad" alone is either Moayad Ahmadi or Moayad
+// Asghar, and seed-org.mjs refuses to guess between them for the same reason). Take the
+// first that resolves rather than failing the whole cell.
+function resolveAnyOf(raw, context, opts = {}) {
+  const parts = splitPeople(raw);
+  for (const part of parts) {
+    const found = resolvePerson(part, context, { ...opts, report: false });
+    if (found) return found;
+  }
+  if (opts.report !== false && raw && raw.trim()) note(raw.trim(), context);
+  return null;
+}
 
 // -------------------------------------------------------------------------
 // The checklist for an area
@@ -237,9 +267,9 @@ for (const item of programme.items) {
   // whoever the org chart makes answerable, because that is the person the rules admit and
   // the notifications reach; the representative the programme names is kept as text beside
   // it rather than thrown away.
-  const namedRep = resolvePerson(item.auditeeRaw, '', { report: false });
+  const namedRep = resolveAnyOf(item.auditeeRaw, '', { report: false });
   const auditee = namedRep
-    || resolvePerson(item.sectionAuditee, `section auditee for ${item.sectionCode}`);
+    || resolveAnyOf(item.sectionAuditee, `section auditee for ${item.sectionCode}`);
 
   const findings = (findingsBySection.get(item.sectionCode) || []).map((f, i) => ({
     id: `finding-2025-${item.sectionCode.toLowerCase()}-${i + 1}`,
@@ -334,9 +364,8 @@ for (const [code, list] of findingsBySection) {
 for (const [code, list] of orphanBySection) {
   const section = sectionById.get(code);
   if (!section) { skipped.push(`${list.length} finding(s) for ${code}: section not in Firestore`); continue; }
-  const auditee = resolvePerson(section.headId ? '' : '', '', { report: false })
-    || users.find(u => u.id === section.headId)
-    || resolvePerson(
+  const auditee = users.find(u => u.id === section.headId)
+    || resolveAnyOf(
          (org.departments.flatMap(d => d.sections).find(x => x.code === code) || {}).auditee || '',
          `section auditee for ${code}`);
 
